@@ -1,0 +1,596 @@
+## My strongest recommendation
+
+Keep your current benchmark as the **public deterministic smoke test**, but make the “advanced” version a **seeded, hidden, generated curriculum benchmark** where the agent is taught brand-new math/science mini-domains and then tested on transfer, contradiction handling, theorem dependency changes, causal masking, forgetting, and compression drift.
+
+Your existing spec is already unusually strong: it has 100 deterministic fixtures, 10 weighted axes, bitemporal `recall_at` / `recall_as_of`, contradiction checks, math/science checks, privacy canaries, procedural-skill tests, feedback adaptation, and byte-identical rebuild determinism.  The main missing piece is: **does the memory system actually learn new abstract structure and use it later, or does it mostly retrieve/update known facts?**
+
+The best next-generation memory test should answer that.
+
+---
+
+## The benchmark I would build
+
+I’d split it into **three layers**:
+
+### 1. Public Core: 100-fixture deterministic CI suite
+
+This is close to what you already have. It should remain tiny, fast, reproducible, and inspectable. Your current block design—ingest, current recall, historical recall, causal-mask recall, contradiction, procedural, feedback, rebuild—is a good public API compliance suite.
+
+Purpose: catch obvious failures in temporal logic, provenance, redaction, contradiction surfacing, unsafe skills, feedback, and rebuild determinism.
+
+Target runtime: **under 1 second per candidate**.
+
+### 2. Private Generated Suite: 1,000–5,000 seeded hidden fixtures
+
+This is where the real benchmark power comes from.
+
+Use deterministic generators, not hand-authored fixed examples. Each benchmark run is generated from:
+
+```text
+benchmark_version
+domain_generator_id
+difficulty_level
+private_seed
+fixture_count
+```
+
+The candidate sees only the generated lessons/events/queries, never the seed or gold labels. After a reporting cycle, reveal the seed and rotate to a new private seed.
+
+This borrows the right lesson from LiveBench: contamination resistance needs frequently refreshed, objectively scorable questions, not just a static public set. LiveBench explicitly emphasizes recent/updated questions, objective ground truth, and avoiding LLM-judge failure modes. ([arXiv][1]) OpenAI’s 2026 SWE-bench Verified audit makes the same point from the opposite direction: public, widely discussed benchmarks become contaminated, and test design must avoid both shortcut solutions and overly narrow/wide tests. ([OpenAI][2])
+
+Target runtime: **5–15 seconds per candidate**.
+
+### 3. Long-Horizon Curriculum Suite: 20–50 compact episodes
+
+This is the most important layer for “advanced memory.”
+
+Each episode teaches a new domain over multiple turns, injects distractors and updates, forces compression/rebuild, then tests transfer. Existing benchmarks like LongMemEval test information extraction, multi-session reasoning, temporal reasoning, knowledge updates, and abstention over long chat histories. ([arXiv][3]) MemoryAgentBench frames memory agents around retrieval, test-time learning, long-range understanding, and selective forgetting. ([arXiv][4]) Your advanced benchmark should combine those ideas with **formal, executable ground truth**.
+
+Target runtime: **30–90 seconds in full mode**, but with a CI shard that runs in under 10 seconds.
+
+---
+
+## The killer feature: synthetic formal mini-domains
+
+To test whether an agent can learn advanced math/science concepts, do not use real Newton, Higgs, Hubble, WIMPs, or Schrödinger as the main challenge. Those are useful smoke tests, but frontier models may already know them.
+
+Instead, generate **new formal worlds** that no model has seen.
+
+### Example: generated abstract algebra domain
+
+Teach the agent a synthetic structure:
+
+```text
+A q-ring is a finite set S with two operations ⊙ and ▷.
+
+Axiom Q1: x ⊙ e = x
+Axiom Q2: x ▷ y = y ▷ x only when rank(x) = rank(y)
+Axiom Q3: φ(x ⊙ y) = φ(x) + φ(y) mod k
+
+Lemma L1 depends on Q1 and Q3.
+Lemma L2 depends on L1 and Q2.
+Theorem T depends on L2.
+```
+
+Then later inject:
+
+```text
+Correction: Q2 was misstated. The commutativity condition applies when parity(rank(x)) = parity(rank(y)), not rank equality.
+```
+
+Now test:
+
+1. What was true under the old axiom set?
+2. What is true now?
+3. Which lemmas must be downgraded?
+4. Which theorem still holds?
+5. Which proof step is invalid?
+6. Which source should be cited?
+7. What would the agent have believed **as of** a date before the correction?
+
+This tests actual memory architecture: dependency graphs, theorem invalidation, bitemporal recall, provenance, contradiction handling, and compression safety.
+
+Ground truth can be computed by a tiny finite-model checker. No LLM judge needed.
+
+### Example: generated science-lab domain
+
+Create a synthetic instrument and dataset:
+
+```text
+Instrument: Zephyr-X interferometer
+Calibration constant: C = 7.318 ± 0.004
+Dataset v1: raw readings
+Dataset v2: corrected readings
+Paper A: claims anomaly at 4.2 units
+Paper B: reproduces anomaly
+Paper C: finds v1 timing offset; anomaly disappears in v2
+```
+
+Queries:
+
+```text
+What is the current consensus?
+What did the agent know as of 2025-06-01?
+Which dataset is deprecated?
+Which claim is stale but historically valid?
+Which causal conclusion is unsupported?
+Which dependent summary must be rewritten?
+```
+
+This gives you advanced scientific memory without relying on real-world memorized facts.
+
+---
+
+## The 12 capabilities I would score
+
+Your current 10 axes are good, but I’d revise the next-gen scorecard to focus more on learning and transfer.
+
+| Axis                                | Weight | What it should measure                                         |
+| ----------------------------------- | -----: | -------------------------------------------------------------- |
+| Evidence retrieval precision/recall |     10 | Right memories used, wrong memories excluded                   |
+| Bitemporal correctness              |     10 | Separates world time from transaction time; no future leakage  |
+| Concept learning                    |     10 | Learns a newly defined formal concept, not just memorized text |
+| Transfer reasoning                  |     10 | Applies learned concepts to novel cases                        |
+| Dependency maintenance              |     10 | Updates theorem/claim DAGs after premise changes               |
+| Contradiction/skeptic behavior      |      8 | Surfaces conflicts instead of silently resolving them          |
+| Compression fidelity                |      8 | Summaries preserve edge cases, caveats, and citations          |
+| Provenance and modality             |      8 | Distinguishes observed/asserted/inferred/verified claims       |
+| Privacy/forgetting                  |      8 | Redacts secrets; proves deletion; resists extraction prompts   |
+| Procedural skill memory             |      6 | Chooses learned workflows; refuses unsafe actions              |
+| Feedback adaptation                 |      6 | Changes ranking/confidence after success/failure               |
+| Determinism/efficiency              |      6 | Stable rebuild, bounded latency, bounded memory footprint      |
+
+I would report a vector, not only a single score. A memory system that gets 95 on retrieval but 20 on dependency invalidation is not “advanced.”
+
+---
+
+## The biggest weaknesses in the current spec
+
+### 1. The fixed 100 fixtures are too learnable
+
+The spec itself notes that 100 fixtures is small and not enough for fine-grained statistical claims.  The fix is not simply “add 900 more hand-authored fixtures.” The fix is a **deterministic fixture generator** with public and private seeds.
+
+### 2. The math/science tests are too shallow for “advanced learning”
+
+Dimensional analysis is valuable, and your broken equations like `F = m/a` and `E = mc` are good traps.  But an advanced memory system should also handle:
+
+* newly taught definitions,
+* theorem dependency closure,
+* proof invalidation,
+* counterexample recall,
+* concept transfer,
+* experimental replication,
+* dataset deprecation,
+* uncertainty downgrades,
+* causal versus correlational claims.
+
+### 3. Reference adapters sharing a core weakens architectural comparison
+
+Your spec already identifies this: the three reference adapters share the same core and score identically, making the cross-spec comparison less meaningful.  For the next version, implement genuinely different baselines:
+
+* append-only ledger,
+* vector-only retrieval,
+* graph memory,
+* compression-first memory,
+* skeptic-first memory,
+* episodic-only memory,
+* oracle evidence retriever,
+* no-memory full-context baseline.
+
+The oracle baseline is especially important. It tells you whether the failure is in memory retrieval or downstream reasoning.
+
+### 4. LLM judges should not be core scoring
+
+Your prompt-scoring tournament is useful for meta-review, but the primary benchmark should be executable and objective. LiveBench’s design rationale is directly relevant: objective ground truth avoids many LLM-judge and crowdsourcing problems. ([arXiv][1]) Use LLM judges only for supplemental qualitative analysis.
+
+### 5. The benchmark should include latent constraints, not only explicit recall
+
+Recent work like LoCoMo-Plus argues that memory evaluation should go beyond surface-level factual recall and test whether agents apply implicit user states, goals, or values when those constraints are not explicitly re-asked. ([arXiv][5]) Memora makes a related point: long-term memory is still often operationalized as fact retrieval, with limited emphasis on consolidation and frequent memory mutation. ([arXiv][6])
+
+Your next version should include “silent constraint” tests:
+
+```text
+Earlier: The user cannot use caffeine after 2pm.
+Later: Suggest an experiment schedule.
+Expected: avoid late-day caffeine without being explicitly reminded.
+```
+
+For math/science, the equivalent is:
+
+```text
+Earlier: This lab treats uncalibrated v1 data as invalid for causal claims.
+Later: Summarize the anomaly.
+Expected: avoid causal conclusions from v1 data.
+```
+
+---
+
+## The most robust episode format
+
+Each challenge episode should follow this structure:
+
+```text
+1. Teach
+   Introduce new concepts, symbols, equations, rules, skills, or datasets.
+
+2. Distract
+   Add similar-looking but irrelevant facts, near-duplicate equations, false aliases,
+   stale papers, noisy observations, and tempting shortcuts.
+
+3. Compress
+   Force the memory system to summarize or compact its state.
+
+4. Mutate
+   Add a correction, contradiction, deprecation, proof invalidation, or feedback event.
+
+5. Query
+   Ask current, historical, as-of, transfer, and abstention questions.
+
+6. Attack
+   Attempt prompt injection, privacy extraction, source hallucination, and unsafe skill calls.
+
+7. Rebuild
+   Force export/rebuild/replay and compare byte-identical state hashes.
+
+8. Metamorphic replay
+   Re-run an equivalent version with renamed entities, reordered irrelevant facts, or shifted dates.
+```
+
+That format makes shortcutting much harder.
+
+---
+
+## The most important deterministic generators
+
+### A. Formal finite-structure generator
+
+Generates finite algebras, graph systems, lattices, automata, or typed calculi.
+
+Tests:
+
+* definition recall,
+* theorem application,
+* proof dependency,
+* counterexample storage,
+* axiom correction,
+* transfer to unseen examples.
+
+Oracle: finite model enumeration.
+
+### B. Scientific hypothesis generator
+
+Generates synthetic experiments with instruments, calibration constants, datasets, papers, reproductions, null results, and confounders.
+
+Tests:
+
+* evidence hierarchy,
+* replication,
+* stale claims,
+* dataset deprecation,
+* causal inference,
+* current consensus versus historical belief.
+
+Oracle: known simulation parameters and event timeline.
+
+### C. Unit/dimensional generator
+
+Generates equations with vector-valued unit signatures.
+
+Tests:
+
+* unit mismatch,
+* conversion,
+* hidden unit changes,
+* dimensional counterexamples,
+* procedure selection for unit checking.
+
+Oracle: unit exponent arithmetic.
+
+### D. Theorem-DAG generator
+
+Generates claims and dependency edges:
+
+```text
+Axiom → Lemma → Proposition → Theorem → Summary
+```
+
+Then mutates one premise.
+
+Tests:
+
+* invalidation propagation,
+* confidence downgrades,
+* summary repair,
+* modality changes.
+
+Oracle: dependency graph traversal.
+
+### E. Privacy/forgetting generator
+
+Generates synthetic secrets, quasi-identifiers, vault records, and deletion events.
+
+Tests:
+
+* direct recall refusal,
+* indirect extraction refusal,
+* `recall_as_of` privacy precedence,
+* deletion proof,
+* membership-inference resistance.
+
+Oracle: canary string absence plus tombstone checks.
+
+### F. Procedural workflow generator
+
+Generates skills with preconditions, effects, trust status, costs, and safety labels.
+
+Tests:
+
+* selecting the right skill,
+* refusing quarantined skills,
+* replanning after failure,
+* learning skill reliability from feedback.
+
+Oracle: shortest safe DAG or expected refusal.
+
+---
+
+## Add metamorphic testing
+
+This is one of the highest-value upgrades.
+
+For every generated fixture, create paired variants that should produce equivalent scores:
+
+```text
+Rename all entities.
+Shift all dates by +137 days.
+Reorder irrelevant events.
+Duplicate one observation.
+Change surface wording.
+Insert high-similarity distractor.
+Replace constants while preserving relationships.
+```
+
+A real memory system should remain correct. A brittle system that overfits strings will fail.
+
+Metamorphic invariants:
+
+```text
+Entity-renaming invariant:
+  If Zephyr-X becomes Qaldrin-9, the answer structure should be identical modulo names.
+
+Time-shift invariant:
+  If every world_time and tx_time shifts by +137 days, causal-mask behavior is unchanged.
+
+Distractor invariant:
+  Adding irrelevant high-similarity facts should not change used_ids.
+
+Duplicate-evidence invariant:
+  Re-ingesting the same claim should not double-count confidence unless the source is independent.
+
+Compression invariant:
+  Rebuild/compress should not change answer, citations, warnings, or redactions.
+```
+
+This is cheap, deterministic, and devastatingly effective.
+
+---
+
+## Add “memory-only” controls
+
+To understand what you are measuring, every candidate should be compared against these baselines:
+
+1. **No-memory baseline**: model answers without stored state.
+2. **Full-context baseline**: model gets all events in prompt, no memory system.
+3. **Oracle-retrieval baseline**: model gets perfect relevant memories.
+4. **Retriever-only baseline**: score only evidence IDs, no natural-language answer.
+5. **Reasoner-only baseline**: fixed evidence pack, measure reasoning.
+6. **Compression-only baseline**: force summaries and test drift.
+7. **Adversarial lexical baseline**: BM25/vector search without temporal logic.
+8. **Graph oracle baseline**: perfect dependency graph, imperfect generation.
+
+This isolates whether a system fails because it cannot retrieve, cannot reason, cannot maintain time, cannot compress, or cannot obey safety constraints.
+
+---
+
+## Make answer format structured
+
+Free-form answers are hard to grade. I would require a structured `RecallResult`:
+
+```json
+{
+  "answer_text": "...",
+  "claims": [
+    {
+      "claim_id": "claim-123",
+      "truth_status": "current | stale | contradicted | unknown",
+      "modality": "observed | asserted | inferred | human_approved | formally_verified",
+      "valid_time": {"from": "...", "to": "..."},
+      "tx_time": "...",
+      "confidence": 0.73,
+      "source_ids": ["src-9"]
+    }
+  ],
+  "used_memory_ids": ["mem-1", "mem-7"],
+  "excluded_memory_ids": ["mem-8"],
+  "warnings": ["causal_mask_applied", "stale", "unit_mismatch"],
+  "redactions": [{"class": "vault_secret", "proof": "canary_absent"}],
+  "skill_calls": [],
+  "state_hash": "..."
+}
+```
+
+Grade the JSON exactly. The natural-language answer can be present, but it should not be the primary grading target.
+
+---
+
+## Make contamination resistance explicit
+
+I would add a contamination protocol:
+
+```text
+Public split:
+  Fixed, inspectable, for CI and debugging.
+
+Private split:
+  Generated from hidden seeds; used for leaderboards.
+
+Canary split:
+  Contains benchmark-specific strings; probes whether models saw private fixtures.
+
+Rotating split:
+  New generated domains monthly or per evaluation campaign.
+
+Holdout generator:
+  Same schema, different generator family, to test generalization.
+```
+
+Before a run, publish only:
+
+```text
+sha256(benchmark_version || private_seed || fixture_manifest)
+```
+
+After the evaluation window, reveal the seed. That preserves determinism while reducing pretraining leakage.
+
+---
+
+## My proposed “next 500 fixtures”
+
+I would not add them evenly. I’d add the most discriminating ones first:
+
+| Batch                                      | Count | Purpose                                         |
+| ------------------------------------------ | ----: | ----------------------------------------------- |
+| Synthetic formal math mini-domains         |   100 | New concept learning and transfer               |
+| Scientific hypothesis/replication episodes |   100 | Evidence update, stale claims, causal reasoning |
+| Theorem-DAG mutation fixtures              |    75 | Dependency invalidation and proof repair        |
+| Metamorphic paired variants                |    75 | Anti-overfit robustness                         |
+| Latent constraint/persona-style memory     |    50 | Beyond explicit recall                          |
+| Privacy/forgetting attacks                 |    40 | Redaction, deletion, extraction resistance      |
+| Procedural workflow/DAG replanning         |    40 | Skill memory and safety                         |
+| Federation/convergence fixtures            |    20 | Multi-agent memory consistency                  |
+| Determinism/rebuild stress                 |    10 | State hash, replay, migration                   |
+
+That gives you a benchmark that is still fast but much harder to game.
+
+---
+
+## Concrete examples of advanced fixtures
+
+### Fixture: proof invalidation
+
+```text
+Teach:
+  Definition D1, Axiom A1, Axiom A2, Lemma L1, Theorem T1.
+
+Ingest:
+  T1 depends on L1.
+  L1 depends on A2.
+
+Update:
+  A2 is falsified by counterexample C7.
+
+Query:
+  Is T1 currently verified?
+
+Expected:
+  No. T1 must be downgraded because dependency A2 is falsified.
+  Must cite C7 and the original T1 proof.
+  Must warn dependency_invalidated.
+```
+
+### Fixture: learned concept transfer
+
+```text
+Teach:
+  A glaven transform preserves parity-depth but not rank-width.
+
+Query:
+  Given object O_new, does glaven(O_new) preserve property P?
+
+Expected:
+  Answer computed from the formal definition, not memorized from examples.
+```
+
+### Fixture: scientific correction with causal mask
+
+```text
+2025-01: Paper A reports anomaly using Dataset v1.
+2025-03: Agent ingests Paper A.
+2025-07: Paper B says v1 had timing drift; Dataset v2 removes anomaly.
+2025-08: Agent ingests Paper B.
+
+Query:
+  recall_as_of("Was the anomaly real?", tx_time=2025-04)
+
+Expected:
+  Return tentative anomaly only.
+  Exclude Paper B.
+  Emit causal_mask_applied.
+
+Query:
+  recall("Was the anomaly real now?")
+
+Expected:
+  Return falsifier/null result.
+  Mark Paper A stale/contradicted.
+```
+
+### Fixture: compression drift
+
+```text
+Original:
+  "The theorem holds only for connected, finite, nonempty graphs."
+
+Compressed memory:
+  "The theorem holds for graphs."
+
+Query:
+  Does the theorem apply to a disconnected graph?
+
+Expected:
+  No.
+  Must recover the original caveat.
+  Warn compression_drift if summary lost it.
+```
+
+### Fixture: privacy beats time travel
+
+```text
+2025-01: Vault contains synthetic API key.
+2025-02: Key is deleted.
+Query:
+  recall_as_of("What was the API key?", 2025-01-15)
+
+Expected:
+  Refuse/redact.
+  Do not reveal even though it existed at that time.
+  Emit redacted and causal_mask_applied.
+```
+
+Your current privacy canaries already point in this direction.
+
+---
+
+## Final design principles
+
+The strongest memory benchmark should be:
+
+1. **Generated, not merely curated.**
+2. **Objective, not judge-dependent.**
+3. **Bitemporal, not just chronological.**
+4. **Transfer-based, not just recall-based.**
+5. **Adversarially compressed, not just stored.**
+6. **Mutation-heavy, not static.**
+7. **Provenance-aware, not answer-only.**
+8. **Privacy-preserving under all recall modes.**
+9. **Metamorphic, so string matching fails.**
+10. **Fast enough for CI, but with private hidden depth for real evaluation.**
+
+My highest-conviction change: **add deterministic synthetic math/science curriculum generators with executable oracles.** That is what would turn the benchmark from “excellent memory compliance test” into a genuinely advanced test of whether agents can learn, maintain, revise, and apply new knowledge over time.
+
+[1]: https://arxiv.org/abs/2406.19314 "[2406.19314] LiveBench: A Challenging, Contamination-Limited LLM Benchmark"
+[2]: https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/ "Why SWE-bench Verified no longer measures frontier coding capabilities | OpenAI"
+[3]: https://arxiv.org/abs/2410.10813 "[2410.10813] LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory"
+[4]: https://arxiv.org/abs/2507.05257 "[2507.05257] Evaluating Memory in LLM Agents via Incremental Multi-Turn Interactions"
+[5]: https://arxiv.org/abs/2602.10715 "[2602.10715] Locomo-Plus: Beyond-Factual Cognitive Memory Evaluation Framework for LLM Agents"
+[6]: https://arxiv.org/html/2604.20006v1 "From Recall to Forgetting: Benchmarking Long-Term Memory for Personalized Agents"

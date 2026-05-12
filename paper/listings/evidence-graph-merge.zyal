@@ -1,0 +1,58 @@
+# Provenance: compact appendix excerpt from docs/ZYAL/examples/06-evidence-graph-merge.zyal.
+<<<ZYAL v1:daemon id=evidence-graph-merge>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+job:
+  name: "Evidence-gated merge"
+  objective: "Promote a patch only when proof, rollback, and approvals agree."
+stop:
+  all:
+    - shell: { command: "just fast", timeout: 10m, assert: { exit_code: 0 } }
+workflow:
+  type: state_machine
+  initial: analyze
+  states:
+    analyze:
+      produces: [impact_map]
+      transitions:
+        - to: implement
+          when: { evidence_exists: impact_map }
+    implement:
+      produces: [patch, tests]
+      transitions:
+        - to: review
+          when: { all_checks_pass: true }
+    review:
+      approval: code_owner
+      transitions:
+        - to: done
+          when: { approval_granted: code_owner }
+    done:
+      terminal: true
+evidence:
+  require_before_promote:
+    - { type: test_results, must_pass: true }
+    - { type: affected_files, must_be_known: true }
+    - { type: rollback_plan, must_exist: true }
+  bundle_format: json
+  sign: sha256
+  archive: true
+evidence_graph:
+  nodes:
+    tests: { type: test_results, required: true }
+    rollback: { type: rollback_plan, required: true }
+    review: { type: approval, required: true }
+  edges:
+    - { from: tests, to: review, kind: supports }
+    - { from: rollback, to: review, kind: mitigates }
+  merge_witness: "proof bundle hash + reviewer decision"
+approvals:
+  gates:
+    code_owner:
+      required_role: code_owner
+      decisions: [approve, reject]
+      timeout: 24h
+      on_timeout: pause
+<<<END_ZYAL id=evidence-graph-merge>>>
+ZYAL_ARM RUN_FOREVER id=evidence-graph-merge

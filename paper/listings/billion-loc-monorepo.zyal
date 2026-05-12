@@ -1,0 +1,77 @@
+# Provenance: compact appendix excerpt from docs/ZYAL/examples/03-billion-loc-monorepo.zyal.
+<<<ZYAL v1:daemon id=billion-loc-monorepo>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+job:
+  name: "Enterprise monorepo migration"
+  objective: "Migrate AuthContext to PrincipalContext with impact-aware checks."
+repo_intelligence:
+  scale: billion_loc
+  indexes: [symbols, dependency_graph, test_graph, ownership, generated_zones]
+  generated_zones: ["**/*.gen.ts", "**/*.pb.go", "**/generated/**"]
+  scope_control:
+    require_scope_before_edit: true
+    max_initial_scope_files: 50
+    expand_scope_requires_evidence: true
+  blast_radius:
+    compute_on: [edit, checkpoint, promote]
+    pause_when_score_gte: 0.75
+stop:
+  all:
+    - shell:
+        command: "jekko repo-graph status auth-context-migration --assert complete"
+        timeout: 30s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "bazel test //... --test_tag_filters=affected"
+        timeout: 600s
+        assert: { exit_code: 0 }
+experiments:
+  strategy: disjoint_tournament
+  fork_from: last_green_checkpoint
+  max_parallel: 2
+  lanes:
+    - id: minimal
+      hypothesis: "Compatibility shim, no consumer changes."
+      isolation: git_worktree
+    - id: service-by-service
+      hypothesis: "Migrate each service in dependency order."
+      isolation: git_worktree
+    - id: contract-first
+      hypothesis: "Pin the new contract, then evolve consumers."
+      isolation: git_worktree
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_assertion_weakening: true
+    block_ts_ignore: true
+  diff_budget:
+    max_files_changed: 200
+    max_added_lines: 8000
+    on_violation: require_approval
+capabilities:
+  default: deny
+  rules:
+    - { id: read-anywhere, tool: read, decision: allow }
+    - { id: edit-services, tool: edit, paths: ["services/**/src/**"], decision: allow }
+    - { id: edit-migrations, tool: edit, paths: ["**/migrations/**"], decision: ask, require_gate: dba_review }
+  command_floor:
+    always_block: ["git push --force", "rm -rf /", "DROP TABLE", "DROP DATABASE"]
+approvals:
+  gates:
+    shared_lib_review:
+      required_role: platform_team
+      require_evidence: [api_compat_report, downstream_impact_report]
+    dba_review:
+      required_role: dba
+      require_evidence: [migration_dry_run, rollback_plan]
+evidence:
+  require_before_promote:
+    - { type: bazel_affected_tests, must_pass: true }
+    - { type: api_contract_compat, must_pass: true }
+    - { type: rollback_plan, must_exist: true }
+<<<END_ZYAL id=billion-loc-monorepo>>>
+ZYAL_ARM RUN_FOREVER id=billion-loc-monorepo

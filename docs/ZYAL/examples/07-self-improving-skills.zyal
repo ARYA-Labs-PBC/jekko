@@ -1,0 +1,213 @@
+# ZYAL v2.1 — Self-Improving Skills (Governed)
+#
+# The agent may PROPOSE skills based on repeated successful patterns, but skills
+# only enter the registry through quarantine → human review → promotion.
+# Generated skills can never auto-activate. Skills are instructions, not
+# arbitrary executables.
+
+<<<ZYAL v1:daemon id=self-improving-skills>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Governed skill discovery"
+  objective: |
+    Watch for repeated successful patterns, propose skill candidates to a
+    quarantine zone, require human review + tests + scans before promotion to
+    the trusted registry.
+  risk:
+    - Generated skills could embed prompt injection
+    - Skills could request unsafe shell commands
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/done.txt"
+        timeout: 5s
+        assert: { exit_code: 0 }
+
+skills:
+  registry:
+    fix-until-tests-pass:
+      description: "Loop bun test until exit 0; commit on green."
+      agent: build
+      writes: working_tree
+      trust: builtin
+      timeout: 10m
+    parallel-audit:
+      description: "Run lint + typecheck + tests in parallel worktrees."
+      agent: build
+      writes: isolated_worktree
+      trust: verified
+  allow_creation: true
+  max_skills: 20
+
+memory:
+  stores:
+    pattern_observations:
+      scope: global
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+    skill_candidates:
+      scope: global
+      retention: until_archive
+      write_policy: upsert
+      read_policy: on_demand
+    rejected_candidates:
+      scope: global
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+  redaction:
+    patterns: ["sk-*", "AKIA*", "ghp_*"]
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_assertion_weakening: true
+    block_silent_catch: true
+    block_fake_data_fallback: true
+    block_ts_ignore: true
+  checks:
+    - name: skill-no-curl-pipe-shell
+      pattern: "curl[^|]+\\|\\s*(sh|bash|zsh)"
+      scope: file_diff
+      on_violation: block_promotion
+    - name: skill-no-credential-request
+      pattern: "(API_KEY|TOKEN|PASSWORD|SECRET)\\s*=\\s*\\$\\{?\\w+\\}?"
+      scope: file_diff
+      on_violation: block_promotion
+    - name: skill-no-hidden-unicode
+      pattern: "[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F]"
+      scope: file_diff
+      on_violation: block_promotion
+    - name: skill-no-remote-instructions
+      pattern: "(fetch|wget|curl)\\s+https?://"
+      scope: file_diff
+      on_violation: require_approval
+
+approvals:
+  gates:
+    skill_promotion_review:
+      required_role: skill_curator
+      timeout: 7d
+      on_timeout: pause
+      decisions: [approve, reject, edit]
+      require_evidence:
+        - skill_test_results
+        - skill_security_scan
+        - skill_example_trace
+        - no_secret_leak
+        - no_dangerous_shell
+
+evidence:
+  require_before_promote:
+    - type: skill_test_results
+      must_pass: true
+    - type: skill_security_scan
+      must_pass: true
+    - type: skill_example_trace
+      must_exist: true
+    - type: no_secret_leak
+      must_pass: true
+    - type: no_dangerous_shell
+      must_pass: true
+  bundle_format: json
+  sign: sha256
+  archive: true
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-anywhere
+      tool: read
+      decision: allow
+    - id: write-quarantine
+      tool: edit
+      paths: [".jekko/skills_quarantine/**"]
+      decision: allow
+    - id: write-registry-blocked
+      tool: edit
+      paths: [".agents/skills/**"]
+      decision: deny
+      reason: "skill registry promotion is host-mediated"
+    - id: shell-skill-tests
+      tool: shell
+      command_regex: "^bun run skill:test "
+      decision: allow
+  command_floor:
+    always_block:
+      - "git push --force"
+      - "rm -rf /"
+      - "curl .* \\| sh"
+      - "DROP DATABASE"
+
+on:
+  - signal: tool_calls_done
+    count_gte: 3
+    do:
+      - notify: "Repeated successful pattern detected — proposing skill candidate"
+      - run: "node scripts/extract-skill-candidate.mjs --to .jekko/skills_quarantine/"
+
+models:
+  profiles:
+    builder: { provider: anthropic, model: claude-sonnet-4-6 }
+    critic: { provider: openai, model: gpt-5, reasoning: true }
+  routes:
+    plan: builder
+    implement: builder
+    review: critic
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+  confidence_cap: 0.5
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+  metrics:
+    - { name: skills_proposed, type: counter, source: daemon }
+    - { name: skills_promoted, type: counter, source: daemon }
+    - { name: skills_rejected, type: counter, source: approvals }
+    - { name: dangerous_pattern_blocks, type: counter, source: quality }
+  report:
+    format: markdown
+    on_complete: true
+
+budgets:
+  run:
+    wall_clock: 720h
+    cost_usd: 100.00
+    on_exhaust: pause
+
+done:
+  require:
+    - skill_promotion_review_approved
+    - evidence_complete
+    - registry_updated
+  forbid:
+    - model_only_claim
+    - quarantine_bypass
+
+ui:
+  theme: jekko-gold
+  banner: forever
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: deny
+<<<END_ZYAL id=self-improving-skills>>>
+ZYAL_ARM RUN_FOREVER id=self-improving-skills

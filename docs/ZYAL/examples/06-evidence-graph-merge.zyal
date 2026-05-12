@@ -1,0 +1,247 @@
+# ZYAL v2.1 — Evidence Graph Merge
+#
+# Workflow-driven feature implementation that gates each phase on typed evidence.
+# Approvals at plan and merge with codeowner roles, structured objections, and
+# escalation. Rollback verified before merge. Done is host-evaluated, not the
+# model's claim.
+
+<<<ZYAL v1:daemon id=evidence-graph-merge>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Evidence-graph feature merge"
+  objective: |
+    Implement a feature with workflow-driven phases, proof-lane verification,
+    typed approvals, signed evidence bundles, and verifiable rollback.
+  risk:
+    - Behavior change without test coverage
+    - Force-push to main
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/promoted.txt"
+        timeout: 5s
+        assert: { exit_code: 0 }
+
+workflow:
+  type: state_machine
+  initial: discover
+  max_total_time: 24h
+  on_stuck: incubate
+  states:
+    discover:
+      agent: plan
+      writes: scratch_only
+      produces: [impact_map, task_graph, requirements]
+      timeout: 30m
+      transitions:
+        - to: plan
+          when: { evidence_exists: impact_map }
+    plan:
+      agent: plan
+      writes: scratch_only
+      requires: [impact_map, requirements]
+      produces: [change_plan, test_plan, rollback_plan, threat_model]
+      approval: plan_review
+      timeout: 60m
+      transitions:
+        - to: implement
+          when: { approval_granted: plan_review }
+    implement:
+      agent: build
+      writes: isolated_worktree
+      requires: [change_plan, test_plan, rollback_plan]
+      produces: [code_changes, test_results, lint_results]
+      timeout: 120m
+      transitions:
+        - to: verify
+          when: { all_checks_pass: true }
+        - to: plan
+          when: { checks_failed: true }
+    verify:
+      agent: build
+      writes: none
+      requires: [test_results, code_changes]
+      produces: [verification_report, security_scan, perf_report]
+      timeout: 30m
+      transitions:
+        - to: review
+          when: { all_checks_pass: true }
+        - to: implement
+          when: { checks_failed: true }
+    review:
+      agent: critic
+      writes: scratch_only
+      requires: [verification_report]
+      produces: [review_findings, blind_critic_score]
+      timeout: 45m
+      transitions:
+        - to: promote
+          when: { all_checks_pass: true }
+        - to: implement
+          when: { checks_failed: true }
+    promote:
+      terminal: true
+      approval: merge_review
+
+evidence:
+  require_before_promote:
+    - type: test_results
+      must_pass: true
+    - type: typecheck_results
+      must_pass: true
+    - type: lint_results
+      must_pass: true
+    - type: security_scan
+      must_pass: true
+    - type: blind_critic_score
+      must_pass: true
+    - type: rollback_plan
+      must_exist: true
+    - type: rollback_verify
+      must_pass: true
+    - type: ownership_approvals
+      must_be_known: true
+    - type: regression_diff
+      max_increase: 0.05
+  bundle_format: json
+  sign: sha256
+  archive: true
+
+approvals:
+  gates:
+    plan_review:
+      required_role: tech_lead
+      timeout: 24h
+      on_timeout: pause
+      decisions: [approve, reject, edit, escalate]
+      require_evidence: [change_plan, test_plan, rollback_plan, threat_model]
+      auto_approve_if:
+        risk_score_lt: 0.3
+        all_checks_pass: true
+    merge_review:
+      required_role: code_owner
+      timeout: 48h
+      on_timeout: pause
+      decisions: [approve, reject, edit, escalate]
+      require_evidence:
+        - test_results
+        - blind_critic_score
+        - rollback_plan
+        - rollback_verify
+        - security_scan
+  escalation:
+    chain: [tech_lead, staff_engineer, eng_director]
+    auto_escalate_after: 48h
+
+memory:
+  stores:
+    spec_context:
+      scope: task
+      retention: until_promotion
+      max_entries: 200
+      write_policy: append_only
+      read_policy: inject_at_start
+    decisions:
+      scope: global
+      retention: permanent
+      write_policy: upsert
+      read_policy: search
+      searchable: true
+  redaction:
+    patterns: ["sk-*", "AKIA*", "ghp_*"]
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_assertion_weakening: true
+    block_silent_catch: true
+    block_fake_data_fallback: true
+    block_ts_ignore: true
+  diff_budget:
+    max_files_changed: 30
+    max_added_lines: 1500
+    on_violation: require_approval
+  checks:
+    - name: no-test-skip
+      pattern: "\\.skip\\(|test\\.only\\(|describe\\.only\\("
+      scope: file_diff
+      on_violation: block_promotion
+
+rollback:
+  required_when:
+    risk_score_gte: 0.4
+  plan_required: true
+  verify_command: "git apply --reverse --check < .jekko/daemon/rollback.patch"
+  on_failure_after_merge: revert_commit
+
+models:
+  profiles:
+    plan: { provider: anthropic, model: claude-opus-4-7, reasoning: true }
+    build: { provider: anthropic, model: claude-sonnet-4-6 }
+    critic: { provider: openai, model: gpt-5, reasoning: true }
+  routes:
+    plan: plan
+    implement: build
+    review: critic
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+  confidence_cap: 0.6
+
+budgets:
+  run:
+    wall_clock: 24h
+    cost_usd: 60.00
+    on_exhaust: renew_with_approval
+  task:
+    iterations: 30
+    cost_usd: 8.00
+    on_exhaust: park
+
+done:
+  require:
+    - workflow_terminal_reached
+    - evidence_complete
+    - merge_review_approved
+    - rollback_verify_passed
+    - no_unresolved_critical_objections
+    - memory_compressed
+  forbid:
+    - model_only_claim
+    - tests_not_run
+    - rollback_unverified
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+    include_model_calls: true
+  cost:
+    budget: 60.00
+    alert_at_percent: 80
+    on_budget_exceeded: pause
+  report:
+    format: markdown
+    on_complete: true
+
+ui:
+  theme: jekko-gold
+  banner: forever
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: deny
+<<<END_ZYAL id=evidence-graph-merge>>>
+ZYAL_ARM RUN_FOREVER id=evidence-graph-merge

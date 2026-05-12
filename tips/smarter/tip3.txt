@@ -1,0 +1,1353 @@
+I would add one major concept to the ZYAL plan:
+
+# Add a bounded **Hard-Task Deliberation Lane**
+
+The existing ZYAL plan is already strong for the outer daemon loop: strict activation, SQLite as source of truth, generated readable mirrors, hard context clear by epoch/child session, host-enforced stop checks, and gold TUI forever signaling. I would keep those decisions. The uploaded plan’s core principle is exactly right: ZYAL should not be prompt-only continuation; it should be a host-enforced daemon runtime where normal session semantics remain unchanged and daemon state is tracked separately.
+
+But the new thing you are describing is not just “loop forever.” It is:
+
+> When only hard tasks remain, stop treating them like normal implementation tasks. Route them into a bounded, task-local research/deliberation workflow where multiple fresh agents can accumulate evidence, plans, failed attempts, prototypes, and critiques until the task becomes safe enough to implement or is explicitly deferred/escalated.
+
+That should be an ZYAL feature, but it should **not** be another forever loop. The outer daemon can run forever. The hard-task loop must be bounded, because otherwise every ambiguous task becomes an infinite scratchpad swamp.
+
+I would call this addition:
+
+```text
+ZYAL Hard Lane
+```
+
+or more formally:
+
+```text
+ZYAL Deliberation Runtime
+```
+
+The key runtime distinction:
+
+```text
+daemon loop       = unbounded until host stop condition
+hard-task passes  = bounded until promote / defer / escalate / abandon
+```
+
+---
+
+# What not to invent from scratch
+
+There are already strong patterns in the agent ecosystem, and ZYAL should borrow their semantics without importing their whole frameworks.
+
+LangGraph’s most relevant idea is **durable execution**: a long-running workflow saves state at key points and can resume after interruption, human review, or failures. Its docs explicitly frame durable execution as useful for long-running tasks and human-in-the-loop workflows, and emphasize deterministic/idempotent design around side effects. ([LangChain Docs][1]) LangGraph also positions itself as a low-level runtime for long-running, stateful agents with durable execution, memory, persistence, and human-in-the-loop state inspection. ([LangChain Docs][2])
+
+OpenHands has two relevant ideas. First, its persistence model stores event history, tool outputs, execution state, iteration count, workspace context, and custom agent state. ([OpenHands Docs][3]) Second, its event system is an append-only log that serves as both memory and integration point for auxiliary services. ([OpenHands Docs][4]) ZYAL should copy that pattern: the hard-task scratchpad should be an append-only, typed task room, not random markdown edited by many agents.
+
+OpenHands also has a stuck detector that detects repeated action-observation cycles, repeated errors, monologues, alternating loops, and context-window errors, and can halt execution to prevent wasted resources. ([OpenHands Docs][5]) That is directly relevant: ZYAL hard passes need “no progress” detection, but instead of only halting, they can route to a different pass type, fresh agent, red-team review, or human escalation.
+
+Claude Code hooks are also relevant because they show the right separation of concerns: hooks run automatically at lifecycle events and can be shell commands, HTTP endpoints, or LLM prompts; they fire at events such as session start, prompt submit, tool calls, stop, compaction, and session end. ([Claude][6]) ZYAL should use this philosophy: host-level lifecycle gates, not model-level promises.
+
+PDL is relevant to syntax shape. IBM describes Prompt Declaration Language as a YAML-based declarative approach to prompt programming that supports model chaining, tool use, type checking, and application patterns such as RAG, CoT, ReAct, and SWE-bench agents. ([IBM][7]) That supports your current plan’s choice of strict YAML-like ZYAL rather than XML-ish prompt tags.
+
+Research patterns also matter. **Self-Refine** is an iterative generate → feedback → refine loop. ([arXiv][8]) **Reflexion** stores linguistic feedback in episodic memory so future attempts can improve without updating model weights. ([arXiv][9]) **Tree of Thoughts** explores multiple reasoning paths and self-evaluates/backtracks for harder planning problems. ([arXiv][10]) **Voyager** combines automatic curriculum, a skill library, and iterative prompting with environment feedback and self-verification. ([arXiv][11]) The ZYAL Hard Lane should be a practical coding-agent implementation of those patterns: bounded exploration, persistent task memory, independent branches of thought, verifier feedback, and promotion only after evidence.
+
+Jekko community demand also points in this direction. There are open issues requesting native `/loop` behavior to bridge one-off task execution and autonomous background agents. ([GitHub][12]) There is also an Jekko issue proposing DB-backed team coordination with SQLite tables, transactions, WAL mode, recovery, and per-agent memory, explicitly because synchronous subagents and file-only coordination are insufficient. ([GitHub][13]) Existing community tools such as OCLoop already use isolated sessions per iteration and persistent knowledge across iterations, while jekkor-style plugins show planner → builder → commit → repeat loops. ([GitHub][14]) Jekko’s own docs already support primary agents, subagents, the read-only `plan` agent, `general` for parallel units of work, `explore` for read-only investigation, and hidden compaction/summary agents, so the Hard Lane should reuse these concepts instead of inventing an unrelated worker model. ([Jekko][15])
+
+---
+
+# The core addition: task lanes
+
+Right now the plan mostly says:
+
+```text
+discover task -> run daemon iteration -> verify -> checkpoint -> loop
+```
+
+I would change it to:
+
+```text
+discover task
+  -> score task
+  -> route task into lane
+      easy lane       -> implement now
+      normal lane     -> plan briefly, implement
+      hard lane       -> bounded deliberation passes
+      blocked lane    -> human / dependency / external wait
+  -> promote only when evidence threshold passes
+  -> implement in isolated worktree
+  -> verify
+  -> checkpoint
+  -> cleanup task room
+```
+
+The important part is that the task itself has lifecycle state, not just the daemon.
+
+## Task lifecycle
+
+```text
+discovered
+  -> scored
+  -> routed_easy | routed_normal | routed_hard | blocked
+  -> researching
+  -> plan_candidate
+  -> prototype_candidate
+  -> promoted_to_implementation
+  -> implementing
+  -> verifying
+  -> completed
+  -> checkpointed
+  -> archived
+
+or:
+
+researching
+  -> deferred
+  -> human_review
+  -> abandoned_after_budget
+```
+
+This gives you the behavior you want: easy tasks drain first, but when only hard tasks remain, the runtime does not merely throw the same agent at them forever. It changes strategy.
+
+---
+
+# The “hard task” should be routed by evidence, not vibes
+
+Do not let the agent simply say “I feel low confidence” and route everything into expensive deliberation. Use a combined score.
+
+I would add a host-computed `task_score`:
+
+```text
+difficulty_score
+risk_score
+readiness_score
+uncertainty_score
+blast_radius_score
+evidence_score
+```
+
+The model may contribute an assessment, but it must be only one component.
+
+## Static difficulty signals
+
+A task should be considered harder if it touches:
+
+```text
+database migrations
+generated code contracts
+runtime loop code
+permissions/security
+git/checkpointing
+multi-agent coordination
+MCP tool resolution
+context compaction
+large diffs
+cross-package boundaries
+ambiguous requirements
+historically failing tests
+```
+
+For your Jekko ZYAL implementation, this means files such as `session/prompt.ts`, daemon DB schema, migrations, checkpointing, permissions, and TUI state would naturally score higher than isolated parser examples.
+
+## Dynamic difficulty signals
+
+A task should escalate if:
+
+```text
+one implementation attempt failed verification
+two agents disagree about the correct plan
+the same test fails after multiple patches
+the agent repeats similar shell/tool actions without progress
+the diff grows past a configured threshold
+the task touches files already locked by another worker
+the model explicitly reports low confidence
+the reviewer finds unclear invariants
+the stop condition remains unchanged after N iterations
+```
+
+This borrows the OpenHands stuck-detector idea but makes it productive: instead of “agent is stuck, stop,” the daemon can say “this task is now hard; route to deliberation.” ([OpenHands Docs][5])
+
+---
+
+# Task-local memory: the “Task Room”
+
+The biggest upgrade is a structured task-local memory area. Not global memory. Not random scratch markdown. Not blindly retained chat context.
+
+Each hard task gets a **Task Room**:
+
+```text
+.jekko/daemon/<runID>/tasks/<taskID>/
+  TASK.md
+  STATE.json
+  HANDOFF.md
+  evidence.jsonl
+  decisions.jsonl
+  attempts/
+    001-blind-plan.md
+    002-blind-plan.md
+    003-critique.md
+    004-synthesis.md
+    005-prototype.patch
+    006-red-team.md
+  prototypes/
+    worktree-001/
+    patch-001.diff
+  reviews/
+    reviewer-001.md
+    verifier-001.json
+  archive/
+```
+
+SQLite remains source of truth. These files are readable mirrors/artifacts, just like your current ZYAL plan already says for daemon ledgers and `STATE.md`.
+
+## What goes into the Task Room
+
+The task memory should be typed:
+
+```text
+problem statement
+known constraints
+relevant files
+suspected invariants
+failed approaches
+working hypotheses
+evidence collected
+test failures
+prototype diffs
+review objections
+open questions
+final implementation plan
+promotion decision
+cleanup decision
+```
+
+The model should never receive the full raw scratchpad by default. It should receive a **Task Memory Capsule**.
+
+Example:
+
+```markdown
+# Task Memory Capsule
+
+Task: daemon prompt loop result refactor
+Status: hard_research_pass_3
+Readiness: 0.61
+Risk: 0.72
+
+Known facts:
+- Normal prompt() callers must remain compatible.
+- Daemon needs terminal reason.
+- Plain jekko run must still exit on idle.
+
+Failed approaches:
+- Replacing session.status with daemon status caused plain run ambiguity.
+- Same-session continuation makes compaction auto-continue conflict likely.
+
+Current best plan:
+- Add SessionPrompt.loopResult(input).
+- Keep prompt() wrapper unchanged.
+- DaemonRunner calls loopResult per iteration.
+
+Open objections:
+- Need test showing structured output path unchanged.
+- Need no regression in existing compaction behavior.
+```
+
+That capsule is the only persistent context injected into fresh agents unless a pass explicitly requests deeper artifacts.
+
+---
+
+# Hard Lane pass types
+
+I would add these pass types to ZYAL.
+
+## 1. `blind_plan`
+
+A fresh read-only agent receives only the task, relevant files, constraints, and stop criteria. It does **not** read prior plans.
+
+Purpose: independent planning, avoids anchoring.
+
+```yaml
+- id: blind-a
+  type: blind_plan
+  agent: plan
+  reads: [task, repo_context, relevant_files]
+  writes: attempts/blind-a.md
+```
+
+Run two or three blind plans for hard tasks. If they converge, confidence increases. If they diverge, confidence decreases and the synthesis pass has more useful material.
+
+## 2. `anchored_critique`
+
+A fresh critic reads prior plans and attacks them.
+
+Purpose: find subtle regressions, missing tests, bad assumptions.
+
+```yaml
+- id: critique
+  type: anchored_critique
+  agent: plan
+  reads: [task, attempts]
+  writes: attempts/critique.md
+```
+
+## 3. `synthesis`
+
+A supervisor merges the best parts into one candidate plan.
+
+Purpose: convert scratch into an executable plan.
+
+```yaml
+- id: synthesis
+  type: synthesis
+  agent: plan
+  reads: [attempts, evidence]
+  writes: HANDOFF.md
+```
+
+## 4. `prototype`
+
+An implementer may write experimental code, but only in an isolated worktree or sandbox. No main worktree writes. No checkpoint.
+
+Purpose: gather implementation evidence without polluting the real repo.
+
+```yaml
+- id: prototype
+  type: prototype
+  agent: build
+  isolation: git_worktree
+  source_write: sandbox_only
+  writes: prototypes/prototype-001.diff
+```
+
+## 5. `red_team`
+
+An adversarial reviewer receives the candidate plan/prototype and tries to prove it wrong.
+
+Purpose: stop confident but wrong plans.
+
+```yaml
+- id: red-team
+  type: red_team
+  agent: plan
+  reads: [HANDOFF.md, prototype.diff, tests]
+  writes: reviews/red-team.md
+```
+
+## 6. `promotion_review`
+
+The runtime evaluates whether the hard task is ready to become an implementation task.
+
+Purpose: host-level gate.
+
+```yaml
+- id: promote
+  type: promotion_review
+  require:
+    readiness_at_least: 0.72
+    risk_at_most: 0.45
+    independent_plan_convergence_at_least: 0.60
+    verifier: pass
+```
+
+## 7. `implementation`
+
+Only after promotion does the runtime allow source writes to the real implementation branch/worktree.
+
+```yaml
+- id: implement
+  type: implementation
+  agent: build
+  isolation: git_worktree
+  source_write: allowed
+```
+
+---
+
+# The key policy: bounded hardening
+
+You specifically said you do **not** want scratchpad loops to run forever. Correct. The hard lane should always have budgets.
+
+Budgets should include:
+
+```text
+max_passes_per_task
+max_blind_plans
+max_prototypes
+max_retries_after_failed_verify
+max_wall_time
+max_tokens
+max_cost
+max_scratch_bytes
+max_open_questions
+max_consecutive_no_progress
+```
+
+When the budget is exhausted:
+
+```text
+defer to backlog
+pause daemon
+escalate to human
+split task
+lower priority
+require manual approval
+```
+
+Do not keep pounding the same hard task forever. The outer daemon may continue, but the task should be marked `deferred` or `human_review` if it cannot reach readiness.
+
+---
+
+# ZYAL syntax addition
+
+I would add five top-level blocks to the current ZYAL contract:
+
+```yaml
+routing:
+hardening:
+task_memory:
+promotion:
+cleanup:
+```
+
+The minimal version:
+
+```yaml
+routing:
+  enabled: true
+  default_lane: normal
+  lanes:
+    easy:
+      when:
+        readiness_gte: 0.75
+        risk_lte: 0.40
+    hard:
+      when:
+        any:
+          - readiness_lt: 0.55
+          - risk_gte: 0.65
+          - verify_failures_gte: 2
+          - no_progress_gte: 1
+
+hardening:
+  enabled: true
+  max_passes_per_task: 6
+  flow:
+    - blind_plan
+    - blind_plan
+    - anchored_critique
+    - synthesis
+    - prototype
+    - red_team
+    - promotion_review
+
+task_memory:
+  root: ".jekko/daemon/${run.id}/tasks/${task.id}"
+  mode: append_only
+  capsule: true
+  max_bytes: 1048576
+
+promotion:
+  require:
+    readiness_gte: 0.72
+    risk_lte: 0.45
+    verifier_passes: true
+
+cleanup:
+  on_completed:
+    archive_task_room: true
+    keep: [HANDOFF.md, evidence.jsonl, decisions.jsonl, final.diff]
+    delete: [prototypes/worktree-*]
+```
+
+That gives you a simple, reliable version.
+
+---
+
+# Full ZYAL example for your dirty worktree scenario
+
+```yaml
+<<<ZYAL v1:daemon id=jankurai-clean-worktree>>>
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai dirty worktree cleanup with hard-task deliberation"
+  objective: |
+    Investigate all uncommitted work related to @agent/JANKURAI_STANDARD.md
+    and @JANKURAI_TASKLIST.md.
+
+    Fix regressions, verify tests/audit, commit and push completed verified
+    work. If audit still has findings or caps, add findings to
+    JANKURAI_TASKLIST.md and move completed items to
+    JANKURAI_TASKLIST.md.completed.
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied, checkpoint_failed, no_progress]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+stop:
+  all:
+    - shell:
+        command: "jankurai audit . --json target/jankurai/daemon-audit.json"
+        timeout: 30s
+        assert:
+          json:
+            "$.findings_count": 0
+            "$.caps_count": 0
+    - git_clean:
+        allow_untracked: false
+
+tasks:
+  ledger: sqlite
+  discover:
+    - shell:
+        command: "jankurai audit . --json"
+        items: "$.findings[*]"
+    - git_diff:
+        include_untracked: true
+
+routing:
+  enabled: true
+  default_lane: normal
+  score:
+    static:
+      changed_files_weight: 0.10
+      protected_path_weight: 0.20
+      migration_weight: 0.20
+      runtime_loop_weight: 0.20
+      test_failure_weight: 0.20
+      generated_zone_weight: 0.20
+    model_assessment:
+      enabled: true
+      weight: 0.15
+      require_schema:
+        confidence: number
+        risk: number
+        reason: string
+        likely_failure_modes: array
+    no_progress:
+      signal_weight: 0.30
+
+  lanes:
+    easy:
+      when:
+        all:
+          - readiness_gte: 0.78
+          - risk_lte: 0.35
+          - touched_files_lte: 3
+      action: implement_now
+
+    normal:
+      when:
+        all:
+          - readiness_gte: 0.55
+          - risk_lte: 0.65
+      action: plan_then_implement
+
+    hard:
+      when:
+        any:
+          - readiness_lt: 0.55
+          - risk_gte: 0.65
+          - verify_failures_gte: 2
+          - no_progress_gte: 1
+          - touches:
+              any:
+                - "packages/jekko/src/session/prompt.ts"
+                - "packages/jekko/src/session/compaction.ts"
+                - "packages/jekko/src/session/daemon*.ts"
+                - "packages/jekko/migration/**"
+      action: hardening_flow
+
+hardening:
+  enabled: true
+  name: "bounded-deliberation"
+  max_passes_per_task: 7
+  max_wall_time: 45m
+  max_tokens: 600000
+  max_scratch_bytes: 2097152
+  on_budget_exhausted: human_review
+
+  source_write_policy:
+    before_promotion: sandbox_only
+    after_promotion: git_worktree
+
+  pass_defaults:
+    hard_clear_between_passes: true
+    inject_task_capsule_only: true
+    record_transcript_summary: true
+
+  flow:
+    - id: blind-plan-a
+      type: blind_plan
+      agent: plan
+      reads: [task, repo_context, relevant_files, stop]
+      does_not_read: [prior_attempts]
+      writes: attempts/blind-plan-a.md
+
+    - id: blind-plan-b
+      type: blind_plan
+      agent: plan
+      reads: [task, repo_context, relevant_files, stop]
+      does_not_read: [prior_attempts]
+      writes: attempts/blind-plan-b.md
+
+    - id: critique
+      type: anchored_critique
+      agent: plan
+      reads: [task, attempts]
+      writes: attempts/critique.md
+      require:
+        list_failure_modes: true
+        list_missing_tests: true
+        list_invariants: true
+
+    - id: synthesis
+      type: synthesis
+      agent: plan
+      reads: [attempts, critique, evidence]
+      writes: HANDOFF.md
+      require:
+        implementation_steps: true
+        verification_steps: true
+        rollback_plan: true
+        confidence_report: true
+
+    - id: prototype
+      type: prototype
+      agent: build
+      isolation: git_worktree
+      source_write: sandbox_only
+      reads: [HANDOFF.md]
+      writes:
+        - prototypes/prototype.diff
+        - evidence.jsonl
+      verify:
+        - shell: "git diff --check"
+        - shell: "bun --cwd packages/jekko test --timeout 30000 packages/jekko/test/session/daemon-runtime.test.ts"
+
+    - id: red-team
+      type: red_team
+      agent: plan
+      reads: [HANDOFF.md, prototypes/prototype.diff, evidence]
+      writes: reviews/red-team.md
+      require:
+        must_find_at_least: 3
+        include_regression_risk: true
+
+    - id: promote
+      type: promotion_review
+      require:
+        readiness_gte: 0.72
+        risk_lte: 0.45
+        no_unanswered_blockers: true
+        prototype_verified: true
+        red_team_blockers_lte: 1
+      on_pass: promote_to_implementation
+      on_fail: defer_or_repeat
+
+task_memory:
+  root: ".jekko/daemon/${run.id}/tasks/${task.id}"
+  sqlite: true
+  mirror_files: true
+  mode: append_only
+  capsule:
+    enabled: true
+    max_tokens: 6000
+    include:
+      - problem
+      - accepted_facts
+      - failed_approaches
+      - current_best_plan
+      - open_blockers
+      - verification_evidence
+  artifacts:
+    keep_completed:
+      - TASK.md
+      - HANDOFF.md
+      - evidence.jsonl
+      - decisions.jsonl
+      - reviews/red-team.md
+      - final.diff
+    delete_completed:
+      - prototypes/worktree-*
+      - temp/**
+
+promotion:
+  implementation_lane:
+    isolation: git_worktree
+    agent: build
+    require_handoff: true
+    require_locked_paths: true
+  confidence:
+    readiness_gte: 0.72
+    risk_lte: 0.45
+    independent_plan_convergence_gte: 0.60
+    verifier_evidence_weight_gte: 0.40
+  on_promoted:
+    create_task_lock: true
+    write_handoff_to_iteration_context: true
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - shell: "git diff --check"
+    - shell: "jankurai audit . --json target/jankurai/daemon-audit.json"
+  git:
+    add: ["."]
+    commit_message: "jankurai: daemon verified work item"
+    push: ask
+
+cleanup:
+  on_task_completed:
+    archive_task_room: true
+    compact_task_memory: true
+    keep_readable_summary: true
+    delete_unpromoted_stubs: true
+    release_locks: true
+  on_task_deferred:
+    keep_task_room: true
+    write_human_review_request: true
+    release_locks: true
+  on_daemon_satisfied:
+    archive_all_completed_task_rooms: true
+    write_final_report: ".jekko/daemon/${run.id}/FINAL.md"
+
+permissions:
+  shell: ask
+  edit: ask
+  git_commit: ask
+  git_push: ask
+  workers: ask
+  mcp: ask
+
+ui:
+  theme: jekko-gold
+  banner: forever
+  hard_lane_badge: amber
+  show_task_room: true
+<<<END_ZYAL id=jankurai-clean-worktree>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-clean-worktree
+```
+
+---
+
+# Why this works
+
+The hard lane solves a real failure mode: autonomous coding agents are often good at draining obvious tasks, then bad at the last few ambiguous/high-risk tasks because the same loop that worked for easy tasks keeps applying pressure without better information.
+
+This changes the strategy once the task looks hard:
+
+```text
+easy task:
+  act quickly, verify, commit
+
+hard task:
+  gather independent plans
+  critique them
+  synthesize
+  prototype safely
+  red-team
+  promote only with evidence
+```
+
+That is closer to Tree of Thoughts, Self-Refine, Reflexion, and Voyager, but adapted to Jekko’s actual coding environment: files, diffs, tests, git, permissions, compaction, and session boundaries.
+
+---
+
+# The most important safety rule
+
+Do not allow hard-pass agents to write to the real source tree before promotion.
+
+Before promotion:
+
+```text
+read-only plans
+append-only task room
+sandbox prototypes
+git worktree prototypes
+patch artifacts
+```
+
+After promotion:
+
+```text
+implementation worktree
+locked paths
+verification
+checkpoint
+```
+
+This prevents “low-confidence exploration” from polluting the dirty worktree.
+
+---
+
+# Add DB tables for hard-task memory
+
+The current ZYAL plan already proposes `daemon_task`, `daemon_worker`, `daemon_iteration`, `daemon_event`, and artifacts. I would add these tables.
+
+```text
+daemon_task_score
+  run_id
+  task_id
+  iteration
+  difficulty_score
+  risk_score
+  readiness_score
+  uncertainty_score
+  evidence_score
+  model_confidence
+  static_signals_json
+  dynamic_signals_json
+  created_at
+
+daemon_task_pass
+  id
+  run_id
+  task_id
+  pass_index
+  pass_type
+  agent
+  session_id
+  status
+  started_at
+  ended_at
+  input_capsule_json
+  output_artifact_id
+  score_delta_json
+  terminal_reason
+
+daemon_task_memory
+  id
+  run_id
+  task_id
+  kind
+  title
+  payload_json
+  markdown_path
+  sha
+  created_by_pass_id
+  accepted
+  created_at
+
+daemon_task_decision
+  id
+  run_id
+  task_id
+  decision_type
+  decision
+  rationale
+  evidence_refs_json
+  decided_by
+  created_at
+
+daemon_task_lock
+  run_id
+  task_id
+  path
+  lock_owner
+  lease_expires_at
+  reason
+```
+
+Important: task memory entries should have an `accepted` flag. Not every agent note becomes truth. The synthesis pass or supervisor can mark:
+
+```text
+accepted fact
+rejected hypothesis
+unverified claim
+open blocker
+```
+
+That prevents scratchpad poisoning.
+
+---
+
+# Implementation update to the current plan
+
+I would insert this into the ZYAL implementation plan after the serial daemon runtime and before swarms/MCP.
+
+## New Phase 3.5: Hard Lane Routing and Task Rooms
+
+Create/modify:
+
+```text
+packages/jekko/src/session/daemon-difficulty.ts
+packages/jekko/src/session/daemon-hardening.ts
+packages/jekko/src/session/daemon-task-memory.ts
+packages/jekko/src/session/daemon-passes.ts
+packages/jekko/src/session/daemon-promotion.ts
+packages/jekko/src/session/daemon-cleanup.ts
+packages/jekko/src/agent-script/schema.ts
+packages/jekko/src/agent-script/parser.ts
+packages/jekko/src/agent-script/examples.ts
+packages/jekko/specs/daemon-zyal.md
+```
+
+Extend the migration with:
+
+```text
+daemon_task_score
+daemon_task_pass
+daemon_task_memory
+daemon_task_decision
+daemon_task_lock
+```
+
+Extend parser schema with:
+
+```text
+OcalRouting
+OcalHardening
+OcalTaskMemory
+OcalPromotion
+OcalCleanup
+OcalPass
+OcalLane
+OcalScorePolicy
+```
+
+Extend tests:
+
+```text
+parser accepts routing/hardening/task_memory/promotion/cleanup
+parser rejects unknown pass types
+hard lane never starts without explicit budget
+hard lane rejects source_write: allowed before promotion
+task room path cannot escape .jekko/daemon
+append-only task memory rejects overwrite
+promotion fails without evidence
+budget exhaustion routes to human_review/deferred
+cleanup removes prototypes but keeps accepted summaries
+```
+
+---
+
+# Runtime flow with Hard Lane
+
+```text
+DaemonRunner
+  |
+  v
+DiscoverTasks
+  |
+  v
+ScoreTasks
+  |
+  v
+RouteTask
+  |--------------------|
+  |                    |
+  v                    v
+Easy/Normal Lane       Hard Lane
+  |                    |
+  |                    v
+  |              Create Task Room
+  |                    |
+  |                    v
+  |              blind_plan A
+  |                    |
+  |                    v
+  |              blind_plan B
+  |                    |
+  |                    v
+  |              critique
+  |                    |
+  |                    v
+  |              synthesis
+  |                    |
+  |                    v
+  |              sandbox prototype
+  |                    |
+  |                    v
+  |              red-team review
+  |                    |
+  |                    v
+  |              promotion review
+  |                    |
+  |       pass --------|-------- fail
+  |       |                     |
+  v       v                     v
+Implement in isolated worktree   defer / repeat / human_review
+  |
+  v
+Verify
+  |
+  v
+Checkpoint
+  |
+  v
+Cleanup task room
+```
+
+---
+
+# TUI behavior
+
+Keep the gold daemon banner for the outer forever mode. Add a separate hard-task indicator so users can tell the daemon is not stuck; it is deliberately researching.
+
+Example:
+
+```text
+∞ FOREVER · jankurai-clean-worktree · iter 42 · running
+HARD LANE · task audit-183 · pass 4/7 · prototype · readiness 0.61 · risk 0.72
+```
+
+Color semantics:
+
+```text
+gold   = daemon/forever outer loop
+amber  = hard task deliberation
+teal   = promoted / implementation-ready
+green  = verified / checkpointed
+red    = blocked / permission / verifier failure
+gray   = deferred / archived
+```
+
+The preview dialog should show:
+
+```text
+Hard Lane enabled
+Max passes per task: 7
+Source writes before promotion: sandbox only
+Scratch limit: 2 MB
+Budget exhaustion: human_review
+Promotion requires readiness >= 0.72 and risk <= 0.45
+Prototype worktrees cleaned on completion
+```
+
+This is critical because a user should be able to distinguish:
+
+```text
+the daemon is looping forever intentionally
+the hard task is bounded and safe
+the agent is not randomly scribbling in the repo
+```
+
+---
+
+# Syntax highlighting / preview rules
+
+ZYAL already has strong sentinel gates. I would add semantic highlighting for the new hard-lane blocks:
+
+```text
+<<<ZYAL v1:daemon id=...>>>       gold border, valid sentinel
+intent / confirm                  gold required fields
+loop.policy: forever              gold warning pill
+routing                           blue/teal
+hardening                         amber
+source_write_policy               red/green depending on risk
+task_memory                       purple/blue
+promotion                         teal
+cleanup                           gray/green
+permissions                       red/yellow/green risk coloring
+ZYAL_ARM RUN_FOREVER              gold armed token
+```
+
+Invalid combinations should fail preview:
+
+```yaml
+hardening:
+  max_passes_per_task: unlimited
+```
+
+Reject: hard lanes must be bounded.
+
+```yaml
+hardening:
+  source_write_policy:
+    before_promotion: allowed
+```
+
+Reject unless explicitly paired with a dangerous override and manual approval. I would not support this in v1.
+
+```yaml
+task_memory:
+  root: "../../outside-project"
+```
+
+Reject path escape.
+
+```yaml
+promotion:
+  require:
+    readiness_gte: 0.95
+```
+
+Accept, but preview should warn that tasks may defer forever if threshold is too high.
+
+---
+
+# Simple presets for users
+
+Most users should not write the full hard-lane configuration. Add presets.
+
+## Preset 1: `bounded_research_then_build`
+
+```yaml
+hardening:
+  preset: bounded_research_then_build
+  max_passes_per_task: 5
+```
+
+Expands to:
+
+```text
+blind_plan
+blind_plan
+critique
+synthesis
+promotion_review
+```
+
+## Preset 2: `prototype_before_build`
+
+```yaml
+hardening:
+  preset: prototype_before_build
+  max_passes_per_task: 7
+```
+
+Expands to:
+
+```text
+blind_plan
+blind_plan
+critique
+synthesis
+sandbox prototype
+red-team
+promotion_review
+```
+
+## Preset 3: `red_team_only`
+
+```yaml
+hardening:
+  preset: red_team_only
+  route_when:
+    risk_gte: 0.55
+```
+
+Useful for tasks that are not super hard but are risky.
+
+## Preset 4: `human_gate_high_risk`
+
+```yaml
+hardening:
+  preset: human_gate_high_risk
+  route_when:
+    any:
+      - touches: ["packages/jekko/migration/**"]
+      - risk_gte: 0.80
+```
+
+This routes very risky work to planning and human approval instead of implementation.
+
+---
+
+# Better confidence model
+
+Do not call it simply `confidence`, because agents overstate confidence. Call it:
+
+```text
+implementation_readiness
+```
+
+Readiness should be computed from evidence:
+
+```text
+readiness =
+  plan_specificity
+  + independent_convergence
+  + verification_evidence
+  + prototype_success
+  + reviewer_acceptance
+  - unresolved_blockers
+  - blast_radius
+  - failed_attempts
+```
+
+Example fields:
+
+```yaml
+promotion:
+  readiness:
+    formula:
+      plan_specificity: 0.15
+      independent_convergence: 0.20
+      prototype_success: 0.25
+      verifier_success: 0.25
+      red_team_acceptance: 0.15
+    penalties:
+      unresolved_blocker: 0.20
+      failed_verify: 0.15
+      protected_path: 0.10
+```
+
+The exact math can be simple in v1. The important part is that readiness is evidence-based and reproducible.
+
+---
+
+# How to prevent all tasks from becoming hard tasks
+
+Set a default “normal first” policy:
+
+```yaml
+routing:
+  default_lane: normal
+  hard_lane_requires:
+    any:
+      - static_risk_gte: 0.65
+      - readiness_lt: 0.55
+      - verify_failures_gte: 2
+      - no_progress_gte: 1
+      - protected_path: true
+```
+
+And require budgets:
+
+```yaml
+hardening:
+  max_passes_per_task: 7
+  max_tokens: 600000
+  max_wall_time: 45m
+```
+
+The daemon should also track hard-lane utilization:
+
+```text
+if more than 30% of discovered tasks route hard:
+  warn user: routing too broad
+```
+
+This prevents “everything gets research mode.”
+
+---
+
+# Cleanup behavior
+
+Hard-task cleanup must be first-class.
+
+On completed task:
+
+```text
+archive accepted memory
+delete prototype worktrees
+delete temp files
+release path locks
+write final compact summary
+mark task completed
+retain final diff/test evidence
+```
+
+On deferred task:
+
+```text
+keep Task Room
+write HUMAN_REVIEW.md
+release locks
+do not delete failed evidence
+mark task deferred
+```
+
+On abandoned task:
+
+```text
+write ABANDONED.md
+record why budget exhausted
+keep only summary + evidence
+delete prototypes
+release locks
+```
+
+On daemon satisfied:
+
+```text
+write FINAL.md
+archive all completed task rooms
+keep DB rows
+keep readable mirrors
+```
+
+---
+
+# The cleanest small syntax
+
+For everyday use, this is what I would want to type:
+
+```yaml
+routing:
+  hard_tasks:
+    enabled: true
+    when:
+      any:
+        - risk_gte: 0.65
+        - confidence_lt: 0.55
+        - verify_failures_gte: 2
+        - no_progress_gte: 1
+    preset: prototype_before_build
+    budget:
+      max_passes: 7
+      max_time: 45m
+    scratch:
+      mode: task_room
+      cleanup: archive_on_complete
+    promote_when:
+      readiness_gte: 0.72
+      risk_lte: 0.45
+```
+
+That is enough for 80% of cases.
+
+The full syntax remains available for power users.
+
+---
+
+# Final recommendation
+
+Add **ZYAL Hard Lane** as a bounded, task-local, evidence-driven deliberation layer.
+
+The outer ZYAL daemon should still be the forever engine:
+
+```text
+host-enforced
+gold TUI
+strictly armed
+SQLite-backed
+context-clearing
+stop-condition-driven
+```
+
+The hard lane should be the “last 10% engine”:
+
+```text
+route only genuinely risky/low-readiness tasks
+create a Task Room
+run fresh independent passes
+store typed scratch/evidence
+prototype only in sandbox/worktree
+red-team the plan
+promote only with evidence
+clean up when complete
+defer/escalate when budget is exhausted
+```
+
+That gives you the power you are looking for without turning the repo into an uncontrolled infinite scratchpad.
+
+[1]: https://docs.langchain.com/oss/python/langgraph/durable-execution "Durable execution - Docs by LangChain"
+[2]: https://docs.langchain.com/oss/python/langgraph/overview "LangGraph overview - Docs by LangChain"
+[3]: https://docs.openhands.dev/sdk/guides/convo-persistence "Persistence - OpenHands Docs"
+[4]: https://docs.openhands.dev/sdk/arch/events "Events - OpenHands Docs"
+[5]: https://docs.openhands.dev/sdk/guides/agent-stuck-detector "Stuck Detector - OpenHands Docs"
+[6]: https://code.claude.com/docs/en/hooks "Hooks reference - Claude Code Docs"
+[7]: https://www.ibm.com/granite/docs/use-cases/prompt-declaration-language "Prompt Declaration Language - IBM Granite"
+[8]: https://arxiv.org/abs/2303.17651?utm_source=chatgpt.com "Self-Refine: Iterative Refinement with Self-Feedback"
+[9]: https://arxiv.org/abs/2303.11366?utm_source=chatgpt.com "Reflexion: Language Agents with Verbal Reinforcement Learning"
+[10]: https://arxiv.org/abs/2305.10601?utm_source=chatgpt.com "Tree of Thoughts: Deliberate Problem Solving with Large Language Models"
+[11]: https://arxiv.org/abs/2305.16291?utm_source=chatgpt.com "Voyager: An Open-Ended Embodied Agent with Large ..."
+[12]: https://github.com/anomalyco/jekko/issues/18001 "[FEATURE]:Implement /loop command for automated iterative task execution · Issue #18001 · anomalyco/jekko · GitHub"
+[13]: https://github.com/anomalyco/jekko/issues/19215 "[FEATURE]: DB-backed agent team coordination (parallel sub-agents, messaging, memory) · Issue #19215 · anomalyco/jekko · GitHub"
+[14]: https://github.com/d3vr/ocloop "GitHub - d3vr/OCLoop: Loop-Driven Development with Jekko · GitHub"
+[15]: https://jekko.ai/docs/agents/ "Agents | Jekko"

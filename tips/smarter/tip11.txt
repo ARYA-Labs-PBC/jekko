@@ -1,0 +1,1786 @@
+# Best addition to the ZYAL plan: add a **Hard-Task Incubator Lane**
+
+The existing ZYAL daemon plan is already directionally correct: strict `ZYAL v1` syntax, host-enforced forever mode, no XML `<FOREVER>`, no assistant-generated activation, SQLite as source of truth, generated ledger mirrors, hard context clearing through daemon epochs, daemon status separate from normal session status, and gold TUI arming/preview semantics. I would keep those decisions. The missing piece is a second runtime lane for tasks that are **too risky to implement immediately** but should not be abandoned once all the easy work is gone. The plan you pasted already establishes the right base architecture for that: daemon runtime, task ledger, worker leases, context rotation, checkpointing, and MCP/tool policy.
+
+The new layer should be:
+
+> **ZYAL Hard-Task Incubator:** a bounded cross-loop collaboration system where risky tasks get triaged, researched, reflected on, challenged, spiked in isolation, promoted only when evidence improves, and cleaned up when complete.
+
+This gives you the “compound knowledge across loops” effect without letting every problem disappear into endless scratchpad loops.
+
+---
+
+# 1. Core idea
+
+Today’s daemon plan answers:
+
+> “How do we keep going forever until stop criteria are satisfied?”
+
+The new incubator answers:
+
+> “When the daemon reaches the hard stuff, how does it get smarter across attempts without blindly editing the repo or repeating the same failure forever?”
+
+The answer is not “let the model decide to try harder.” It is a host-enforced task lifecycle:
+
+```text
+discovered
+  ↓
+triaged
+  ├─ low/medium risk → direct implementation lane
+  └─ high risk / low confidence / repeated failure → hard-task incubator
+                                                    ↓
+                                           bounded research passes
+                                                    ↓
+                                      hypothesis / critique / spike
+                                                    ↓
+                                      promotion gate with evidence
+                                                    ↓
+                                      implementation / verification
+                                                    ↓
+                                      checkpoint / cleanup / archive
+```
+
+The incubator is a **middle loop** inside the daemon. It is neither an infinite daemon loop nor a normal one-shot agent turn. It is a bounded loop for one hard task.
+
+---
+
+# 2. What to borrow from existing agent communities
+
+There is still no universal, mature “in-prompt agent scripting standard” for loops, scratchpads, multi-agent passes, and stop conditions. The closest broad standard is still **AGENTS.md**, which is intentionally just an open Markdown format for repository instructions, not a workflow DSL. The AGENTS.md site describes it as a predictable place for coding-agent context and says it is used across many coding agents, including Jekko, Codex, Jules, Aider, Cursor, and others. ([Agents][1])
+
+**MCP** is also not the workflow language. It is the tool/context protocol layer. Its specification says MCP standardizes ways for LLM applications to connect to external data sources and tools, expose resources/prompts/tools, and support progress, cancellation, logging, roots, sampling, and elicitation. It also emphasizes explicit user consent and tool safety because tools can represent arbitrary code execution. ZYAL should integrate MCP profiles and permissions, not pretend MCP itself solves daemon control flow. ([Model Context Protocol][2])
+
+The strongest runtime precedent is **LangGraph durable execution**. LangGraph’s docs define durable execution as saving progress at key points so a workflow can pause and resume after human-in-the-loop actions, system failures, or long delays; it also warns to make workflows deterministic/idempotent and wrap side effects so resumed workflows do not repeat them incorrectly. ZYAL’s SQLite daemon ledger, pass records, checkpoint table, and event log are exactly the Jekko-native equivalent of this idea. ([LangChain Docs][3])
+
+**Dify’s Loop node** is a useful conceptual distinction: loop cycles build on prior cycle results, while iteration processes array items independently. Dify also makes termination conditions and maximum loop counts first-class. That maps perfectly to ZYAL: the forever daemon loop may be unbounded, but the hard-task scratchpad/reflection loop should have `max_passes`, `stagnation`, `promotion`, and `escalation` rules. ([Dify Docs][4])
+
+**CrewAI Flows** are another useful precedent because they separate state management from agent behavior. CrewAI describes flow state as the backbone for sophisticated workflows, supporting context across steps, conditional logic, persistence, error handling, and recovery. ZYAL should likewise treat scratchpads and task capsules as runtime state, not as messy prompt text. ([CrewAI Documentation][5])
+
+**OpenAI Agents SDK orchestration** gives the right multi-agent rule: use “agents as tools” when a manager should stay in control, and use handoffs only when a specialist should own the next branch. For daemon work, the supervisor should keep ownership. Specialist agents should be bounded tools that return structured artifacts, not agents that can hijack the whole daemon. ([OpenAI Developers][6])
+
+**Codex subagent guidance** is directly relevant: subagents are useful for keeping the main context clean and running exploration/tests/triage in parallel, but they should be explicitly requested, they cost more tokens, and write-heavy parallel workflows need caution because parallel edits create conflicts. This supports your plan’s worktree isolation requirement and argues against same-worktree multi-worker edits. ([OpenAI Developers][7])
+
+**Jekko itself already has the agent concepts needed.** Jekko has primary agents, subagents, a restricted `plan` agent, a full-access `build` agent, a read-only `explore` subagent, a `general` subagent for multi-step tasks, and a hidden compaction agent. It also supports commands that can run through specific agents or force subtask/subagent execution. ZYAL should build on those instead of inventing a separate agent system. ([Jekko][8])
+
+**OpenHands is useful for repo memory conventions.** OpenHands recommends always-on repository context through `AGENTS.md`, supports on-demand skills, and explicitly warns that loaded skills consume context, so progressive disclosure keeps the prompt smaller. That is exactly why ZYAL hard-task memory should live in the daemon ledger and be summarized into a task capsule, not dumped raw into every loop. ([OpenHands Docs][9])
+
+**Magentic-One** provides a good orchestration shape: a lead orchestrator plans, tracks progress, replans after errors, and directs specialized agents. Microsoft also highlights repetition and isolation controls for agentic benchmarks where actions have side effects. ZYAL should copy that runtime posture: orchestrator-owned progress, specialist-owned bounded work, explicit isolation. ([Microsoft][10])
+
+For the hard-task loop itself, the research patterns are clear: **Reflexion** stores verbal reflections in episodic memory after feedback, **Self-Refine** iteratively generates feedback and refines output, **Tree of Thoughts** explores multiple reasoning paths with self-evaluation/backtracking, **Graph of Thoughts** generalizes this into arbitrary thought graphs, and **Voyager** uses an automatic curriculum, skill library, execution feedback, and self-verification. These are not syntax standards, but they are the right design vocabulary for ZYAL hard-task passes. ([arXiv][11])
+
+Recent SWE-agent-like research also supports this direction. SWE-Adept uses a localization agent plus resolution agent, shared working memory, hypothesis planning, Git-based checkpointing, isolated branches for alternative hypotheses, and semantic checkpoint retrieval so the agent does not track raw Git hashes in context. That is almost exactly what ZYAL should do for difficult code tasks. ([arXiv][12])
+
+There is also public engineering practice around persistent scratchpads and loop detection. One autonomous-development architecture describes persistent task scratchpads where agents record what worked, what failed, and what to try next, plus loop detection when repeated iterations look too similar. ZYAL should adopt this, but make the scratchpad structured and task-scoped instead of a single freeform Markdown file. ([praetorian.com][13])
+
+Jekko-specific issues confirm the need for host-owned task/wait state. Users report Jekko stopping after compaction and needing “continue,” while another issue reports the opposite: compaction can cause unwanted continuation because the system loses whether it was actively working or waiting for user input. This is why ZYAL daemon continuation must be explicit runtime state, and hard-task incubation must not depend on generic “continue” semantics. ([GitHub][14])
+
+---
+
+# 3. The plan update: ZYAL Risk Router + Hard-Task Incubator
+
+I would add this to the existing plan as **ZYAL v1.1**, but keep the activation gate exactly the same.
+
+Do **not** change:
+
+```text
+<<<ZYAL v1:daemon id=...>>>
+...
+<<<END_ZYAL id=...>>>
+ZYAL_ARM RUN_FOREVER id=...
+```
+
+Add these new top-level sections:
+
+```yaml
+risk:
+  ...
+
+lanes:
+  ...
+
+incubator:
+  ...
+
+memory:
+  ...
+
+promotion:
+  ...
+
+cleanup:
+  ...
+```
+
+These are runtime sections, not prompt instructions. They are parsed, validated, and executed by Jekko.
+
+The core behavior:
+
+```text
+1. Discover work items.
+2. Cheaply triage each item.
+3. Route easy items to direct implementation.
+4. Route risky / low-confidence / repeated-failure items to incubator.
+5. Incubator runs bounded passes:
+   - blind scout
+   - seeded scout
+   - synthesis
+   - critic
+   - spike
+   - arbiter
+6. Runtime promotes task only when evidence clears thresholds.
+7. Implement in isolated worktree/branch.
+8. Verify.
+9. Commit/push/checkpoint.
+10. Squash scratchpad into final task capsule and clean temporary artifacts.
+```
+
+This is the crucial property:
+
+> The daemon can run forever, but each hard-task incubation loop cannot.
+
+That prevents the “agent spins forever thinking about hard task” failure.
+
+---
+
+# 4. New task lifecycle
+
+Add statuses to `daemon_task.status`:
+
+```text
+pending
+triaging
+triaged
+direct_ready
+direct_running
+incubating
+incubated
+promotion_review
+implementation_ready
+implementing
+verifying
+checkpointing
+done
+blocked
+deferred
+abandoned
+```
+
+Recommended state machine:
+
+```text
+pending
+  ↓
+triaging
+  ↓
+triaged
+  ├─ direct_ready
+  │    ↓
+  │  implementing → verifying → checkpointing → done
+  │
+  └─ incubating
+       ↓
+     pass loop
+       ↓
+     promotion_review
+       ├─ implementation_ready → implementing → verifying → checkpointing → done
+       ├─ blocked
+       └─ deferred
+```
+
+When easy tasks are available, the daemon mostly consumes the direct lane. Once easy tasks are gone, the scheduler pulls from the incubator queue. That means hard work eventually gets attention, but only through a safer process.
+
+---
+
+# 5. Task capsule: the safe scratchpad
+
+Do not give every agent a giant shared scratchpad. Give each difficult task a **Task Capsule**.
+
+A Task Capsule is the durable, compact, task-scoped memory object that survives hard context clearing and fresh sessions.
+
+```yaml
+task_capsule:
+  task_id: "task-123"
+  title: "Refactor daemon compaction continuation semantics"
+  status: incubating
+
+  problem:
+    original: "..."
+    current_understanding: "..."
+    non_goals: []
+
+  constraints:
+    repo_rules: []
+    safety_rules: []
+    files_not_to_touch: []
+    generated_zones: []
+
+  relevant_context:
+    files: []
+    symbols: []
+    commands: []
+    prior_commits: []
+
+  attempts:
+    - pass_id: "spike-a"
+      summary: "Tried X; failed because Y."
+      evidence: []
+      rejected: true
+
+  hypotheses:
+    - id: "h1"
+      statement: "The stop behavior belongs in daemon supervisor, not prompt loop."
+      evidence_for: []
+      evidence_against: []
+      status: active
+
+  current_best_plan:
+    summary: "..."
+    steps: []
+    risks: []
+    tests: []
+
+  confidence:
+    risk_score: 0.82
+    readiness_score: 0.41
+    reasons: []
+
+  open_questions: []
+  blockers: []
+  next_recommended_pass: "critic"
+```
+
+Storage:
+
+```text
+SQLite source of truth:
+  daemon_task
+  daemon_pass
+  daemon_memory
+  daemon_hypothesis
+  daemon_artifact
+  daemon_event
+
+Generated mirrors:
+  .jekko/daemon/<runID>/tasks/<taskID>/CAPSULE.md
+  .jekko/daemon/<runID>/tasks/<taskID>/events.jsonl
+  .jekko/daemon/<runID>/tasks/<taskID>/artifacts/
+```
+
+Important rule:
+
+> Raw scratchpad entries are append-only evidence. The Task Capsule is the compact canonical memory.
+
+Agents write structured entries. The runtime periodically synthesizes the capsule. Fresh agents read the capsule, not the whole messy transcript.
+
+---
+
+# 6. Risk routing: do not send every task to the hard lane
+
+The agent may report low confidence, but the runtime should decide. Confidence is not a feeling. It is a combined host score.
+
+Use two scores:
+
+```text
+risk_score:
+  How dangerous / uncertain this task is.
+
+readiness_score:
+  How ready this task is for implementation.
+```
+
+The model can contribute to the score, but should not own it.
+
+Host features:
+
+```text
+- number of files touched
+- generated/migration/schema areas touched
+- protected files touched
+- test coverage known/unknown
+- audit severity
+- previous failed attempts
+- size of diff
+- cross-package dependency count
+- need for architecture decision
+- whether reproduction exists
+- whether task touches concurrency, DB, auth, permissions, or destructive Git
+```
+
+Agent features:
+
+```text
+- self-reported uncertainty
+- missing information
+- competing hypotheses
+- expected regression risk
+- need for reviewer
+- confidence rationale
+```
+
+Reviewer features:
+
+```text
+- independent scout agreement
+- critic objections
+- failed verification
+- red-team findings
+```
+
+Default routing:
+
+```text
+risk_score < 0.55 and no prior failure:
+  direct lane
+
+0.55 <= risk_score < 0.75:
+  direct lane with preflight reviewer
+
+risk_score >= 0.75:
+  hard-task incubator
+
+readiness_score < 0.50 after one failed direct attempt:
+  hard-task incubator
+
+failed_attempts >= 2:
+  hard-task incubator or human escalation
+```
+
+This prevents all tasks from getting over-processed.
+
+---
+
+# 7. ZYAL syntax addition: simple version
+
+Here is the smallest useful addition to your existing ZYAL block.
+
+```yaml
+risk:
+  triage:
+    enabled: true
+    agent: explore
+    max_tokens: 2500
+    output: task_risk_v1
+  route:
+    - lane: direct
+      when:
+        all:
+          - metric: risk_score
+            lt: 0.55
+          - metric: failed_attempts
+            eq: 0
+    - lane: preflight
+      when:
+        all:
+          - metric: risk_score
+            gte: 0.55
+          - metric: risk_score
+            lt: 0.75
+    - lane: incubator
+      when:
+        any:
+          - metric: risk_score
+            gte: 0.75
+          - metric: readiness_score
+            lt: 0.50
+          - metric: failed_attempts
+            gte: 2
+
+incubator:
+  enabled: true
+  max_active_tasks: 2
+  max_passes_per_task: 7
+  max_spike_branches_per_task: 2
+  stop_on_stagnation:
+    enabled: true
+    similar_passes: 3
+    similarity: 0.90
+    action: block_task
+
+  scratchpad:
+    storage: sqlite
+    mirror: ".jekko/daemon/${run.id}/tasks/${task.id}/CAPSULE.md"
+    max_raw_entries: 50
+    max_capsule_tokens: 6000
+    compact_after_each_pass: true
+
+  passes:
+    - id: blind_scout
+      count: 2
+      agent: explore
+      read_policy: blind
+      write_policy: scratchpad_only
+      goal: "Independently understand the task and propose root-cause hypotheses."
+
+    - id: synthesize
+      count: 1
+      agent: plan
+      read_policy: all_scout_summaries
+      write_policy: capsule_only
+      goal: "Create the canonical task capsule and best current plan."
+
+    - id: critic
+      count: 1
+      agent: explore
+      read_policy: capsule
+      write_policy: scratchpad_only
+      goal: "Find flaws, missing tests, unsafe assumptions, and simpler alternatives."
+
+    - id: spike
+      count: 1
+      agent: build
+      read_policy: capsule_and_critic
+      write_policy: isolated_worktree
+      commit: false
+      goal: "Try a reversible implementation spike. Report patch shape and evidence."
+
+promotion:
+  incubator_to_implementation:
+    when:
+      all:
+        - metric: readiness_score
+          gte: 0.78
+        - artifact: test_plan
+          exists: true
+        - artifact: current_best_plan
+          exists: true
+        - metric: unresolved_blockers
+          eq: 0
+        - metric: critic_blockers
+          eq: 0
+    otherwise: continue_or_block
+
+cleanup:
+  on_task_done:
+    squash_memory_to_capsule: true
+    archive_raw_passes: true
+    delete_spike_worktrees: true
+    delete_unmerged_spike_branches: true
+    keep_final_capsule: true
+  on_task_blocked:
+    keep_capsule: true
+    keep_last_spike_branch: ask
+    require_human_summary: true
+```
+
+This is deliberately simple. It gives you the key behavior without needing a full graph language on day one.
+
+---
+
+# 8. Advanced syntax: hard-task collaboration graph
+
+For very complex tasks, add an optional graph form. This should be an advanced feature, not the default.
+
+```yaml
+incubator:
+  enabled: true
+  mode: graph
+  max_passes_per_task: 10
+  max_parallel_passes: 3
+
+  graph:
+    nodes:
+      - id: scout_a
+        type: pass
+        agent: explore
+        read_policy: blind
+        write_policy: scratchpad_only
+
+      - id: scout_b
+        type: pass
+        agent: explore
+        read_policy: blind
+        write_policy: scratchpad_only
+
+      - id: synthesize
+        type: pass
+        agent: plan
+        read_policy: [scout_a, scout_b]
+        write_policy: capsule_only
+
+      - id: red_team
+        type: pass
+        agent: explore
+        read_policy: capsule
+        write_policy: scratchpad_only
+
+      - id: hypothesis_a
+        type: spike
+        agent: build
+        read_policy: capsule
+        write_policy: isolated_worktree
+        branch: "zyal/${task.id}/hyp-a"
+
+      - id: hypothesis_b
+        type: spike
+        agent: build
+        read_policy: capsule
+        write_policy: isolated_worktree
+        branch: "zyal/${task.id}/hyp-b"
+
+      - id: arbiter
+        type: pass
+        agent: plan
+        read_policy:
+          - red_team
+          - hypothesis_a
+          - hypothesis_b
+        write_policy: promotion_recommendation
+
+    edges:
+      - [scout_a, synthesize]
+      - [scout_b, synthesize]
+      - [synthesize, red_team]
+      - [synthesize, hypothesis_a]
+      - [synthesize, hypothesis_b]
+      - [red_team, arbiter]
+      - [hypothesis_a, arbiter]
+      - [hypothesis_b, arbiter]
+
+    join:
+      node: arbiter
+      require:
+        all_finished: true
+
+promotion:
+  incubator_to_implementation:
+    source: arbiter
+    when:
+      all:
+        - metric: readiness_score
+          gte: 0.82
+        - metric: arbiter_selected_hypothesis
+          exists: true
+        - metric: red_team_critical_findings
+          eq: 0
+```
+
+Why this works:
+
+```text
+- The first scouts are blind, so they do not anchor on a bad prior plan.
+- The synthesizer sees multiple independent views and creates a canonical capsule.
+- The critic sees the capsule and tries to break it.
+- Spikes happen in isolated worktrees.
+- The arbiter chooses based on artifacts, not vibes.
+- Promotion is host-gated.
+```
+
+This is the ZYAL version of combining Reflexion, Self-Refine, Tree/Graph-of-Thoughts, and SWE-style branch checkpointing.
+
+---
+
+# 9. Read policies: the most important design knob
+
+This is the feature that unlocks your “fresh agent vs forced to improve existing plan” idea.
+
+Add `read_policy` to every pass.
+
+```yaml
+read_policy: blind
+```
+
+The agent sees only:
+
+```text
+- original task
+- repo rules
+- allowed tools
+- current stop criteria
+```
+
+Use this for independent scouting.
+
+```yaml
+read_policy: capsule
+```
+
+The agent sees:
+
+```text
+- canonical task capsule
+- current best plan
+- known constraints
+- known failed attempts summarized
+```
+
+Use this for implementing or critiquing.
+
+```yaml
+read_policy: failures_only
+```
+
+The agent sees:
+
+```text
+- failed approaches
+- error logs
+- rejected hypotheses
+```
+
+Use this to avoid Groundhog Day.
+
+```yaml
+read_policy: plan_only
+```
+
+The agent sees:
+
+```text
+- current plan
+- no raw transcript
+- no previous arguments
+```
+
+Use this for red-team review.
+
+```yaml
+read_policy: full_task_history
+```
+
+The agent sees:
+
+```text
+- capsule
+- scratchpad entries
+- pass summaries
+- artifacts
+```
+
+Use sparingly. It can create context rot.
+
+Recommended built-ins:
+
+```yaml
+read_policies:
+  blind:
+    include: [task.original, repo_rules, stop, permissions]
+    exclude: [scratchpad, prior_attempts, current_best_plan]
+
+  capsule:
+    include: [task_capsule]
+
+  capsule_and_critic:
+    include: [task_capsule, critic_findings]
+
+  failures_only:
+    include: [failed_attempts, rejected_hypotheses, blocker_log]
+
+  plan_only:
+    include: [current_best_plan, constraints, test_plan]
+
+  full_task_history:
+    include: [task_capsule, scratchpad_entries, events, artifacts]
+    max_tokens: 12000
+```
+
+This is much better than “all agents read THIS_TRACKER.md.”
+
+---
+
+# 10. Write policies: prevent risky scratchpad work from touching main
+
+Every pass should also have a `write_policy`.
+
+```yaml
+write_policy: scratchpad_only
+```
+
+The agent can write structured memory but cannot edit repo files.
+
+```yaml
+write_policy: capsule_only
+```
+
+The agent can update the canonical task capsule, usually through a daemon tool.
+
+```yaml
+write_policy: patch_proposal
+```
+
+The agent can produce a patch artifact, but the runtime does not apply it.
+
+```yaml
+write_policy: isolated_worktree
+```
+
+The agent can edit, but only in a daemon-created Git worktree.
+
+```yaml
+write_policy: main_worktree
+```
+
+Only allowed after promotion and only for direct, serial implementation.
+
+Default for incubator:
+
+```yaml
+default_write_policy: scratchpad_only
+```
+
+Default for spike:
+
+```yaml
+default_write_policy: isolated_worktree
+```
+
+Default for final implementation:
+
+```yaml
+default_write_policy: main_worktree_or_merge_worker_branch
+```
+
+This keeps “try stub files” safe: stubs can exist in a spike worktree, not pollute the main dirty worktree.
+
+---
+
+# 11. New daemon-only tools
+
+The previous plan already proposes daemon tools like `daemon_status`, `daemon_lease_task`, `daemon_report_progress`, and `daemon_context_snapshot`. Add these incubator-specific tools.
+
+```text
+daemon_assess_risk
+daemon_request_incubation
+daemon_write_memory
+daemon_read_capsule
+daemon_register_hypothesis
+daemon_reject_hypothesis
+daemon_update_best_plan
+daemon_report_blocker
+daemon_report_failed_attempt
+daemon_report_confidence
+daemon_request_promotion
+daemon_record_spike_result
+daemon_compare_hypotheses
+daemon_archive_task_memory
+```
+
+Important safety rule:
+
+> The model may request promotion, but only the runtime can promote.
+
+So this is allowed:
+
+```text
+daemon_request_promotion(task_id, evidence)
+```
+
+This is not allowed in v1:
+
+```text
+daemon_promote_task(...)
+```
+
+The runtime evaluates `promotion.when`.
+
+---
+
+# 12. Confidence should be evidence-based, not self-reported
+
+Add a structured confidence object to every pass result.
+
+```yaml
+confidence_report:
+  self_confidence: 0.62
+  readiness_score_recommendation: 0.54
+  risk_score_recommendation: 0.77
+  evidence:
+    - "Found relevant stop behavior in session/prompt.ts"
+    - "Identified one failing test path"
+  missing_evidence:
+    - "No integration test yet for daemon hard clear"
+  blockers:
+    - "Need to confirm migration generation convention"
+  recommended_next_pass: critic
+```
+
+Then the host computes:
+
+```yaml
+host_confidence:
+  risk_score: 0.81
+  readiness_score: 0.49
+  reasons:
+    - "Touches prompt loop and compaction semantics"
+    - "No passing integration test yet"
+    - "One failed spike branch"
+```
+
+A good readiness score should depend on evidence:
+
+```text
+readiness_score =
+  plan_specificity
+  + localization_quality
+  + independent_agreement
+  + critic_clearance
+  + verification_plan_quality
+  + spike_success
+  - unresolved_blockers
+  - repeated_failure
+  - broad_diff_risk
+```
+
+Self-confidence can be an input, but never the majority of the score.
+
+---
+
+# 13. Updated Jankurai ZYAL example with hard-task incubation
+
+This is the kind of addition I would make to the existing Jankurai daemon spec.
+
+```yaml
+risk:
+  triage:
+    enabled: true
+    agent: explore
+    output: task_risk_v1
+    classify:
+      dimensions:
+        - regression_risk
+        - architecture_risk
+        - generated_zone_risk
+        - migration_risk
+        - test_uncertainty
+        - permission_risk
+        - prior_failure_risk
+    max_tokens: 2500
+
+  route:
+    - lane: direct
+      when:
+        all:
+          - metric: risk_score
+            lt: 0.55
+          - metric: failed_attempts
+            eq: 0
+
+    - lane: preflight
+      when:
+        all:
+          - metric: risk_score
+            gte: 0.55
+          - metric: risk_score
+            lt: 0.75
+
+    - lane: incubator
+      when:
+        any:
+          - metric: risk_score
+            gte: 0.75
+          - metric: readiness_score
+            lt: 0.50
+          - metric: failed_attempts
+            gte: 2
+          - changed_area:
+              any:
+                - "packages/jekko/src/session/prompt.ts"
+                - "packages/jekko/src/session/compaction.ts"
+                - "packages/jekko/src/session/session.sql.ts"
+                - "packages/jekko/migration/**"
+
+lanes:
+  direct:
+    objective: "Fix bounded low-risk item, verify, checkpoint."
+    max_iterations_per_item: 1
+    verify_before_checkpoint: true
+
+  preflight:
+    objective: "Run one read-only review before implementation."
+    reviewer:
+      agent: explore
+      read_policy: capsule
+      write_policy: scratchpad_only
+    continue_to_direct_when:
+      metric: reviewer_critical_findings
+      eq: 0
+
+  incubator:
+    objective: "Accumulate enough evidence to safely implement difficult items."
+    scheduler:
+      activate_when_direct_lane_empty: true
+      max_active_tasks: 2
+      starvation_after_iterations: 5
+
+incubator:
+  enabled: true
+  max_passes_per_task: 7
+  max_parallel_passes: 3
+  max_spike_branches_per_task: 2
+
+  stagnation:
+    detect_similar_summaries: true
+    similar_passes: 3
+    similarity: 0.90
+    on_stagnation: block_task
+
+  scratchpad:
+    storage: sqlite
+    mirror: ".jekko/daemon/${run.id}/tasks/${task.id}/CAPSULE.md"
+    raw_log: ".jekko/daemon/${run.id}/tasks/${task.id}/events.jsonl"
+    max_capsule_tokens: 6000
+    compact_after_each_pass: true
+    pin:
+      - constraints
+      - rejected_hypotheses
+      - current_best_plan
+      - test_plan
+      - blockers
+      - last_checkpoint
+
+  passes:
+    - id: blind_scout
+      count: 2
+      parallel: true
+      agent: explore
+      read_policy: blind
+      write_policy: scratchpad_only
+      goal: |
+        Independently inspect the task. Do not read previous plans.
+        Identify relevant files, risks, root-cause hypotheses, and safe test strategy.
+
+    - id: synthesize
+      count: 1
+      agent: plan
+      read_policy: all_scout_summaries
+      write_policy: capsule_only
+      goal: |
+        Merge scout results into one canonical task capsule.
+        Keep rejected ideas and unresolved questions.
+
+    - id: critic
+      count: 1
+      agent: explore
+      read_policy: plan_only
+      write_policy: scratchpad_only
+      goal: |
+        Attack the current best plan. Find missing tests, unsafe edits,
+        generated-zone violations, migration risks, and simpler alternatives.
+
+    - id: spike
+      count: 1
+      agent: build
+      read_policy: capsule_and_critic
+      write_policy: isolated_worktree
+      branch: "zyal/${run.id}/${task.id}/spike"
+      commit: false
+      goal: |
+        Try the smallest reversible implementation in an isolated worktree.
+        Do not push. Report changed files, test results, and remaining risk.
+
+promotion:
+  incubator_to_implementation:
+    when:
+      all:
+        - metric: readiness_score
+          gte: 0.78
+        - metric: unresolved_blockers
+          eq: 0
+        - metric: critic_critical_findings
+          eq: 0
+        - artifact: current_best_plan
+          exists: true
+        - artifact: test_plan
+          exists: true
+        - artifact: spike_result
+          exists: true
+    on_fail:
+      if_passes_remaining: continue
+      otherwise: block_task
+
+cleanup:
+  on_task_done:
+    squash_memory_to_capsule: true
+    archive_raw_pass_logs: true
+    delete_spike_worktrees: true
+    delete_unmerged_spike_branches: true
+    keep_final_capsule: true
+    keep_commit_refs: true
+
+  on_task_blocked:
+    keep_capsule: true
+    write_blocker_summary: true
+    pause_daemon_if_stop_requires_task: true
+```
+
+This gives you exactly what you described:
+
+```text
+- easy items get handled directly
+- hard items are not ignored
+- hard items accumulate memory safely
+- fresh agents can produce independent plans
+- other agents can improve existing plans
+- risky code stubs happen in isolated branches/worktrees
+- scratchpad loops are bounded
+- cleanup is explicit
+```
+
+---
+
+# 14. How the scheduler should behave when only hard tasks remain
+
+The daemon scheduler should not randomly grab forever. It should use lanes.
+
+Recommended scheduler:
+
+```yaml
+scheduler:
+  order:
+    - direct.ready
+    - preflight.ready
+    - incubator.promotable
+    - incubator.needs_pass
+    - blocked.needs_human
+
+  when_direct_empty:
+    activate_incubator: true
+
+  hard_task_limits:
+    max_active_incubator_tasks: 2
+    max_passes_per_task: 7
+    max_total_incubator_passes_per_iteration: 3
+
+  no_progress:
+    if_no_task_completed_after_iterations: 5
+    action: summarize_and_pause_or_replan
+```
+
+Behavior:
+
+```text
+1. While easy direct tasks exist, do them.
+2. When no direct tasks exist, spend bounded effort on incubator tasks.
+3. If an incubator task becomes promotable, implement it.
+4. If it does not become promotable after budget, mark blocked with a high-quality capsule.
+5. If all remaining tasks are blocked and stop criteria still fail, pause with a precise blocker summary instead of spinning forever.
+```
+
+“Forever” means the daemon does not stop because the assistant got tired. It does **not** mean it should burn infinite tokens on an unsolved task with no new information.
+
+---
+
+# 15. Implementation changes to the current ZYAL plan
+
+## 15.1 Parser and schema
+
+Extend:
+
+```text
+packages/jekko/src/agent-script/schema.ts
+packages/jekko/src/agent-script/parser.ts
+packages/jekko/src/agent-script/examples.ts
+packages/jekko/specs/daemon-zyal.md
+```
+
+Add schema models:
+
+```text
+OcalRisk
+OcalRiskTriage
+OcalRiskRoute
+OcalLane
+OcalIncubator
+OcalIncubatorPass
+OcalReadPolicy
+OcalWritePolicy
+OcalPromotion
+OcalCleanup
+OcalTaskCapsule
+```
+
+Keep the same parser safety rules:
+
+```text
+- sentinel must be first non-whitespace content
+- column 1 only
+- matching end id
+- required confirm and arm
+- reject duplicate ZYAL blocks
+- reject assistant/tool/file-origin ZYAL
+- reject code fences/blockquotes
+- unknown keys fail closed
+```
+
+Add semantic validation:
+
+```text
+- incubator.max_passes_per_task required if incubator.enabled
+- spike pass requires isolated worktree or patch_proposal write policy
+- write_policy: main_worktree forbidden inside incubator unless explicitly promoted
+- read_policy: full_task_history requires max_tokens
+- promotion required if incubator enabled
+- cleanup required if any spike/worktree pass exists
+```
+
+## 15.2 Store/migration
+
+The existing plan’s tables are good, but I would add either dedicated tables or structured records inside existing `daemon_event`/`daemon_artifact`.
+
+Best durable model:
+
+```sql
+daemon_pass:
+  id
+  run_id
+  task_id
+  iteration
+  pass_kind
+  pass_index
+  agent
+  read_policy
+  write_policy
+  session_id
+  worktree_path
+  branch
+  status
+  input_hash
+  output_json
+  risk_before
+  risk_after
+  readiness_before
+  readiness_after
+  started_at
+  ended_at
+
+daemon_memory:
+  id
+  run_id
+  task_id
+  pass_id
+  kind
+  title
+  content
+  visibility
+  pinned
+  superseded_by
+  created_at
+
+daemon_hypothesis:
+  id
+  run_id
+  task_id
+  statement
+  status
+  evidence_for_json
+  evidence_against_json
+  source_pass_id
+  selected_at
+  rejected_at
+
+daemon_metric:
+  id
+  run_id
+  task_id
+  pass_id
+  name
+  value_json
+  source
+  created_at
+```
+
+Minimal v1.1 alternative:
+
+```text
+Use daemon_event.payload_json and daemon_artifact.payload_json for pass/memory/hypothesis records.
+Materialize dedicated tables later.
+```
+
+I prefer dedicated tables because querying “which hard task is promotable?” should not require scanning raw JSON events.
+
+## 15.3 Runtime modules
+
+Add:
+
+```text
+packages/jekko/src/session/daemon-risk.ts
+packages/jekko/src/session/daemon-incubator.ts
+packages/jekko/src/session/daemon-memory.ts
+packages/jekko/src/session/daemon-promotion.ts
+packages/jekko/src/session/daemon-cleanup.ts
+```
+
+Responsibilities:
+
+```text
+daemon-risk.ts:
+  - compute host risk features
+  - run cheap triage pass
+  - calculate risk_score/readiness_score
+  - choose lane
+
+daemon-incubator.ts:
+  - schedule passes
+  - enforce pass budgets
+  - create fresh sessions/worktrees
+  - apply read/write policies
+  - detect stagnation
+
+daemon-memory.ts:
+  - append scratchpad entries
+  - synthesize task capsule
+  - mirror CAPSULE.md/events.jsonl
+  - compact raw memory
+
+daemon-promotion.ts:
+  - evaluate promotion.when
+  - prevent self-promotion
+  - produce implementation-ready task packet
+
+daemon-cleanup.ts:
+  - delete spike worktrees
+  - archive branches/artifacts
+  - squash memory
+  - mark blocked/done cleanup state
+```
+
+## 15.4 Prompt integration
+
+Do not let the model see “all ZYAL.” For each pass, generate a bounded pass prompt.
+
+Example blind scout prompt:
+
+```text
+You are running ZYAL incubator pass blind_scout for task <taskID>.
+You are intentionally not seeing prior attempts.
+Your job is to independently identify:
+- relevant files/symbols
+- likely root cause
+- risks
+- tests needed
+- whether implementation is safe now
+
+You may not edit files.
+Write structured findings using daemon_write_memory.
+Stop after one bounded pass.
+```
+
+Example critic prompt:
+
+```text
+You are running ZYAL incubator pass critic for task <taskID>.
+You are seeing the current best plan only.
+Find flaws, missing tests, unsafe assumptions, generated-zone risks,
+migration risks, simpler alternatives, and reasons not to promote.
+
+You may not edit files.
+Report critical findings and blocker severity.
+```
+
+Example spike prompt:
+
+```text
+You are running ZYAL incubator pass spike for task <taskID>.
+You are in isolated worktree <path>.
+Try the smallest reversible implementation.
+Do not push.
+Do not modify protected files.
+Report changed files, tests, and whether the spike should be promoted.
+```
+
+## 15.5 API additions
+
+Add:
+
+```text
+GET  /daemon/:runID/tasks
+GET  /daemon/:runID/tasks/:taskID
+GET  /daemon/:runID/tasks/:taskID/capsule
+GET  /daemon/:runID/tasks/:taskID/passes
+POST /daemon/:runID/tasks/:taskID/incubate
+POST /daemon/:runID/tasks/:taskID/promote
+POST /daemon/:runID/tasks/:taskID/block
+POST /daemon/:runID/tasks/:taskID/memory
+POST /daemon/:runID/tasks/:taskID/cleanup
+```
+
+Preview route should show:
+
+```text
+- which tasks can be routed to incubator
+- pass budgets
+- read/write policies
+- spike worktree policy
+- cleanup policy
+- promotion threshold
+```
+
+## 15.6 TUI update
+
+Keep the forever gold banner from the original ZYAL plan, but add a second visual layer for hard-task incubation.
+
+Gold stays for daemon mode:
+
+```text
+∞ FOREVER · jankurai-clean-worktree · iter 41 · running
+```
+
+Add an incubator sub-badge:
+
+```text
+INCUBATOR · 2 hard tasks · pass critic 3/7 · readiness 0.61
+```
+
+Suggested colors:
+
+```text
+gold:
+  forever / daemon / active loop
+
+amber:
+  risk / permission ask / checkpoint pending
+
+violet:
+  incubator / hypothesis / hard-task pass
+
+teal:
+  read-only scout / explore / context-safe pass
+
+green:
+  promotion passed / verified / checkpoint clean
+
+red:
+  blocked / failed verification / dangerous shell/git action
+```
+
+This should not just be cosmetic. The TUI preview should render a safety summary before arming:
+
+```text
+ZYAL FOREVER DAEMON
+Name: Jankurai dirty worktree hardening
+
+Loop:
+  policy: forever
+  stop: jankurai audit findings=0 caps=0 AND git clean
+
+Risk routing:
+  direct: risk < 0.55
+  preflight: 0.55 <= risk < 0.75
+  incubator: risk >= 0.75 OR readiness < 0.50 OR failed_attempts >= 2
+
+Incubator:
+  max active tasks: 2
+  max passes per task: 7
+  spike write policy: isolated worktree only
+  cleanup: delete spike worktrees, archive raw pass logs
+
+Dangerous actions:
+  git commit: ask
+  git push: ask
+  shell: ask
+```
+
+---
+
+# 16. Syntax highlighting options
+
+Because ZYAL activation is security-sensitive, syntax highlighting should be parser-driven, not regex-only.
+
+## Option A: TUI parser-span highlighter
+
+The parser returns spans:
+
+```ts
+type OcalSpan =
+  | { kind: "sentinel"; start: number; end: number }
+  | { kind: "arm"; start: number; end: number }
+  | { kind: "danger"; start: number; end: number }
+  | { kind: "permission"; start: number; end: number }
+  | { kind: "loop"; start: number; end: number }
+  | { kind: "stop"; start: number; end: number }
+  | { kind: "incubator"; start: number; end: number }
+  | { kind: "risk"; start: number; end: number }
+  | { kind: "error"; start: number; end: number; message: string }
+```
+
+This is safest because the same parser that validates activation drives the UI.
+
+## Option B: `.zyal` file grammar
+
+Use `.zyal` files for reusable specs:
+
+```text
+.jekko/daemons/jankurai.zyal
+```
+
+Inside:
+
+```yaml
+<<<ZYAL v1:daemon id=jankurai>>>
+...
+<<<END_ZYAL id=jankurai>>>
+```
+
+A future tree-sitter or VS Code grammar can highlight:
+
+```text
+sentinel / arm: gold
+dangerous actions: red
+permissions: amber
+stop checks: green
+risk/incubator: violet
+read-only passes: teal
+comments/objective text: muted
+```
+
+## Option C: YAML-frontmatter-compatible export
+
+For interoperability with existing editors, allow exporting the inner spec as YAML:
+
+```yaml
+# jankurai.zyal.yaml
+zyal:
+  version: 1
+  intent: daemon
+  confirm: RUN_FOREVER
+  ...
+```
+
+But do **not** allow this to activate from a normal paste. Activation should still require `/daemon start --file` or the sentinel+arm flow.
+
+---
+
+# 17. Why this is safer than raw scratchpads
+
+A normal scratchpad file fails in three ways:
+
+```text
+1. It becomes huge.
+2. Agents repeat or amplify bad assumptions.
+3. Agents treat old failed plans as current truth.
+```
+
+The Task Capsule fixes that:
+
+```text
+- raw entries are append-only
+- capsule is compact canonical state
+- rejected hypotheses are preserved
+- pass read policies control anchoring
+- blind passes can start fresh
+- failure-only passes prevent repeated mistakes
+- promotion gates prevent vibe-based implementation
+```
+
+The core trick is **controlled visibility**.
+
+Some agents should see nothing but the original task. Some should see the best plan. Some should see only the failure log. Some should see everything. ZYAL should make that explicit.
+
+---
+
+# 18. Cleanup semantics
+
+Hard-task incubation will create a lot of artifacts. Cleanup must be part of the spec, not a best-effort afterthought.
+
+Recommended cleanup states:
+
+```yaml
+cleanup:
+  on_task_done:
+    memory:
+      squash_to_final_capsule: true
+      archive_raw_passes: true
+      prune_unpinned_after: 14d
+    git:
+      delete_spike_worktrees: true
+      delete_unmerged_spike_branches: true
+      keep_final_branch_until_push: true
+    files:
+      delete_tmp_artifacts: true
+      keep:
+        - "CAPSULE.md"
+        - "events.jsonl"
+        - "final-evidence.json"
+
+  on_task_blocked:
+    memory:
+      keep_capsule: true
+      keep_raw_recent_passes: 5
+    git:
+      keep_last_spike_branch: ask
+      delete_other_spike_worktrees: true
+    daemon:
+      action: pause_if_stop_blocked
+
+  on_daemon_satisfied:
+    memory:
+      generate_final_report: true
+      archive_run: true
+    git:
+      require_clean: true
+    ui:
+      remove_gold_overlay: true
+      show_final_summary: true
+```
+
+Do not delete all memory on success. Keep the final capsule and commit refs. Delete noisy spike branches/worktrees and temporary raw artifacts.
+
+---
+
+# 19. How this changes the original forever example
+
+Your original frustrating prompt effectively says:
+
+```text
+Work through dirty worktree items forever until audit is clean.
+```
+
+With hard-task incubation, it becomes:
+
+```text
+Work through dirty worktree items.
+For low-risk items, fix directly.
+For risky or low-confidence items, do bounded incubation:
+  - fresh scouts
+  - synthesize plan
+  - critic
+  - isolated spike
+  - promote only with evidence
+Then implement, verify, commit, push.
+If no hard task can be promoted, pause with blockers instead of hallucinating progress.
+```
+
+That means the daemon can reach a very hard architectural rework and do something productive:
+
+```text
+iteration 41:
+  no easy tasks left
+  task A risk=0.88 → incubator
+
+iteration 42:
+  blind scout A1 writes independent root-cause map
+  blind scout A2 writes alternative root-cause map
+
+iteration 43:
+  synthesize pass creates canonical capsule
+
+iteration 44:
+  critic finds migration risk and missing test
+
+iteration 45:
+  spike tries branch implementation, test fails
+
+iteration 46:
+  failure-only pass updates rejected hypothesis
+
+iteration 47:
+  second spike passes focused test
+
+iteration 48:
+  promotion gate passes readiness 0.83
+
+iteration 49:
+  implementation/merge/verify/checkpoint
+
+iteration 50:
+  task cleanup, audit re-run
+```
+
+That is cross-loop collaboration without relying on one exhausted chat context.
+
+---
+
+# 20. Minimal implementation sequence
+
+I would not implement the full graph syntax immediately. Add it in layers.
+
+## Phase 1: risk routing and task capsule
+
+Implement:
+
+```text
+risk.triage
+risk.route
+daemon_task.status additions
+daemon_memory / capsule generation
+read_policy: blind | capsule | failures_only
+write_policy: scratchpad_only | capsule_only
+```
+
+No worktree spikes yet.
+
+## Phase 2: bounded incubator passes
+
+Implement:
+
+```text
+incubator.max_passes_per_task
+incubator.passes
+stagnation detection
+promotion gate
+block/defer behavior
+TUI incubator badge
+```
+
+Still no parallel writes.
+
+## Phase 3: isolated spikes
+
+Implement:
+
+```text
+write_policy: isolated_worktree
+spike branches
+spike cleanup
+spike artifact compare
+promotion based on spike result
+```
+
+## Phase 4: parallel scouts / graph mode
+
+Implement:
+
+```text
+parallel blind scouts
+graph node/edge syntax
+arbiter
+hypothesis race
+```
+
+## Phase 5: MCP profiles per pass
+
+Implement:
+
+```text
+mcp.profiles
+required MCP health checks
+per-pass tool allowlists
+per-pass MCP tool token budgets
+```
+
+This order gives useful value early and avoids building a whole agent workflow engine before the base daemon is stable.
+
+---
+
+# 21. Test plan additions
+
+Add tests beyond the original ZYAL daemon plan.
+
+## Parser tests
+
+```text
+accepts risk/incubator/promotion/cleanup sections
+rejects incubator without max_passes_per_task
+rejects spike pass without isolated write policy
+rejects main_worktree write inside incubator
+rejects unknown read_policy/write_policy
+rejects promotion-free incubator
+```
+
+## Routing tests
+
+```text
+low-risk task routes to direct
+medium-risk task routes to preflight
+high-risk task routes to incubator
+failed direct task routes to incubator
+agent self-confidence alone cannot promote task
+host risk features override inflated self-confidence
+```
+
+## Memory tests
+
+```text
+blind pass cannot read prior capsule
+capsule pass receives canonical capsule only
+failure-only pass receives rejected attempts but not full transcript
+raw scratchpad entries append
+capsule compacts after each pass
+hard context clear preserves capsule
+```
+
+## Incubator tests
+
+```text
+max_passes_per_task enforced
+stagnation blocks task after repeated similar summaries
+critic finding prevents promotion
+promotion succeeds only with required artifacts
+blocked hard task pauses daemon if stop criteria require it
+```
+
+## Spike/worktree tests
+
+```text
+spike creates isolated worktree
+spike cannot write main worktree
+failed spike records artifact and cleans worktree
+successful spike can be selected by arbiter
+unmerged spike branches are deleted/archived according cleanup policy
+```
+
+## Regression tests for Jekko semantics
+
+```text
+plain jekko run still exits on idle
+normal compaction behavior unchanged outside daemon
+daemon continues after assistant stop when host stop checks fail
+daemon does not continue after satisfaction
+hard-task incubator cannot activate from pasted docs or assistant output
+```
+
+---
+
+# 22. Final recommendation
+
+Update the ZYAL plan with this exact principle:
+
+> **ZYAL should have two loops: an unbounded daemon loop for overall completion, and bounded task-local incubator loops for hard problems.**
+
+The daemon loop is allowed to run forever.
+
+The incubator loop is never allowed to run forever.
+
+That gives you the best of both worlds:
+
+```text
+- agents stop being lazy because the host restarts them
+- context can be cleared because task memory is externalized
+- hard tasks get better over time because memory is task-scoped
+- fresh agents can avoid anchoring through blind passes
+- other agents can improve prior work through capsule passes
+- risky code can be spiked safely in isolated worktrees
+- promotion requires evidence, not vibes
+- cleanup is deterministic
+- if a task remains truly blocked, the daemon pauses with a useful capsule instead of looping uselessly
+```
+
+The most important syntax additions are:
+
+```yaml
+risk:
+lanes:
+incubator:
+memory:
+promotion:
+cleanup:
+```
+
+The most important runtime additions are:
+
+```text
+Task Capsule
+Risk Router
+Read Policy
+Write Policy
+Pass Ledger
+Promotion Gate
+Stagnation Detector
+Spike Worktree Cleanup
+```
+
+That is the powerful, simple, and reliable version of cross-loop collaboration.
+
+[1]: https://agents.md/ "AGENTS.md"
+[2]: https://modelcontextprotocol.io/specification/2025-06-18 "Specification - Model Context Protocol"
+[3]: https://docs.langchain.com/oss/python/langgraph/durable-execution "Durable execution - Docs by LangChain"
+[4]: https://docs.dify.ai/en/use-dify/nodes/loop "Loop - Dify Docs"
+[5]: https://docs.crewai.com/en/guides/flows/mastering-flow-state "Mastering Flow State Management - CrewAI"
+[6]: https://developers.openai.com/api/docs/guides/agents/orchestration "Orchestration and handoffs | OpenAI API"
+[7]: https://developers.openai.com/codex/concepts/subagents "Subagents – Codex | OpenAI Developers"
+[8]: https://jekko.ai/docs/agents/ "Agents | Jekko"
+[9]: https://docs.openhands.dev/overview/skills "Overview - OpenHands Docs"
+[10]: https://www.microsoft.com/en-us/research/publication/magentic-one-a-generalist-multi-agent-system-for-solving-complex-tasks/ "Magentic-One: A Generalist Multi-Agent System for Solving Complex Tasks - Microsoft Research"
+[11]: https://arxiv.org/abs/2303.11366?utm_source=chatgpt.com "Reflexion: Language Agents with Verbal Reinforcement ..."
+[12]: https://arxiv.org/html/2603.01327v1 "SWE-Adept: An LLM-Based Agentic Framework for Deep Codebase Analysis and Structured Issue Resolution"
+[13]: https://www.praetorian.com/blog/deterministic-ai-orchestration-a-platform-architecture-for-autonomous-development/ "Deterministic AI Orchestration: A Platform Architecture for Autonomous Development | Praetorian"
+[14]: https://github.com/anomalyco/jekko/issues/13217?utm_source=chatgpt.com "Stops after compaction #13217 - anomalyco/jekko"

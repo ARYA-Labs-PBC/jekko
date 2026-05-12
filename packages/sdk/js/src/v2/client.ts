@@ -1,0 +1,111 @@
+export * from "./gen/types.gen.js"
+
+import { createClient } from "./gen/client/client.gen.js"
+import { type Config } from "./gen/client/types.gen.js"
+import { OpencodeClient } from "./gen/sdk.gen.js"
+export { type Config as OpencodeClientConfig, OpencodeClient }
+
+function pick(value: string | null, alternative_path?: string, encode?: (value: string) => string) {
+  if (!value) return
+  if (!alternative_path) return value
+  if (value === alternative_path) return alternative_path
+  if (encode && value === encode(alternative_path)) return alternative_path
+  return value
+}
+
+function rewrite(request: Request, values: { directory?: string; workspace?: string }) {
+  if (request.method !== "GET" && request.method !== "HEAD") return request
+
+  const url = new URL(request.url)
+  let changed = false
+
+  for (const [name, key] of [
+    ["x-jekko-directory", "directory"],
+    ["x-jekko-workspace", "workspace"],
+  ] as const) {
+    const value = pick(
+      request.headers.get(name),
+      key === "directory" ? values.directory : values.workspace,
+      key === "directory" ? encodeURIComponent : undefined,
+    )
+    if (!value) continue
+    if (!url.searchParams.has(key)) {
+      url.searchParams.set(key, value)
+    }
+    changed = true
+  }
+
+  if (!changed) return request
+
+  const next = new Request(url, request)
+  next.headers.delete("x-jekko-directory")
+  next.headers.delete("x-jekko-workspace")
+  return next
+}
+
+export function createOpencodeClient(config?: Config & { directory?: string; experimental_workspaceID?: string }) {
+  if (!config?.fetch) {
+    const bunFetch = fetch as typeof fetch & { preconnect?: unknown }
+    const customFetch = Object.assign(
+      ((input, init) => {
+        const request = input instanceof Request ? input : new Request(input, init)
+        ;(request as Request & { timeout?: boolean | number }).timeout = false
+        return fetch(request)
+      }) as typeof fetch,
+      { preconnect: bunFetch.preconnect },
+    )
+    config = {
+      ...config,
+      fetch: customFetch,
+    }
+  }
+
+  if (config?.directory) {
+    config.headers = {
+      ...config.headers,
+      "x-jekko-directory": encodeURIComponent(config.directory),
+    }
+  }
+
+  if (config?.experimental_workspaceID) {
+    config.headers = {
+      ...config.headers,
+      "x-jekko-workspace": config.experimental_workspaceID,
+    }
+  }
+
+  const client = createClient(config)
+  client.interceptors.request.use((request) =>
+    rewrite(request, {
+      directory: config?.directory,
+      workspace: config?.experimental_workspaceID,
+    }),
+  )
+  client.interceptors.response.use((response) => {
+    const contentType = response.headers.get("content-type")
+    if (contentType === "text/html")
+      throw new Error("Request is not supported by this version of Jekko Server (Server responded with text/html)")
+
+    return response
+  })
+  // The generated client falls back to throwing a literal `{}` when the server
+  // responds with an empty / unparseable error body, which surfaces as a bare
+  // `{}` in TUI / CLI error output. Wrap ONLY that case in a real Error so
+  // downstream formatters get a useful message — but pass through any parsed
+  // JSON error body unchanged so existing consumers can still inspect fields.
+  client.interceptors.error.use((error, response, request) => {
+    const isEmpty =
+      error === undefined ||
+      error === null ||
+      error === "" ||
+      (typeof error === "object" && !(error instanceof Error) && Object.keys(error).length === 0)
+    if (!isEmpty) return error
+    const method = request?.method ?? "?"
+    const url = request?.url ?? "?"
+    if (!response) return new Error(`jekko server ${method} ${url}: network error (no response)`)
+    const status = response.status
+    const statusText = response.statusText ? " " + response.statusText : ""
+    return new Error(`jekko server ${method} ${url} → ${status}${statusText}: (empty response body)`)
+  })
+  return new OpencodeClient({ client })
+}

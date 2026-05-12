@@ -1,0 +1,1462 @@
+I would add one major concept to the ZYAL plan:
+
+# ZYAL Task Incubator: bounded cross-loop collaboration for hard tasks
+
+The current ZYAL daemon plan solves the most important problem: **the runtime owns forever**, and the model only completes one bounded iteration. The next layer should solve the problem you just identified: once all easy/high-confidence work is gone, the daemon needs a structured way to **incubate hard tasks across multiple fresh passes** without letting the agent thrash forever or dirty the repo with half-baked changes. I am treating the uploaded ZYAL Daemon Runtime V1 plan as the baseline for this update.
+
+The right abstraction is not “agent has low confidence, so think more.” The right abstraction is:
+
+> **Hard tasks enter an Incubator. The Incubator runs bounded, typed passes that produce durable artifacts. A separate host-enforced promotion gate decides when the task is mature enough to implement.**
+
+This borrows from patterns that are already emerging elsewhere, not from invented prompt magic. LangGraph emphasizes durable execution, state, memory, human-in-the-loop control, and long-running stateful agents; Deep Agents exposes planning, subagents, persistent filesystem-backed memory, and context compression; CrewAI Flows emphasize state, loops, branching, memory, and human feedback; Google ADK explicitly separates deterministic workflow agents such as Sequential, Loop, and Parallel agents from LLM reasoning agents; OpenHands persists conversations as event logs with tool outputs, workspace context, agent config, iteration state, and custom agent state. ([GitHub][1])
+
+The key design principle is also consistent with OpenAI’s Agents SDK guidance: the application should own orchestration, tool execution, approvals, state, and storage when workflows become serious. The model can be a worker, critic, planner, or reviewer, but it should not own the lifecycle of an infinite or high-risk process. ([OpenAI Developers][2])
+
+---
+
+## 1. The new concept: task maturity, not task confidence
+
+“Confidence” is useful but dangerous. Models can be overconfident, underconfident, or inconsistent. ZYAL should treat model confidence as **one signal**, not the decision-maker.
+
+Instead, each task should have a host-computed state:
+
+```yaml
+task_state:
+  difficulty: trivial | easy | medium | hard | extreme | unknown
+  risk: low | medium | high | critical
+  maturity: 0.0..1.0
+  implementation_confidence: 0.0..1.0
+  verification_confidence: 0.0..1.0
+  reversibility: safe | reversible | risky | destructive
+  route: implement_now | incubate | ask_human | park
+```
+
+The runtime computes this from evidence:
+
+```text
+risk score =
+  static repo risk
+  + touched critical paths
+  + diff size / file count
+  + missing tests
+  + repeated failed attempts
+  + migration/schema/generated-zone involvement
+  + model uncertainty
+  + unresolved review objections
+  + inability to define verification
+```
+
+Maturity should increase only when durable artifacts exist:
+
+```text
+maturity =
+  problem clearly stated
+  + constraints identified
+  + at least one viable plan
+  + independent plan agreement
+  + adversarial review survived
+  + verification strategy exists
+  + prototype or proof artifact exists
+  + implementation patch is small enough / isolated enough
+```
+
+This prevents the bad pattern where an agent says “I’m now confident” after merely rereading its own notes.
+
+---
+
+## 2. New lifecycle for hard tasks
+
+The daemon should have two queues:
+
+```text
+ready_queue      high-confidence tasks that can be implemented now
+incubator_queue  hard/risky/unclear tasks that need bounded thinking passes
+```
+
+The lifecycle:
+
+```text
+discovered
+  ↓
+assessed
+  ↓
+ready_to_implement ────────────────┐
+  ↓                                │
+implemented                        │
+  ↓                                │
+verified                           │
+  ↓                                │
+checkpointed                       │
+                                   │
+incubate_needed ◀──────────────────┘
+  ↓
+independent_plan
+  ↓
+improve_existing_plan
+  ↓
+adversarial_review
+  ↓
+prototype_in_sandbox
+  ↓
+convergence_summary
+  ↓
+promotion_gate
+  ↓
+ready_to_implement | needs_more_incubation | ask_human | parked
+```
+
+This maps well to Tree-of-Thoughts style deliberate search, where the system explores multiple candidate reasoning paths and uses evaluation/backtracking to choose the next move, and to Reflexion-style memory where failed attempts produce bounded reflections for future attempts. The important difference is that ZYAL should store **shareable summaries, evidence, plans, critiques, and artifacts**, not hidden private chain-of-thought. ([arXiv][3])
+
+---
+
+## 3. The addition to the ZYAL plan
+
+Add this section to the existing plan after “Runtime Controller” and before “Swarms, Ledger, MCP”:
+
+# New Section: Task Incubator and Cross-Loop Collaboration
+
+Objective: allow ZYAL daemons to route only genuinely hard or risky tasks into bounded multi-pass deliberation, preserve useful task memory across context clears and fresh sessions, and promote tasks back to implementation only when host-enforced maturity criteria are met.
+
+Non-goals:
+
+```text
+No hidden chain-of-thought storage.
+No unbounded scratchpad loops by default.
+No repo-root stubs for speculative prototypes.
+No model-owned promotion.
+No routing every task into incubation.
+No parallel write workers on the same worktree.
+```
+
+Core rule:
+
+> The Incubator can run several bounded thinking/prototyping/review passes. It cannot commit, push, or mark the daemon satisfied. It can only produce artifacts and request promotion.
+
+---
+
+## 4. Data model additions
+
+The existing ZYAL plan already has `daemon_task`, `daemon_event`, `daemon_worker`, and `daemon_artifact`. Extend those instead of inventing a second tracker.
+
+Add columns to `daemon_task`:
+
+```sql
+difficulty TEXT;
+risk TEXT;
+maturity REAL;
+implementation_confidence REAL;
+verification_confidence REAL;
+route TEXT; -- implement_now | incubate | ask_human | parked
+incubator_round INTEGER;
+incubator_status TEXT; -- none | active | promoted | parked | exhausted
+promotion_result_json TEXT;
+last_assessment_json TEXT;
+```
+
+Add a new table:
+
+```sql
+daemon_task_pass
+  id
+  run_id
+  task_id
+  pass_number
+  pass_type
+  agent
+  session_id
+  epoch
+  read_policy_json
+  write_scope_json
+  status
+  started_at
+  ended_at
+  result_json
+  score_json
+  artifact_ids_json
+  error_json
+```
+
+Add a new table:
+
+```sql
+daemon_task_memory
+  id
+  run_id
+  task_id
+  scope
+  kind
+  title
+  summary
+  payload_json
+  source_pass_id
+  importance
+  confidence
+  time_created
+  time_updated
+```
+
+Add artifact kinds:
+
+```text
+task_problem_statement
+task_independent_plan
+task_improved_plan
+task_critique
+task_failure_analysis
+task_prototype_patch
+task_verification_plan
+task_convergence_summary
+task_promotion_decision
+task_final_summary
+```
+
+The mirror files should remain generated from SQLite, not source of truth:
+
+```text
+.jekko/daemon/<runID>/tasks/<taskID>/
+  TASK.md
+  MEMORY.md
+  SCORE.json
+  passes/
+    001-independent-plan.md
+    002-independent-plan.md
+    003-improve-plan.md
+    004-adversarial-review.md
+    005-convergence.md
+  artifacts/
+    prototype.patch
+    verification-plan.md
+  archive/
+    old-scratch/
+```
+
+This is aligned with OpenHands-style persistence, where complete event logs and runtime state survive across long-running or restored sessions, and with Deep Agents-style filesystem offloading where large context and artifacts can be stored outside the active model context while remaining searchable/recoverable. ([OpenHands Docs][4])
+
+---
+
+## 5. Runtime changes
+
+Add an Incubator controller inside `packages/jekko/src/session/daemon.ts` or a sibling module:
+
+```text
+daemon-incubator.ts
+daemon-task-assess.ts
+daemon-task-memory.ts
+daemon-task-pass.ts
+daemon-task-promote.ts
+```
+
+The daemon loop changes from:
+
+```text
+discover task -> run iteration -> verify -> checkpoint -> stop check
+```
+
+to:
+
+```text
+discover tasks
+  -> assess each task
+  -> if ready: implement
+  -> if hard: incubate bounded pass
+  -> if promotion gate passes: implement
+  -> if exhausted: ask/park
+  -> verify/checkpoint only after real implementation
+```
+
+Pseudo-flow:
+
+```ts
+while active:
+  refreshDiscoveredTasks()
+
+  ready = selectReadyTask()
+  if ready:
+    runImplementationIteration(ready)
+    verifyAndCheckpointIfChanged()
+    evaluateStop()
+    continue
+
+  hard = selectIncubatorTask()
+  if hard:
+    runOneIncubatorPass(hard)
+    evaluatePromotionGate(hard)
+    compactOrRotateIfNeeded()
+    evaluateStop()
+    continue
+
+  if noProgress:
+    pause("no ready tasks and no incubatable tasks")
+```
+
+Critical behavior:
+
+```text
+assistant_stop during incubation = pass ended, not daemon ended
+assistant_stop during implementation = iteration ended, not daemon ended
+promotion_gate false = keep/park task, not failure
+incubator exhausted = pause/ask/park, not infinite thrash
+```
+
+---
+
+## 6. Incubator routing: do not route everything
+
+The runtime should route a task into incubation only if a policy says it is hard enough. This keeps easy tasks fast.
+
+A good default routing policy:
+
+```yaml
+incubator:
+  enabled: true
+
+  route_if:
+    any:
+      - model:
+          implementation_confidence_lt: 0.62
+      - model:
+          verification_confidence_lt: 0.70
+      - task:
+          repeated_failures_gte: 2
+      - diff:
+          touched_files_gte: 8
+      - diff:
+          changed_lines_gte: 500
+      - paths:
+          match_any:
+            - "packages/jekko/src/session/**"
+            - "packages/jekko/src/server/**"
+            - "packages/jekko/migration/**"
+            - "packages/jekko/src/cli/cmd/tui/**"
+      - risk:
+          level_gte: high
+      - verification:
+          no_deterministic_test: true
+      - generated_zone:
+          touched: true
+
+  exclude_if:
+    any:
+      - task:
+          difficulty_lte: easy
+      - diff:
+          changed_lines_lte: 30
+      - verification:
+          deterministic_fix_obvious: true
+```
+
+This prevents “ALL problems route to hard mode.” The Incubator activates only when there is evidence of complexity, uncertainty, repeated failure, risky paths, missing verification, or explicit low confidence.
+
+---
+
+## 7. ZYAL syntax update
+
+I would add one top-level block: `incubator`.
+
+Minimal form:
+
+```yaml
+incubator:
+  enabled: true
+  max_active_tasks: 2
+  max_rounds_per_task: 5
+  route_if:
+    any:
+      - model: { implementation_confidence_lt: 0.65 }
+      - risk: { level_gte: high }
+      - task: { repeated_failures_gte: 2 }
+  promote_if:
+    all:
+      - maturity_gte: 0.78
+      - verification_plan: present
+      - unresolved_objections_lte: 1
+  on_exhausted: ask_human
+```
+
+Full form:
+
+```yaml
+incubator:
+  enabled: true
+  purpose: |
+    Route only difficult/risky/low-confidence tasks into bounded cross-loop
+    collaboration. Produce plans, critiques, prototypes, and verification
+    evidence before implementation.
+
+  queue:
+    max_active_tasks: 2
+    selection: highest_risk_then_oldest
+    starvation_after: 8
+
+  route_if:
+    any:
+      - model:
+          implementation_confidence_lt: 0.62
+      - model:
+          verification_confidence_lt: 0.70
+      - task:
+          repeated_failures_gte: 2
+      - risk:
+          level_gte: high
+      - paths:
+          match_any:
+            - "packages/jekko/src/session/**"
+            - "packages/jekko/src/server/**"
+            - "packages/jekko/migration/**"
+      - verification:
+          no_deterministic_test: true
+
+  exclude_if:
+    any:
+      - task:
+          difficulty_lte: easy
+      - diff:
+          changed_lines_lte: 30
+      - risk:
+          level_lte: low
+
+  scratch:
+    store: sqlite_and_files
+    path: ".jekko/daemon/${run.id}/tasks/${task.id}"
+    authority: sqlite
+    expose_to_model: summarized
+    allow_hidden_chain_of_thought: false
+    allowed_kinds:
+      - problem_statement
+      - constraints
+      - plan
+      - critique
+      - failed_attempt_summary
+      - prototype_patch
+      - verification_plan
+      - convergence_summary
+
+  write_scope:
+    default: scratch_only
+    prototype: isolated_worktree
+    repo_root_edits: forbidden_until_promoted
+
+  passes:
+    - id: independent-plan-a
+      type: independent_plan
+      agent: plan
+      fresh_context: true
+      read:
+        task: true
+        prior_passes: none
+        repo_context: targeted
+      output:
+        artifact: task_independent_plan
+        schema: plan_v1
+
+    - id: independent-plan-b
+      type: independent_plan
+      agent: plan
+      fresh_context: true
+      read:
+        task: true
+        prior_passes: none
+        repo_context: targeted
+      output:
+        artifact: task_independent_plan
+        schema: plan_v1
+
+    - id: improve-best-plan
+      type: improve_plan
+      agent: plan
+      fresh_context: true
+      read:
+        task: true
+        prior_passes: best_summaries
+        critiques: true
+      output:
+        artifact: task_improved_plan
+        schema: plan_v1
+
+    - id: adversarial-review
+      type: adversarial_review
+      agent: explore
+      readonly: true
+      read:
+        task: true
+        best_plan: true
+      output:
+        artifact: task_critique
+        schema: critique_v1
+
+    - id: prototype
+      type: prototype
+      agent: build
+      isolation: git_worktree
+      commit: false
+      push: false
+      read:
+        task: true
+        best_plan: true
+        critique: true
+      output:
+        artifact: task_prototype_patch
+        schema: prototype_v1
+
+    - id: convergence
+      type: convergence
+      agent: plan
+      read:
+        task: true
+        all_pass_summaries: true
+        prototype_summary: true
+        critiques: true
+      output:
+        artifact: task_convergence_summary
+        schema: convergence_v1
+
+  promotion:
+    host_owned: true
+    promote_if:
+      all:
+        - maturity_gte: 0.78
+        - implementation_confidence_gte: 0.70
+        - verification_confidence_gte: 0.75
+        - unresolved_critical_objections: 0
+        - verification_plan: present
+        - implementation_scope: bounded
+    demote_if:
+      any:
+        - repeated_promotion_failures_gte: 2
+        - unresolved_critical_objections_gte: 1
+        - prototype_failed: true
+    on_promote: move_to_ready_queue
+    on_demote: ask_human
+    on_exhausted: park_with_summary
+
+  cleanup:
+    on_promoted:
+      summarize_to_task_memory: true
+      keep:
+        - TASK.md
+        - MEMORY.md
+        - passes/*convergence*.md
+        - artifacts/verification-plan.md
+      archive:
+        - passes/*
+        - artifacts/*
+      delete_unmerged_worktrees: true
+    on_completed:
+      summarize_to_ledger: true
+      archive_scratch: true
+      delete_ephemeral_prototypes: true
+    on_parked:
+      keep_all_artifacts: true
+      render_handoff: "PARKED.md"
+```
+
+This syntax gives you both modes you mentioned:
+
+```yaml
+fresh_context: true
+read.prior_passes: none
+```
+
+means “start fresh and make a new plan.”
+
+```yaml
+fresh_context: true
+read.prior_passes: best_summaries
+```
+
+means “start fresh, but read the existing plan and improve it.”
+
+That distinction is extremely valuable.
+
+---
+
+## 8. Updated Jankurai-style ZYAL example with hard-task incubation
+
+```yaml
+<<<ZYAL v1:daemon id=jankurai-clean-worktree>>>
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai dirty worktree hardening"
+  objective: |
+    Investigate all uncommitted work. Fix regressions. Run confidence checks.
+    Commit and push completed verified work. If audit still has findings or caps,
+    update JANKURAI_TASKLIST.md and move completed items to
+    JANKURAI_TASKLIST.md.completed.
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied, checkpoint_failed, no_progress]
+
+tasks:
+  ledger: sqlite
+  discover:
+    - git_dirty_files: {}
+    - shell:
+        command: "jankurai audit . --json"
+        items: "$.findings[*]"
+
+  assess:
+    required_before_work: true
+    output_schema: task_assessment_v1
+    fields:
+      - difficulty
+      - risk
+      - implementation_confidence
+      - verification_confidence
+      - touched_paths
+      - likely_failure_modes
+      - deterministic_verification_available
+      - recommended_route
+
+incubator:
+  enabled: true
+  max_active_tasks: 2
+  max_rounds_per_task: 5
+  route_if:
+    any:
+      - model: { implementation_confidence_lt: 0.62 }
+      - model: { verification_confidence_lt: 0.70 }
+      - task: { repeated_failures_gte: 2 }
+      - risk: { level_gte: high }
+      - paths:
+          match_any:
+            - "packages/jekko/src/session/**"
+            - "packages/jekko/src/server/**"
+            - "packages/jekko/migration/**"
+            - "packages/jekko/src/cli/cmd/tui/**"
+      - verification: { no_deterministic_test: true }
+
+  exclude_if:
+    any:
+      - task: { difficulty_lte: easy }
+      - risk: { level_lte: low }
+      - diff: { changed_lines_lte: 30 }
+
+  scratch:
+    store: sqlite_and_files
+    path: ".jekko/daemon/${run.id}/tasks/${task.id}"
+    authority: sqlite
+    expose_to_model: summarized
+    allow_hidden_chain_of_thought: false
+
+  write_scope:
+    default: scratch_only
+    prototype: isolated_worktree
+    repo_root_edits: forbidden_until_promoted
+
+  passes:
+    - id: fresh-plan-1
+      type: independent_plan
+      agent: plan
+      fresh_context: true
+      read: { task: true, prior_passes: none, repo_context: targeted }
+      output: { artifact: task_independent_plan, schema: plan_v1 }
+
+    - id: fresh-plan-2
+      type: independent_plan
+      agent: plan
+      fresh_context: true
+      read: { task: true, prior_passes: none, repo_context: targeted }
+      output: { artifact: task_independent_plan, schema: plan_v1 }
+
+    - id: improve-plan
+      type: improve_plan
+      agent: plan
+      fresh_context: true
+      read: { task: true, prior_passes: best_summaries }
+      output: { artifact: task_improved_plan, schema: plan_v1 }
+
+    - id: break-the-plan
+      type: adversarial_review
+      agent: explore
+      readonly: true
+      read: { task: true, best_plan: true }
+      output: { artifact: task_critique, schema: critique_v1 }
+
+    - id: prototype-safely
+      type: prototype
+      agent: build
+      isolation: git_worktree
+      commit: false
+      push: false
+      read: { task: true, best_plan: true, critiques: true }
+      output: { artifact: task_prototype_patch, schema: prototype_v1 }
+
+    - id: converge
+      type: convergence
+      agent: plan
+      read:
+        task: true
+        all_pass_summaries: true
+        prototype_summary: true
+        critiques: true
+      output: { artifact: task_convergence_summary, schema: convergence_v1 }
+
+  promotion:
+    host_owned: true
+    promote_if:
+      all:
+        - maturity_gte: 0.78
+        - implementation_confidence_gte: 0.70
+        - verification_confidence_gte: 0.75
+        - unresolved_critical_objections: 0
+        - verification_plan: present
+    on_promote: move_to_ready_queue
+    on_exhausted: park_with_summary
+
+context:
+  strategy: hybrid
+  compact_every: 1
+  hard_clear_every: 3
+  preserve:
+    - job.objective
+    - stop
+    - permissions
+    - task_ledger_summary
+    - incubator_summary
+    - last_checkpoint
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - shell: "bun --cwd packages/jekko test --timeout 30000 packages/jekko/test/session/daemon-runtime.test.ts"
+  git:
+    add: ["."]
+    commit_message: "jankurai: daemon verified work item"
+    push: ask
+
+stop:
+  all:
+    - shell:
+        command: "jankurai audit . --json target/jankurai/daemon-audit.json"
+        timeout: 30s
+        assert:
+          json:
+            "$.findings_count": 0
+            "$.caps_count": 0
+    - git_clean:
+        allow_untracked: false
+
+permissions:
+  shell: ask
+  edit: allow
+  git_commit: ask
+  git_push: ask
+  workers: ask
+  mcp: ask
+
+ui:
+  theme: jekko-gold
+  banner: forever
+  panels:
+    - daemon_status
+    - hard_task_incubator
+    - promotion_gates
+<<<END_ZYAL id=jankurai-clean-worktree>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-clean-worktree
+```
+
+---
+
+## 9. Pass types I would support
+
+### `independent_plan`
+
+Purpose: fresh read, no prior pass influence.
+
+```yaml
+type: independent_plan
+fresh_context: true
+read:
+  prior_passes: none
+```
+
+Why it works: it avoids anchoring. Two independent plans that converge are stronger evidence than one plan rewritten twice.
+
+### `improve_plan`
+
+Purpose: read the best prior artifact and improve it.
+
+```yaml
+type: improve_plan
+read:
+  prior_passes: best_summaries
+  critiques: optional
+```
+
+Why it works: it compounds useful knowledge without flooding the context.
+
+### `adversarial_review`
+
+Purpose: force an agent to break the plan before implementation.
+
+```yaml
+type: adversarial_review
+readonly: true
+output:
+  artifact: task_critique
+```
+
+Why it works: hard tasks often fail because the implementation starts before failure modes are explicit.
+
+### `verification_design`
+
+Purpose: create a deterministic verification strategy before coding.
+
+```yaml
+type: verification_design
+output:
+  artifact: task_verification_plan
+```
+
+Why it works: if the agent cannot define how to know it is correct, it should not implement.
+
+### `prototype`
+
+Purpose: try implementation ideas in an isolated worktree or scratch area.
+
+```yaml
+type: prototype
+isolation: git_worktree
+commit: false
+push: false
+```
+
+Why it works: this allows stubs, experiments, and throwaway files without polluting the main worktree.
+
+### `convergence`
+
+Purpose: synthesize plans, critiques, prototypes, and open questions into one promotion packet.
+
+```yaml
+type: convergence
+output:
+  artifact: task_convergence_summary
+```
+
+Why it works: the executor should receive a clean handoff, not five messy scratchpads.
+
+### `promotion_review`
+
+Purpose: host checks whether a task is ready for implementation.
+
+```yaml
+type: promotion_review
+host_owned: true
+```
+
+Why it works: the model can recommend promotion, but the runtime decides.
+
+---
+
+## 10. Output schemas for hard-task passes
+
+Do not let the agents write arbitrary essays. Use schemas.
+
+### `task_assessment_v1`
+
+```yaml
+task_assessment_v1:
+  difficulty: trivial | easy | medium | hard | extreme | unknown
+  risk: low | medium | high | critical
+  implementation_confidence: number
+  verification_confidence: number
+  deterministic_verification_available: boolean
+  likely_failure_modes:
+    - string
+  touched_paths:
+    - string
+  recommended_route: implement_now | incubate | ask_human | park
+  rationale_summary: string
+```
+
+### `plan_v1`
+
+```yaml
+plan_v1:
+  problem_statement: string
+  constraints:
+    - string
+  assumptions:
+    - string
+  proposed_steps:
+    - string
+  files_likely_touched:
+    - string
+  verification_plan:
+    - string
+  risks:
+    - risk: string
+      mitigation: string
+  confidence:
+    implementation: number
+    verification: number
+  open_questions:
+    - string
+```
+
+### `critique_v1`
+
+```yaml
+critique_v1:
+  fatal_objections:
+    - string
+  nonfatal_objections:
+    - string
+  missing_tests:
+    - string
+  hidden_regression_risks:
+    - string
+  safer_alternative: string
+  recommendation: accept | revise | reject | ask_human
+```
+
+### `prototype_v1`
+
+```yaml
+prototype_v1:
+  summary: string
+  patch_ref: string
+  touched_files:
+    - string
+  tests_run:
+    - command: string
+      result: pass | fail | skipped
+  learned:
+    - string
+  blockers:
+    - string
+  recommendation: promote | revise | reject
+```
+
+### `convergence_v1`
+
+```yaml
+convergence_v1:
+  best_plan_ref: string
+  accepted_critiques:
+    - string
+  rejected_critiques:
+    - critique: string
+      reason: string
+  final_implementation_strategy: string
+  final_verification_strategy:
+    - string
+  remaining_risks:
+    - string
+  promotion_recommendation: promote | more_incubation | ask_human | park
+```
+
+These artifacts become the cross-loop collaboration surface.
+
+---
+
+## 11. New daemon-only tools
+
+Add daemon tools that are available only inside daemon sessions. The model can request actions, but the runtime enforces policy.
+
+```text
+daemon_task_assess
+```
+
+Writes a structured risk/difficulty/confidence assessment.
+
+```text
+daemon_task_memory_write
+```
+
+Stores shareable task memory: findings, constraints, failed attempts, summaries, not private chain-of-thought.
+
+```text
+daemon_task_memory_read
+```
+
+Retrieves selected task memory according to the current pass read policy.
+
+```text
+daemon_pass_start
+```
+
+Runtime-owned; starts a bounded pass.
+
+```text
+daemon_pass_complete
+```
+
+Stores pass result and artifacts.
+
+```text
+daemon_artifact_write
+```
+
+Stores a typed artifact in DB and mirrors it to `.jekko/daemon`.
+
+```text
+daemon_prototype_patch_write
+```
+
+Stores an experimental patch from a scratch worktree without applying it to the root worktree.
+
+```text
+daemon_promotion_request
+```
+
+Allows model to request promotion. It does not promote.
+
+```text
+daemon_promotion_evaluate
+```
+
+Runtime-owned. Evaluates maturity, risk, verification plan, critique state, and policy.
+
+```text
+daemon_task_park
+```
+
+Parks exhausted tasks with a human-readable handoff.
+
+```text
+daemon_task_archive
+```
+
+Cleans completed or parked scratch state according to policy.
+
+This follows the same general split seen in agent frameworks: the agent can collaborate, call specialists, and produce artifacts, but the application/harness owns state, permissions, and lifecycle. OpenAI distinguishes handoffs from manager-as-tool workflows; ADK explicitly uses deterministic workflow agents for predictable execution; AutoGen emphasizes an event-driven runtime and serializable agent/runtime state. ([OpenAI Developers][5])
+
+---
+
+## 12. MCP handling for hard tasks
+
+Do not let hard-task passes expose every MCP. Use pass-scoped MCP profiles.
+
+```yaml
+mcp:
+  profiles:
+    docs_readonly:
+      servers: [context7, docs]
+      tools: allow_readonly
+      phases: [independent_plan, improve_plan, adversarial_review]
+
+    github_readonly:
+      servers: [github]
+      tools:
+        allow:
+          - "issues.search"
+          - "pulls.search"
+          - "code.search"
+      phases: [independent_plan, adversarial_review]
+
+    ci_observer:
+      servers: [github]
+      tools:
+        allow:
+          - "actions.get_run"
+          - "checks.list"
+      phases: [verification_design, convergence]
+```
+
+MCP is a context/tool protocol, not a daemon language. The MCP spec standardizes how hosts, clients, and servers expose context, tools, and capabilities over JSON-RPC; its sampling section also emphasizes client control and human review for nested LLM requests. ZYAL should use MCP for tools/resources, but ZYAL should remain the runtime-owned control plane. ([Model Context Protocol][6])
+
+---
+
+## 13. A2A-compatible mental model
+
+Even if Jekko does not implement A2A immediately, ZYAL should copy one A2A idea: **separate task communication from artifacts**.
+
+A2A treats a Task as the stateful unit of work and uses Artifacts as outputs; messages are not supposed to be the final deliverable. That maps perfectly to Incubator passes: each pass can send/receive messages internally, but the durable cross-loop object should be a typed artifact. ([Google Developers Blog][7])
+
+ZYAL mapping:
+
+```text
+ZYAL daemon_task       ≈ A2A Task
+ZYAL daemon_event      ≈ A2A status/message event
+ZYAL daemon_artifact   ≈ A2A Artifact
+ZYAL task_pass         ≈ bounded work attempt
+ZYAL task_memory       ≈ scoped durable task state
+```
+
+This gives future compatibility without prematurely turning Jekko into an A2A server.
+
+---
+
+## 14. Syntax highlighting and preview UX
+
+The ZYAL parser already requires strict sentinels, `confirm: RUN_FOREVER`, and `ZYAL_ARM`. Extend the TUI preview so Incubator semantics are obvious before arming.
+
+Highlighting rules:
+
+```text
+gold / bold
+  <<<ZYAL v1:daemon ...>>>
+  loop.policy: forever
+  confirm: RUN_FOREVER
+  ui.banner: forever
+
+purple / bold
+  incubator:
+  passes:
+  promotion:
+
+teal
+  fresh_context: true
+  isolation: git_worktree
+  mcp profiles
+
+green
+  stop:
+  verify:
+  promote_if:
+
+amber
+  permissions: ask
+  git_push: ask
+  route_if risk triggers
+
+red
+  shell commands with write/destructive potential
+  push
+  migration paths
+  generated zones
+  unknown top-level keys
+  missing arm
+  unbounded incubator loops
+
+dim gray
+  cleanup:
+  archive:
+  generated mirror paths
+```
+
+Preview should show:
+
+```text
+∞ FOREVER DAEMON
+
+Job:
+  Jankurai dirty worktree hardening
+
+Loop:
+  forever, sleep 5s, continue on assistant_stop
+
+Hard-task Incubator:
+  enabled
+  max active hard tasks: 2
+  max rounds per task: 5
+  routes only high-risk / low-confidence / repeated-failure tasks
+  repo-root edits forbidden until promotion
+
+Passes:
+  2x independent fresh plans
+  1x improve best plan
+  1x adversarial read-only review
+  1x prototype in isolated worktree
+  1x convergence summary
+
+Promotion gate:
+  maturity >= 0.78
+  implementation confidence >= 0.70
+  verification confidence >= 0.75
+  no critical objections
+  verification plan present
+
+Risks:
+  can run forever
+  can ask for shell/git permissions
+  can create isolated worktrees
+  can archive scratch artifacts
+```
+
+This makes the new feature understandable and keeps the “gold forever” warning intact.
+
+---
+
+## 15. Cleanup behavior when hard tasks complete
+
+Hard-task scratchpads need first-class cleanup rules. Otherwise the daemon eventually becomes a junk generator.
+
+Recommended default:
+
+```yaml
+cleanup:
+  on_promoted:
+    summarize_to_task_memory: true
+    archive_all_raw_passes: true
+    keep_convergence_summary_hot: true
+    delete_unmerged_worktrees: true
+
+  on_completed:
+    summarize_to_ledger: true
+    render_final_task_summary: true
+    archive_scratch: true
+    delete_ephemeral_prototypes: true
+    keep:
+      - TASK.md
+      - FINAL.md
+      - evidence.json
+      - verification-plan.md
+
+  on_parked:
+    render_handoff: PARKED.md
+    keep_all_artifacts: true
+    mark_reason: exhausted | blocked | human_needed | too_risky
+
+  on_daemon_satisfied:
+    render_run_summary: STATE.md
+    archive_completed_task_scratch: true
+    keep_ledger_jsonl: true
+```
+
+The root worktree should never receive speculative stubs from Incubator passes. Prototypes should live in:
+
+```text
+.jekko/daemon/<runID>/tasks/<taskID>/prototype-worktree/
+```
+
+or a real git worktree:
+
+```text
+../.jekko-worktrees/<runID>/<taskID>/
+```
+
+Only the promoted implementation pass can touch the main worktree.
+
+---
+
+## 16. Implementation plan update
+
+I would add this as a staged extension, not in the first ZYAL daemon PR.
+
+### Stage 1: parser support and inert preview
+
+Add schema only:
+
+```text
+packages/jekko/src/agent-script/schema.ts
+packages/jekko/src/agent-script/parser.ts
+packages/jekko/src/agent-script/examples.ts
+packages/jekko/specs/daemon-zyal.md
+```
+
+Support:
+
+```yaml
+incubator:
+  enabled
+  route_if
+  max_rounds_per_task
+  passes
+  promotion
+  cleanup
+```
+
+But do not execute complex swarms yet. TUI preview should display the Incubator section.
+
+### Stage 2: serial Incubator
+
+Add:
+
+```text
+packages/jekko/src/session/daemon-incubator.ts
+packages/jekko/src/session/daemon-task-assess.ts
+packages/jekko/src/session/daemon-task-memory.ts
+packages/jekko/src/session/daemon-task-pass.ts
+packages/jekko/src/session/daemon-task-promote.ts
+```
+
+Support one hard task at a time, one pass per daemon iteration.
+
+No parallel workers yet.
+
+### Stage 3: isolated prototype worktrees
+
+Add safe prototype support:
+
+```text
+incubator.write_scope.prototype: isolated_worktree
+```
+
+Still no main worktree edits before promotion.
+
+### Stage 4: multi-pass worker pools
+
+Allow:
+
+```yaml
+passes:
+  - type: independent_plan
+    count: 3
+    parallel: true
+```
+
+But only for read-only or isolated worktree passes.
+
+### Stage 5: MCP profiles and A2A-compatible artifacts
+
+Add pass-scoped MCP exposure and typed artifacts.
+
+---
+
+## 17. Tests to add
+
+Parser tests:
+
+```text
+accepts incubator block
+rejects unknown incubator keys
+rejects max_rounds_per_task: inf unless explicit allow_unbounded_incubator: true
+rejects repo_root_edits before promotion
+rejects prototype without isolation
+rejects pass with commit/push
+```
+
+Runtime tests:
+
+```text
+easy task routes to ready_queue
+low-confidence task routes to incubator_queue
+hard task runs independent_plan then stops pass on assistant_stop
+incubator max_rounds exhausts and parks task
+fresh pass cannot see previous pass artifacts when read.prior_passes: none
+improve pass sees only best summaries
+promotion fails without verification plan
+promotion succeeds when maturity/evidence thresholds pass
+promoted task moves to ready_queue
+prototype writes only to isolated worktree
+cleanup archives scratch and deletes unmerged worktree
+```
+
+Regression tests:
+
+```text
+normal non-daemon prompt cannot start incubator
+ZYAL pasted inside code fence stays inert
+assistant-generated ZYAL stays inert
+plain jekko run still exits on idle
+daemon forever loop still ignores assistant_stop until host stop passes
+```
+
+Context tests:
+
+```text
+hard clear preserves task memory summary
+fresh_context pass receives only allowed context
+summarization preserves objective, stop criteria, current hard task, promotion state
+recoverability test can retrieve an archived pass artifact
+```
+
+Deep Agents’ context-management docs specifically call out targeted evals for compression mechanisms, including preserving objective, recoverability, and goal-drift detection; ZYAL should copy that testing style for hard clears and Incubator memories. ([LangChain][8])
+
+---
+
+## 18. The “simple mode” syntax for normal users
+
+The full syntax is powerful, but people need a simple form.
+
+```yaml
+incubator:
+  hard_tasks: auto
+  max_rounds_per_task: 4
+  strategy: plan_review_prototype
+  promote_at: 0.80
+  on_exhausted: ask_human
+```
+
+This expands internally to:
+
+```yaml
+passes:
+  - independent_plan
+  - independent_plan
+  - improve_plan
+  - adversarial_review
+  - convergence
+```
+
+For a coding daemon, I would make this the recommended default:
+
+```yaml
+incubator:
+  hard_tasks: auto
+  max_rounds_per_task: 5
+  strategy: two_fresh_plans_then_review
+  prototype: isolated_worktree
+  promote_at: 0.78
+  on_exhausted: park_with_summary
+```
+
+---
+
+## 19. What not to do
+
+Do not add:
+
+```yaml
+think_until_confident: true
+```
+
+That is prompt magic.
+
+Do not add:
+
+```yaml
+confidence_threshold:
+  if_low: keep_trying_forever
+```
+
+That creates exactly the infinite failure loop you are trying to avoid.
+
+Do not let the model write arbitrary scratch files in the root repo.
+
+Do not store private chain-of-thought as shared memory.
+
+Do not let a worker promote its own task.
+
+Do not let hard-task incubation bypass verification/checkpoint policy.
+
+Do not expose every MCP to every pass.
+
+---
+
+# Final recommended update
+
+Add **ZYAL Incubator** to the plan as a first-class feature:
+
+```yaml
+incubator:
+  enabled: true
+  route_if: ...
+  scratch: ...
+  passes: ...
+  promotion: ...
+  cleanup: ...
+```
+
+The daemon will then behave like this:
+
+```text
+Easy/high-confidence task:
+  implement -> verify -> commit -> push/checkpoint -> continue
+
+Hard/low-confidence/risky task:
+  route to incubator
+  run bounded fresh planning/review/prototype passes
+  store durable task memory and artifacts
+  promote only when host gate passes
+  otherwise park/ask human after bounded rounds
+```
+
+This gives you the cross-loop collaboration you want without turning every problem into a research project, without trusting model confidence blindly, and without allowing forever loops to become forever thrash. It also keeps ZYAL aligned with where the rest of the ecosystem is clearly going: durable runtime state, deterministic workflow control, typed artifacts, scoped memory, subagent isolation, context compression, and explicit human/permission gates rather than prompt-only agent promises.
+
+[1]: https://github.com/langchain-ai/langgraph "GitHub - langchain-ai/langgraph: Build resilient language agents as graphs. Available in TypeScript! · GitHub"
+[2]: https://developers.openai.com/api/docs/guides/agents "Agents SDK | OpenAI API"
+[3]: https://arxiv.org/html/2305.10601v2 "Tree of Thoughts: Deliberate Problem Solving with Large Language Models"
+[4]: https://docs.openhands.dev/sdk/guides/convo-persistence "Persistence - OpenHands Docs"
+[5]: https://developers.openai.com/api/docs/guides/agents/orchestration "Orchestration and handoffs | OpenAI API"
+[6]: https://modelcontextprotocol.io/specification/2025-06-18 "Specification - Model Context Protocol"
+[7]: https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/?utm_source=chatgpt.com "Announcing the Agent2Agent Protocol (A2A)"
+[8]: https://www.langchain.com/blog/context-management-for-deepagents "Context Management for Deep Agents"

@@ -1,0 +1,480 @@
+I kept your component/API shape, but replaced the soft RGB interpolation with a much more aggressive neon pipeline: saturated corner palettes, 2D left-to-right/top-to-bottom fading, prism highlights, contrast boosting, channel snapping, and no active-state `DIM` dulling.
+
+```tsx
+import { RGBA, TextAttributes } from "@opentui/core"
+import { createMemo, For } from "solid-js"
+
+type Align = "left" | "center" | "right"
+
+type CornerPalette = {
+  topLeft: RGBA
+  topRight: RGBA
+  bottomLeft: RGBA
+  bottomRight: RGBA
+}
+
+type LogoRow = {
+  text: string
+  bold?: boolean
+  dim?: boolean
+  palette?: CornerPalette
+}
+
+type RGB = {
+  r: number
+  g: number
+  b: number
+}
+
+const INNER_WIDTH = 78
+
+const GECKO = {
+  acid: RGBA.fromInts(0, 255, 22),
+  leaf: RGBA.fromInts(84, 255, 0),
+  lime: RGBA.fromInts(176, 255, 0),
+  cyan: RGBA.fromInts(0, 255, 255),
+  aqua: RGBA.fromInts(0, 190, 255),
+  electricBlue: RGBA.fromInts(0, 84, 255),
+  violet: RGBA.fromInts(180, 0, 255),
+  hotPink: RGBA.fromInts(255, 0, 210),
+  solar: RGBA.fromInts(255, 255, 0),
+  gold: RGBA.fromInts(255, 190, 0),
+  orange: RGBA.fromInts(255, 72, 0),
+  ember: RGBA.fromInts(255, 12, 0),
+  whiteHot: RGBA.fromInts(255, 255, 246),
+}
+
+const JEKKO_PALETTE: CornerPalette = {
+  // Top row: violent left-to-right green → cyan contrast.
+  topLeft: GECKO.acid,
+  topRight: GECKO.cyan,
+
+  // Bottom row: violent left-to-right yellow → hot pink/red contrast.
+  bottomLeft: GECKO.solar,
+  bottomRight: GECKO.hotPink,
+}
+
+const GO_PALETTE: CornerPalette = {
+  topLeft: GECKO.cyan,
+  topRight: GECKO.electricBlue,
+  bottomLeft: GECKO.lime,
+  bottomRight: GECKO.violet,
+}
+
+const IDLE_PALETTE: CornerPalette = {
+  // Still bright, but a little warmer/less chaotic than active mode.
+  topLeft: RGBA.fromInts(58, 255, 18),
+  topRight: RGBA.fromInts(0, 235, 255),
+  bottomLeft: RGBA.fromInts(255, 224, 28),
+  bottomRight: RGBA.fromInts(255, 76, 34),
+}
+
+function clamp01(n: number): number {
+  return Math.max(0, Math.min(1, n))
+}
+
+function clamp255(n: number): number {
+  return Math.max(0, Math.min(255, Math.round(n)))
+}
+
+function rgbaToRGB(color: RGBA): RGB {
+  return {
+    r: color.r * 255,
+    g: color.g * 255,
+    b: color.b * 255,
+  }
+}
+
+function rgbToRGBA(color: RGB): RGBA {
+  return RGBA.fromInts(
+    clamp255(color.r),
+    clamp255(color.g),
+    clamp255(color.b),
+    255,
+  )
+}
+
+function mixRGB(left: RGBA, right: RGBA, t: number): RGBA {
+  const k = clamp01(t)
+  const l = rgbaToRGB(left)
+  const r = rgbaToRGB(right)
+
+  return rgbToRGBA({
+    r: l.r + (r.r - l.r) * k,
+    g: l.g + (r.g - l.g) * k,
+    b: l.b + (r.b - l.b) * k,
+  })
+}
+
+function hueToRGB(p: number, q: number, t: number): number {
+  let x = t
+
+  if (x < 0) x += 1
+  if (x > 1) x -= 1
+  if (x < 1 / 6) return p + (q - p) * 6 * x
+  if (x < 1 / 2) return q
+  if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6
+
+  return p
+}
+
+function hslToRGBA(h: number, s: number, l: number): RGBA {
+  const hue = ((h % 1) + 1) % 1
+  const sat = clamp01(s)
+  const light = clamp01(l)
+
+  if (sat === 0) {
+    const gray = light * 255
+    return rgbToRGBA({ r: gray, g: gray, b: gray })
+  }
+
+  const q = light < 0.5
+    ? light * (1 + sat)
+    : light + sat - light * sat
+
+  const p = 2 * light - q
+
+  return rgbToRGBA({
+    r: hueToRGB(p, q, hue + 1 / 3) * 255,
+    g: hueToRGB(p, q, hue) * 255,
+    b: hueToRGB(p, q, hue - 1 / 3) * 255,
+  })
+}
+
+function snapNeonChannel(value: number, strength: number): number {
+  const hotThreshold = 242 - 16 * strength
+  const darkThreshold = 18 * strength
+
+  if (value >= hotThreshold) return 255
+  if (value <= darkThreshold) return 0
+
+  return value
+}
+
+function amplifyNeon(color: RGBA, strength = 1): RGBA {
+  const k = clamp01(strength)
+  const rgb = rgbaToRGB(color)
+
+  const average = (rgb.r + rgb.g + rgb.b) / 3
+
+  // Push colors away from gray so every gradient stop feels radioactive.
+  const saturation = 1 + 1.2 * k
+
+  let r = average + (rgb.r - average) * saturation
+  let g = average + (rgb.g - average) * saturation
+  let b = average + (rgb.b - average) * saturation
+
+  // Increase contrast around the midpoint.
+  const contrast = 1 + 0.48 * k
+
+  r = 128 + (r - 128) * contrast
+  g = 128 + (g - 128) * contrast
+  b = 128 + (b - 128) * contrast
+
+  // Brighten without washing the logo out.
+  const brightness = 1 + 0.14 * k
+  const lift = 3 * k
+
+  r = r * brightness + lift
+  g = g * brightness + lift
+  b = b * brightness + lift
+
+  r = snapNeonChannel(r, k)
+  g = snapNeonChannel(g, k)
+  b = snapNeonChannel(b, k)
+
+  return rgbToRGBA({ r, g, b })
+}
+
+function gradient2D(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  palette: CornerPalette,
+): RGBA {
+  const tx = width <= 1 ? 0 : x / (width - 1)
+  const ty = height <= 1 ? 0 : y / (height - 1)
+
+  const top = mixRGB(palette.topLeft, palette.topRight, tx)
+  const bottom = mixRGB(palette.bottomLeft, palette.bottomRight, tx)
+
+  return mixRGB(top, bottom, ty)
+}
+
+function brilliantGeckoColor(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  palette: CornerPalette,
+  quieter = false,
+): RGBA {
+  const tx = width <= 1 ? 0 : x / (width - 1)
+  const ty = height <= 1 ? 0 : y / (height - 1)
+
+  const base = gradient2D(x, y, width, height, palette)
+
+  // Adds a sharp diagonal prism sweep so the logo does not look like a flat
+  // four-corner lerp. This preserves the left→right and top→bottom fade while
+  // making the interior much more alive.
+  const prismHue = 0.29 + tx * 0.52 + ty * 0.23
+  const prism = hslToRGBA(prismHue, 1, 0.56)
+
+  const diagonalEnergy =
+    0.5 + 0.5 * Math.sin((tx * 2.35 + ty * 1.85) * Math.PI)
+
+  const prismAmount = 0.08 + diagonalEnergy * 0.16
+  const highlighted = mixRGB(base, prism, prismAmount)
+
+  // Tiny white-hot lift for terminal glow. Kept small so saturation survives.
+  const whiteHotAmount = 0.012 + diagonalEnergy * 0.026
+  const glowing = mixRGB(highlighted, GECKO.whiteHot, whiteHotAmount)
+
+  return amplifyNeon(glowing, quieter ? 0.68 : 1)
+}
+
+function paletteWithInk(palette: CornerPalette, ink?: RGBA): CornerPalette {
+  if (!ink) return palette
+
+  const neonInk = amplifyNeon(ink, 1)
+
+  return {
+    topLeft: mixRGB(palette.topLeft, neonInk, 0.16),
+    topRight: mixRGB(palette.topRight, neonInk, 0.08),
+    bottomLeft: mixRGB(palette.bottomLeft, neonInk, 0.08),
+    bottomRight: mixRGB(palette.bottomRight, neonInk, 0.16),
+  }
+}
+
+function glyphLength(text: string): number {
+  return Array.from(text).length
+}
+
+function clipGlyphs(text: string, width: number): string {
+  const chars = Array.from(text)
+  return chars.length <= width ? text : chars.slice(0, width).join("")
+}
+
+function fit(text: string, width: number, align: Align = "center"): string {
+  const clipped = clipGlyphs(text, width)
+  const remaining = Math.max(0, width - glyphLength(clipped))
+
+  if (align === "left") {
+    return clipped + " ".repeat(remaining)
+  }
+
+  if (align === "right") {
+    return " ".repeat(remaining) + clipped
+  }
+
+  const left = Math.floor(remaining / 2)
+  const right = remaining - left
+
+  return " ".repeat(left) + clipped + " ".repeat(right)
+}
+
+function pair(left: string, right: string, width = INNER_WIDTH): string {
+  const safeLeft = clipGlyphs(left, width)
+  const safeRight = clipGlyphs(right, width)
+  const gap = width - glyphLength(safeLeft) - glyphLength(safeRight)
+
+  if (gap < 1) {
+    return fit(`${safeLeft} ${safeRight}`, width, "left")
+  }
+
+  return safeLeft + " ".repeat(gap) + safeRight
+}
+
+function framed(content = "", align: Align = "center"): string {
+  return `│${fit(content, INNER_WIDTH, align)}│`
+}
+
+function framedPair(left: string, right: string): string {
+  return `│${pair(left, right)}│`
+}
+
+function topBorder(): string {
+  return `╭${"─".repeat(INNER_WIDTH)}╮`
+}
+
+function divider(): string {
+  return `├${"─".repeat(INNER_WIDTH)}┤`
+}
+
+function bottomBorder(): string {
+  return `╰${"─".repeat(INNER_WIDTH)}╯`
+}
+
+function GradientRow(props: { row: LogoRow; y: number; totalRows: number }) {
+  const chars = Array.from(props.row.text)
+  const width = Math.max(1, chars.length)
+  const palette = props.row.palette ?? JEKKO_PALETTE
+
+  // Do not use TextAttributes.DIM for active content; terminal dimming destroys
+  // the neon effect. The `dim` flag now slightly softens the computed color only.
+  const attrs = props.row.bold ? TextAttributes.BOLD : undefined
+
+  return (
+    <box flexDirection="row">
+      <For each={chars}>
+        {(char, x) => (
+          <text
+            fg={brilliantGeckoColor(
+              x(),
+              props.y,
+              width,
+              props.totalRows,
+              palette,
+              Boolean(props.row.dim),
+            )}
+            attributes={attrs}
+            selectable={false}
+          >
+            {char}
+          </text>
+        )}
+      </For>
+    </box>
+  )
+}
+
+const JEKKO_WORDMARK = [
+  "     ██╗███████╗██╗  ██╗██╗  ██╗ ██████╗ ",
+  "     ██║██╔════╝██║ ██╔╝██║ ██╔╝██╔═══██╗",
+  "     ██║█████╗  █████╔╝ █████╔╝ ██║   ██║",
+  "██   ██║██╔══╝  ██╔═██╗ ██╔═██╗ ██║   ██║",
+  "╚█████╔╝███████╗██║  ██╗██║  ██╗╚██████╔╝",
+  " ╚════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ",
+]
+
+function buildLogoRows(props: {
+  shape?: unknown
+  ink?: RGBA
+  idle?: boolean
+  support?: string
+  status?: string
+}): LogoRow[] {
+  const support = props.support ?? "ZYAL"
+  const status =
+    props.status ??
+    (props.idle
+      ? "camouflage idle • watching the wall"
+      : "safe autonomous coding ready")
+
+  const palette = paletteWithInk(
+    props.idle ? IDLE_PALETTE : JEKKO_PALETTE,
+    props.ink,
+  )
+
+  return [
+    {
+      text: topBorder(),
+      bold: true,
+      palette,
+    },
+    {
+      text: framedPair(
+        " ›_ JEKKO",
+        props.idle
+          ? "gecko mode idle   ◈ ◈ ◈ "
+          : "gecko mode active ⚡ ◈ ◈ ◈ ",
+      ),
+      bold: true,
+      palette,
+    },
+    {
+      text: divider(),
+      bold: true,
+      palette,
+    },
+
+    {
+      text: framed(),
+      palette,
+    },
+
+    ...JEKKO_WORDMARK.map((line) => ({
+      text: framed(line),
+      bold: true,
+      palette,
+    })),
+
+    {
+      text: framed(),
+      palette,
+    },
+    {
+      text: framed(`AI coding gecko • ${support} support • climbs hard problems`),
+      bold: true,
+      palette,
+    },
+    {
+      text: framed(`gecko:// ${status}`),
+      bold: true,
+      dim: props.idle,
+      palette,
+    },
+
+    {
+      text: bottomBorder(),
+      bold: true,
+      palette,
+    },
+  ]
+}
+
+export function Logo(
+  props: {
+    shape?: unknown
+    ink?: RGBA
+    idle?: boolean
+    support?: string
+    status?: string
+  } = {},
+) {
+  const rows = createMemo(() => buildLogoRows(props))
+
+  return (
+    <box flexDirection="column">
+      <For each={rows()}>
+        {(row, y) => (
+          <GradientRow row={row} y={y()} totalRows={rows().length} />
+        )}
+      </For>
+    </box>
+  )
+}
+
+const GO_WORDMARK = [
+  " ██████   ██████ ",
+  "██       ██    ██",
+  "██  ████ ██    ██",
+  "██    ██ ██    ██",
+  " ██████   ██████ ",
+]
+
+export function GoLogo(props: { idle?: boolean } = {}) {
+  const rows = createMemo<LogoRow[]>(() => {
+    const width = Math.max(...GO_WORDMARK.map(glyphLength))
+    const palette = props.idle ? IDLE_PALETTE : GO_PALETTE
+
+    return GO_WORDMARK.map((line) => ({
+      text: fit(line, width),
+      bold: true,
+      dim: props.idle,
+      palette,
+    }))
+  })
+
+  return (
+    <box flexDirection="column">
+      <For each={rows()}>
+        {(row, y) => (
+          <GradientRow row={row} y={y()} totalRows={rows().length} />
+        )}
+      </For>
+    </box>
+  )
+}
+```

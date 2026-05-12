@@ -1,0 +1,417 @@
+# ZYAL v2.5 - Memory benchmark Executable Benchmark
+#
+# Deterministic Rust benchmark run for the memory benchmark candidate memory
+# engines. It reuses the same harness layout, writes baseline and execution
+# reports, and keeps the population ledger as persistent negative memory.
+
+<<<ZYAL v1:daemon id=memory-benchmark-executable>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Memory benchmark executable benchmark"
+  objective: |
+    Exercise the Rust memory benchmark against the T0 fixed suite and the T1
+    generated public-dev suite. Compare baseline and candidate systems, then
+    emit hard gates, confidence intervals, support minimality, privacy audit,
+    economics, comparison matrix, triangulation notes, and curriculum proposals.
+  risk:
+    - The benchmark must stay under the 300s wall-clock budget
+    - Candidate scoring must remain deterministic across rebuilds
+    - Population memory must append, never overwrite, settled findings
+
+loop:
+  policy: once
+  sleep: 0s
+
+context:
+  strategy: hard
+  compact_every: 1
+  hard_clear_every: 1
+  preserve:
+    - objective
+    - baseline_hash
+    - exec_hash
+    - population_cursor
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/reports/final-score.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/reports/final-score.md"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/reports/comparison-matrix.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/reports/curriculum-proposals.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/memory/population-ledger.jsonl"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+hooks:
+  on_start:
+    - run: "mkdir -p .jekko/daemon/memory-benchmark/reports .jekko/daemon/memory-benchmark/memory"
+      timeout: 30s
+      on_fail: warn
+    - run: "test -f crates/memory-benchmark/Cargo.toml"
+      timeout: 10s
+      on_fail: warn
+  before_iteration:
+    - run: "cargo fmt --manifest-path crates/memory-benchmark/Cargo.toml -- --check"
+      timeout: 120s
+      on_fail: pause
+    - run: "cargo test --manifest-path crates/memory-benchmark/Cargo.toml"
+      timeout: 240s
+      on_fail: pause
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin verify_determinism"
+      timeout: 180s
+      on_fail: pause
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin verify_determinism -- --suite generated --seed public-dev-0001 --fixtures 500"
+      timeout: 180s
+      on_fail: pause
+  after_iteration:
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin bench -- --candidate baseline --out .jekko/daemon/memory-benchmark/reports/baseline-score.json"
+      timeout: 180s
+      on_fail: pause
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin generate_suite -- --split public-dev --seed public-dev-0001 --fixtures 500 --out .jekko/daemon/memory-benchmark/reports/generated-public-dev.json"
+      timeout: 180s
+      on_fail: pause
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate baseline --suite generated --seed public-dev-0001 --fixtures 500 --out .jekko/daemon/memory-benchmark/reports/baseline-generated.json"
+      timeout: 180s
+      on_fail: pause
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin bench -- --candidate exec --out .jekko/daemon/memory-benchmark/reports/exec-score.json"
+      timeout: 180s
+      on_fail: pause
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin population_report -- --out .jekko/daemon/memory-benchmark/reports/final-score.md"
+      timeout: 180s
+      on_fail: pause
+  on_stop:
+    - run: "printf '%s\n' 'Memory benchmark executable benchmark stopped'"
+      on_fail: warn
+
+fan_out:
+  strategy: scatter_gather
+  split:
+    shell: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin dump_tasks -- exec --population 20 --out .jekko/daemon/memory-benchmark/reports/exec-tasks.jsonl"
+  worker:
+    agent: build
+    isolation: git_worktree
+    timeout: 45m
+    max_parallel: 20
+  reduce:
+    strategy: custom_shell
+    command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin population_report -- --population .jekko/daemon/memory-benchmark/memory/population-ledger.jsonl --baseline .jekko/daemon/memory-benchmark/reports/baseline-score.json --exec .jekko/daemon/memory-benchmark/reports/exec-score.json --out .jekko/daemon/memory-benchmark/reports/final-score.json --markdown .jekko/daemon/memory-benchmark/reports/final-score.md --comparison .jekko/daemon/memory-benchmark/reports/comparison-matrix.json --triangulation .jekko/daemon/memory-benchmark/reports/triangulation.json --curriculum .jekko/daemon/memory-benchmark/reports/curriculum-proposals.json"
+  on_partial_failure: continue
+
+fleet:
+  max_workers: 20
+  isolation: same_session
+
+experiments:
+  strategy: disjoint_tournament
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.40
+    axes:
+      - ledger-first
+      - hybrid-index
+      - temporal-graph
+      - compression-first
+      - skeptic-dataset
+  lanes:
+    - id: ledger-first
+      hypothesis: "A ledger-first design gives the strongest provenance and rebuild story."
+      prompt_strategy: ledger_first
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget:
+        max_iterations: 6
+        max_diff_lines: 1500
+        max_cost_usd: 4.00
+    - id: hybrid-index
+      hypothesis: "A hybrid index with sparse, dense, and graph signals recovers the best recall."
+      prompt_strategy: hybrid_index
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget:
+        max_iterations: 6
+        max_diff_lines: 1500
+        max_cost_usd: 4.00
+    - id: temporal-graph
+      hypothesis: "A temporal graph with bitemporal recall wins on contradiction and as-of queries."
+      prompt_strategy: temporal_graph
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget:
+        max_iterations: 6
+        max_diff_lines: 1500
+        max_cost_usd: 4.00
+    - id: compression-first
+      hypothesis: "Compression-first memory compaction yields the best long-horizon context packs."
+      prompt_strategy: compression_first
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget:
+        max_iterations: 6
+        max_diff_lines: 1500
+        max_cost_usd: 4.00
+    - id: skeptic-dataset
+      hypothesis: "A skeptic-driven dataset lane catches contradictions and question-frontier gaps sooner."
+      prompt_strategy: skeptic_dataset
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget:
+        max_iterations: 6
+        max_diff_lines: 1500
+        max_cost_usd: 4.00
+  fork_from: current_head
+  max_parallel: 20
+  scoring:
+    weights:
+      concept_learning: 12
+      transfer_reasoning: 12
+      formal_math: 10
+      scientific_reasoning: 10
+      bitemporal_correctness: 10
+      provenance_support: 10
+      dependency_maintenance: 8
+      contradiction_skepticism: 8
+      privacy_forgetting: 8
+      compression_fidelity: 5
+      procedural_tool_memory: 4
+      determinism_efficiency: 3
+    command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin bench -- --candidate baseline --out .jekko/daemon/memory-benchmark/reports/baseline-score.json"
+    primary: "executable_rust_oracles"
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+  on_partial_failure: continue
+  preserve_failed_lanes_as_negative_memory: true
+
+models:
+  profiles:
+    builder:
+      provider: openai
+      model: gpt-5.5
+      reasoning: true
+    critic:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      reasoning: true
+    reporter:
+      provider: openai
+      model: gpt-5.4-mini
+  routes:
+    build: builder
+    judge: critic
+    report: reporter
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+  confidence_cap: 0.68
+
+memory:
+  stores:
+    population_findings:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+    population_ledger:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+    curriculum_proposals:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: inject_at_start
+      searchable: true
+    negative_memory:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+  redaction:
+    patterns:
+      - "MEMORY_BENCH_CANARY_[A-Z0-9]+"
+      - "vault-canary-[A-Za-z0-9_-]+"
+      - "sk-[A-Za-z0-9]+"
+      - "AKIA[A-Z0-9]+"
+      - "ghp_[A-Za-z0-9]+"
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+evidence:
+  require_before_promote:
+    - type: baseline_score
+      must_exist: true
+    - type: exec_score
+      must_exist: true
+    - type: comparison_matrix
+      must_exist: true
+    - type: triangulation
+      must_exist: true
+    - type: curriculum_proposals
+      must_exist: true
+    - type: determinism_hash
+      must_pass: true
+  bundle_format: json
+  sign: sha256
+  archive: true
+
+sandbox:
+  paths:
+    - path: ".jekko/daemon/memory-benchmark"
+      access: write
+    - path: "docs/ZYAL/examples/memory-benchmark"
+      access: read
+    - path: "."
+      access: read
+  network:
+    outbound: deny
+  resources:
+    max_file_size: 8MiB
+    max_total_disk: 1GiB
+    max_memory: 4GiB
+    max_processes: 32
+
+security:
+  trust_zones:
+    bench:
+      paths:
+        - ".jekko/daemon/memory-benchmark"
+      require_approval: false
+      max_risk_score: 0.8
+    specs:
+      paths:
+        - "crates/memory-benchmark"
+      require_approval: false
+      max_risk_score: 0.5
+  injection:
+    scan_inputs: true
+    scan_outputs: true
+    deny_patterns:
+      - "ignore previous instructions"
+      - "disregard the system prompt"
+      - "you are now"
+    on_detect: pause
+  secrets:
+    redact_from_logs: true
+    rotate_after: 7d
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+    include_model_calls: false
+  metrics:
+    - name: baseline_score
+      type: gauge
+      source: .jekko/daemon/memory-benchmark/reports/baseline-score.json
+    - name: exec_score
+      type: gauge
+      source: .jekko/daemon/memory-benchmark/reports/exec-score.json
+    - name: determinism_hash
+      type: counter
+      source: .jekko/daemon/memory-benchmark/reports/determinism.json
+  cost:
+    budget: 20.00
+    currency: USD
+    alert_at_percent: 80
+    on_budget_exceeded: warn
+  report:
+    format: markdown
+    on_complete: true
+    on_checkpoint: true
+    include:
+      - baseline-score.json
+      - exec-score.json
+      - comparison-matrix.json
+      - triangulation.json
+      - curriculum-proposals.json
+      - final-score.json
+      - final-score.md
+
+budgets:
+  run:
+    wall_clock: 300s
+    tool_calls: 1200
+    cost_usd: 20.00
+    on_exhaust: park
+  task:
+    wall_clock: 30m
+    tool_calls: 120
+    cost_usd: 2.00
+    on_exhaust: park
+  iteration:
+    wall_clock: 10m
+    tool_calls: 80
+    cost_usd: 1.00
+    on_exhaust: pause
+  experiment_lane:
+    wall_clock: 45m
+    cost_usd: 4.00
+    on_exhaust: abort
+
+permissions:
+  read: allow
+  list: allow
+  glob: allow
+  grep: allow
+  external_directory: deny
+  shell: allow
+  edit: allow
+  git_commit: deny
+  git_push: deny
+  workers: allow
+  mcp: deny
+  research: deny
+  websearch: deny
+  webfetch: deny
+
+done:
+  require:
+    - baseline_score_written
+    - exec_score_written
+    - final_score_written
+    - comparison_matrix_written
+    - curriculum_proposals_written
+    - determinism_verified
+    - population_ledger_persisted
+  forbid:
+    - unredacted_canary
+    - non_deterministic_hash
+    - non_rust_harness_tools
+
+ui:
+  theme: jekko-gold
+  banner: memory-benchmark
+<<<END_ZYAL id=memory-benchmark-executable>>>
+ZYAL_ARM RUN_FOREVER id=memory-benchmark-executable

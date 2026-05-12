@@ -1,0 +1,597 @@
+# ZYAL v2.6 - AutoResearch Memory Benchmark Chase
+#
+# Advanced sandbox-first AutoResearch loop for the memory benchmark: 20 lanes,
+# isolated worktrees, executable Rust scoring, append-only memory, and
+# promotion only when a lane beats the current best by at least 0.75 points
+# without new hard gate failures.
+
+<<<ZYAL v1:daemon id=memory-benchmark-autoresearch-chase>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Memory benchmark AutoResearch chase"
+  objective: |
+    Run a 20-agent AutoResearch-style tournament against the memory benchmark
+    inside a sandbox. Score candidate lanes with executable Rust oracles,
+    preserve append-only progress memory, and promote only when the new best
+    lane beats the current best by at least 0.75 points without new hard-gate
+    failures.
+  risk:
+    - Candidate work must stay in isolated git worktrees
+    - Promotion must be blocked by any new privacy, citation, future-leak, or nondeterminism gate
+    - Persistent progress memory must remain append-only
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  accepted_origins:
+    - trusted_user_message
+    - signed_cli_input
+    - host_ui_button
+  preview_expires_after: 10m
+  arm_token_single_use: true
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on:
+    - compaction
+    - max_steps
+  pause_on:
+    - checkpoint_failed
+    - no_progress
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-chase/promotion-decision.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-chase/best-state.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-chase/scoreboard.tsv"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-chase/best.patch"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-chase/negative-memory.jsonl"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-chase/curriculum-proposals.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-workspace
+      tool: read
+      decision: allow
+    - id: shell-benchmark
+      tool: shell
+      command_regex: "^(rtk )?(cargo|just|bun) "
+      decision: allow
+    - id: worker-fanout
+      tool: workers
+      decision: allow
+    - id: mcp-readonly
+      tool: mcp
+      decision: allow
+      reason: "read-only MCP profiles only"
+  command_floor:
+    always_block:
+      - "git push"
+      - "git push --force"
+      - 'curl .* \| sh'
+      - 'wget .* \| sh'
+      - "ssh "
+      - "sudo "
+      - "cargo install"
+
+triggers:
+  anti_recursion: true
+  list:
+    - id: manual
+      kind: manual
+      max_runs_per_sha: 1
+
+rollback:
+  required_when:
+    risk_score_gte: 0.6
+  plan_required: true
+  verify_command: "rtk just memory-benchmark-fast"
+  on_failure_after_merge: revert_commit
+
+done:
+  require:
+    - promotion_decision_written
+    - best_state_written
+    - scoreboard_written
+    - best_patch_written
+    - curriculum_proposals_written
+    - determinism_verified
+    - population_ledger_persisted
+  forbid:
+    - hard_gate_regression
+    - model_only_claim
+
+repo_intelligence:
+  scale: large
+  indexes: [rg, ownership, test_graph]
+  scope_control:
+    require_scope_before_edit: true
+    max_initial_scope_files: 20
+  blast_radius:
+    compute_on: [diff]
+    pause_when_score_gte: 0.75
+
+fleet:
+  max_workers: 20
+  isolation: same_session
+
+fan_out:
+  strategy: scatter_gather
+  split:
+    shell: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin dump_tasks -- exec --population 20 --out .jekko/daemon/memory-benchmark-chase/reports/exec-tasks.jsonl"
+  worker:
+    agent: build
+    isolation: git_worktree
+    timeout: 45m
+    max_parallel: 20
+  reduce:
+    strategy: custom_shell
+    command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin population_report -- --lanes .jekko/daemon/memory-benchmark-chase/reports/lanes --population .jekko/daemon/memory-benchmark-chase/memory/population-ledger.jsonl --baseline .jekko/daemon/memory-benchmark-chase/reports/baseline-score.json --exec .jekko/daemon/memory-benchmark-chase/reports/exec-score.json --current-best-state .jekko/daemon/memory-benchmark-chase/best-state.json --best-state .jekko/daemon/memory-benchmark-chase/best-state.json --scoreboard .jekko/daemon/memory-benchmark-chase/scoreboard.tsv --promotion-decision .jekko/daemon/memory-benchmark-chase/promotion-decision.json --negative-memory .jekko/daemon/memory-benchmark-chase/negative-memory.jsonl --best-patch .jekko/daemon/memory-benchmark-chase/best.patch --out .jekko/daemon/memory-benchmark-chase/reports/final-score.json --markdown .jekko/daemon/memory-benchmark-chase/reports/final-score.md --comparison .jekko/daemon/memory-benchmark-chase/reports/comparison-matrix.json --triangulation .jekko/daemon/memory-benchmark-chase/reports/triangulation.json --curriculum .jekko/daemon/memory-benchmark-chase/curriculum-proposals.json --current-candidates .jekko/daemon/memory-benchmark-chase/preflight-candidates"
+  on_partial_failure: continue
+
+experiments:
+  strategy: disjoint_tournament
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.40
+    axes:
+      - provenance
+      - temporal
+      - privacy
+      - compression
+      - adversarial
+  lanes:
+    - id: arena_lane_00
+      hypothesis: "Provenance pack lane 00 keeps citations, anchors, and traceability at the top of the scoreboard."
+      prompt_strategy: reference_context_pack
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_01
+      hypothesis: "Provenance pack lane 01 emphasizes minimal supporting context with strong citation quality."
+      prompt_strategy: citation_floor
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_02
+      hypothesis: "Provenance pack lane 02 prefers evidence-led context packing over broader recall."
+      prompt_strategy: provenance_ledger
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_03
+      hypothesis: "Provenance pack lane 03 checks whether citation discipline survives under tighter budgets."
+      prompt_strategy: citation_audit
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_04
+      hypothesis: "Temporal lane 04 focuses on contradiction handling and as-of reasoning."
+      prompt_strategy: temporal_contradiction_scan
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_05
+      hypothesis: "Temporal lane 05 checks whether dependency invalidation stays correct across revisions."
+      prompt_strategy: dependency_invalidation
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_06
+      hypothesis: "Temporal lane 06 favors explicit time indexing for bitemporal queries."
+      prompt_strategy: as_of_reasoning
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_07
+      hypothesis: "Temporal lane 07 stresses contradiction recovery under stale context."
+      prompt_strategy: temporal_edge_cases
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_08
+      hypothesis: "Privacy lane 08 keeps redaction and forgetting rules visible during generation."
+      prompt_strategy: privacy_redaction
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_09
+      hypothesis: "Privacy lane 09 measures whether forgetting rules prevent stale memory bleed."
+      prompt_strategy: forgetting_filter
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_10
+      hypothesis: "Privacy lane 10 stresses output-channel leakage and secret handling."
+      prompt_strategy: output_channel_leakage
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_11
+      hypothesis: "Privacy lane 11 keeps the boundary around private data and redacted traces tight."
+      prompt_strategy: secret_boundary
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_12
+      hypothesis: "Compression lane 12 focuses on context packing economics."
+      prompt_strategy: compression_economics
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_13
+      hypothesis: "Compression lane 13 prefers denser summaries without losing stable facts."
+      prompt_strategy: context_packing
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_14
+      hypothesis: "Compression lane 14 protects determinism while shrinking repeated context."
+      prompt_strategy: determinism_guard
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_15
+      hypothesis: "Compression lane 15 keeps token budgeting explicit while compacting state."
+      prompt_strategy: token_budgeting
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_16
+      hypothesis: "Adversarial lane 16 probes oracle coverage with generated counterexamples."
+      prompt_strategy: adversarial_oracle
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_17
+      hypothesis: "Adversarial lane 17 expands coverage with generated challenge cases."
+      prompt_strategy: generated_coverage
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_18
+      hypothesis: "Adversarial lane 18 grows the curriculum from failed and surprising examples."
+      prompt_strategy: curriculum_growth
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_19
+      hypothesis: "Adversarial lane 19 turns prior failures into stronger oracle coverage."
+      prompt_strategy: failure_driven_refinement
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+  fork_from: current_head
+  max_parallel: 20
+  scoring:
+    weights:
+      concept_learning: 12
+      transfer_reasoning: 12
+      formal_math: 10
+      scientific_reasoning: 10
+      bitemporal_correctness: 10
+      provenance_support: 10
+      dependency_maintenance: 8
+      contradiction_skepticism: 8
+      privacy_forgetting: 8
+      compression_fidelity: 5
+      procedural_tool_memory: 4
+      determinism_efficiency: 3
+    command: "rtk just memory-benchmark-chase-preflight"
+    primary: executable_rust_oracles
+    judge:
+      agent: critic
+      blind: true
+      must_use_different_provider: true
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+  on_partial_failure: continue
+  preserve_failed_lanes_as_negative_memory: true
+
+models:
+  profiles:
+    builder:
+      provider: openai
+      model: gpt-5.5
+      reasoning: true
+    critic:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      reasoning: true
+    reporter:
+      provider: openai
+      model: gpt-5.4-mini
+  routes:
+    build: builder
+    judge: critic
+    report: reporter
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+  confidence_cap: 0.68
+
+memory:
+  stores:
+    population_findings:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+    population_ledger:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+    curriculum_proposals:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: inject_at_start
+      searchable: true
+    negative_memory:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+  redaction:
+    patterns:
+      - "MEMORY_BENCH_CANARY_[A-Z0-9]+"
+      - "vault-canary-[A-Za-z0-9_-]+"
+      - "sk-[A-Za-z0-9]+"
+      - "AKIA[A-Z0-9]+"
+      - "ghp_[A-Za-z0-9]+"
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+research:
+  version: v1
+  mode: mixed
+  autonomy: require_plan
+  max_parallel: 4
+  timeout_seconds: 45
+  provider_policy:
+    prefer:
+      - official_api
+      - primary_source
+      - privacy_first
+    allow:
+      - github
+      - arxiv
+      - crossref
+      - openalex
+    missing_provider: skip_with_receipt
+  extraction:
+    enabled: true
+    max_pages: 8
+    allowed_extractors:
+      - built_in
+      - jina
+  evidence:
+    require_citations: true
+    claim_level: true
+    store: sqlite
+  safety:
+    redact_secrets: true
+    block_internal_urls: true
+    prompt_injection: quarantine
+    taint_label: web_content
+  budgets:
+    max_queries: 12
+    max_pages: 12
+    max_cost_usd: 0.75
+
+sandbox:
+  paths:
+    - path: ".jekko/daemon/memory-benchmark-chase"
+      access: write
+    - path: "crates/memory-benchmark"
+      access: read
+    - path: "docs/ZYAL/examples/memory-benchmark"
+      access: read
+    - path: "script/memory-benchmark-seed-commit.ts"
+      access: read
+    - path: "."
+      access: read
+  network:
+    outbound: deny
+  resources:
+    max_file_size: 8MiB
+    max_total_disk: 1GiB
+    max_memory: 4GiB
+    max_processes: 32
+
+security:
+  trust_zones:
+    bench:
+      paths:
+        - ".jekko/daemon/memory-benchmark-chase"
+      require_approval: false
+      max_risk_score: 0.8
+    specs:
+      paths:
+        - "crates/memory-benchmark"
+      require_approval: false
+      max_risk_score: 0.5
+  injection:
+    scan_inputs: true
+    scan_outputs: true
+    deny_patterns:
+      - "ignore previous instructions"
+      - "disregard the system prompt"
+      - "you are now"
+    on_detect: pause
+  secrets:
+    redact_from_logs: true
+    rotate_after: 7d
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+    include_model_calls: false
+  metrics:
+    - name: baseline_score
+      type: gauge
+      source: .jekko/daemon/memory-benchmark-chase/reports/baseline-score.json
+    - name: exec_score
+      type: gauge
+      source: .jekko/daemon/memory-benchmark-chase/reports/exec-score.json
+    - name: promotion_decision
+      type: counter
+      source: .jekko/daemon/memory-benchmark-chase/reports/promotion-decision.json
+  cost:
+    budget: 25.00
+    currency: USD
+    alert_at_percent: 80
+    on_budget_exceeded: warn
+  report:
+    format: markdown
+    on_complete: true
+    on_checkpoint: true
+    include:
+      - baseline-score.json
+      - exec-score.json
+      - best-state.json
+      - promotion-decision.json
+      - scoreboard.tsv
+      - best.patch
+      - comparison-matrix.json
+      - triangulation.json
+      - curriculum-proposals.json
+      - final-score.json
+      - final-score.md
+
+budgets:
+  run:
+    wall_clock: 300s
+    tool_calls: 1200
+    cost_usd: 25.00
+    on_exhaust: park
+  task:
+    wall_clock: 30m
+    tool_calls: 120
+    cost_usd: 2.00
+    on_exhaust: park
+  iteration:
+    wall_clock: 10m
+    tool_calls: 80
+    cost_usd: 1.00
+    on_exhaust: pause
+  experiment_lane:
+    wall_clock: 45m
+    cost_usd: 4.00
+    on_exhaust: abort
+
+permissions:
+  read: allow
+  list: allow
+  glob: allow
+  grep: allow
+  external_directory: deny
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: deny
+  workers: allow
+  mcp: allow
+  research: allow
+  websearch: allow
+  webfetch: allow
+
+mcp:
+  profiles:
+    filesystem-scoped:
+      servers:
+        - filesystem
+      tools:
+        - read_file
+        - list_directory
+      resources:
+        - ".jekko/daemon/memory-benchmark-chase"
+        - "docs/ZYAL/examples/memory-benchmark"
+    github-readonly:
+      servers:
+        - github
+      tools:
+        - list_issues
+        - read_issue
+        - list_pull_requests
+      resources:
+        - "repo://main"
+
+ui:
+  theme: jekko-gold
+  banner: memory-benchmark
+
+<<<END_ZYAL id=memory-benchmark-autoresearch-chase>>>
+ZYAL_ARM RUN_FOREVER id=memory-benchmark-autoresearch-chase

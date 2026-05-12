@@ -1,0 +1,335 @@
+Building on your existing Solid/OpenTUI structure, this version replaces the per-letter flat coloring with a **true 2D gradient**: left→right and top→bottom, plus a subtle diagonal shine and gecko-themed palette.
+
+```tsx
+import { RGBA, TextAttributes } from "@opentui/core"
+import { createMemo, For } from "solid-js"
+
+type Align = "left" | "center" | "right"
+
+type CornerPalette = {
+  topLeft: RGBA
+  topRight: RGBA
+  bottomLeft: RGBA
+  bottomRight: RGBA
+}
+
+type LogoRow = {
+  text: string
+  bold?: boolean
+  dim?: boolean
+  palette?: CornerPalette
+}
+
+const INNER_WIDTH = 78
+const OUTER_WIDTH = INNER_WIDTH + 2
+
+const GECKO = {
+  leaf: RGBA.fromInts(112, 255, 86),
+  lime: RGBA.fromInts(188, 255, 72),
+  cyan: RGBA.fromInts(0, 235, 216),
+  aqua: RGBA.fromInts(62, 196, 255),
+  gold: RGBA.fromInts(255, 190, 48),
+  orange: RGBA.fromInts(255, 102, 36),
+  ember: RGBA.fromInts(232, 70, 28),
+  white: RGBA.fromInts(246, 250, 252),
+  muted: RGBA.fromInts(128, 146, 156),
+}
+
+const JEKKO_PALETTE: CornerPalette = {
+  topLeft: GECKO.lime,
+  topRight: GECKO.cyan,
+  bottomLeft: GECKO.gold,
+  bottomRight: GECKO.orange,
+}
+
+const GO_PALETTE: CornerPalette = {
+  topLeft: GECKO.cyan,
+  topRight: GECKO.aqua,
+  bottomLeft: GECKO.lime,
+  bottomRight: GECKO.cyan,
+}
+
+const IDLE_PALETTE: CornerPalette = {
+  topLeft: RGBA.fromInts(86, 128, 96),
+  topRight: RGBA.fromInts(68, 126, 132),
+  bottomLeft: RGBA.fromInts(126, 112, 72),
+  bottomRight: RGBA.fromInts(128, 78, 62),
+}
+
+function clamp01(n: number): number {
+  return Math.max(0, Math.min(1, n))
+}
+
+function mixRGB(left: RGBA, right: RGBA, t: number): RGBA {
+  const k = clamp01(t)
+
+  return RGBA.fromInts(
+    Math.round(left.r + (right.r - left.r) * k),
+    Math.round(left.g + (right.g - left.g) * k),
+    Math.round(left.b + (right.b - left.b) * k),
+    255,
+  )
+}
+
+function gradient2D(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  palette: CornerPalette,
+): RGBA {
+  const tx = width <= 1 ? 0 : x / (width - 1)
+  const ty = height <= 1 ? 0 : y / (height - 1)
+
+  const top = mixRGB(palette.topLeft, palette.topRight, tx)
+  const bottom = mixRGB(palette.bottomLeft, palette.bottomRight, tx)
+
+  return mixRGB(top, bottom, ty)
+}
+
+function brilliantGeckoColor(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  palette: CornerPalette,
+): RGBA {
+  const base = gradient2D(x, y, width, height, palette)
+
+  const tx = width <= 1 ? 0 : x / (width - 1)
+  const ty = height <= 1 ? 0 : y / (height - 1)
+
+  // A soft diagonal shine across the whole mark.
+  const shineBand = Math.abs(tx - ty)
+  const shine = clamp01(1 - shineBand / 0.085) * 0.28
+
+  // Tiny deterministic “scale sparkle” flecks.
+  const scaleFleck = (x * 17 + y * 31) % 71 === 0 ? 0.16 : 0
+
+  return mixRGB(base, GECKO.white, Math.min(0.38, shine + scaleFleck))
+}
+
+function glyphLength(text: string): number {
+  return Array.from(text).length
+}
+
+function clipGlyphs(text: string, width: number): string {
+  const chars = Array.from(text)
+  return chars.length <= width ? text : chars.slice(0, width).join("")
+}
+
+function fit(text: string, width: number, align: Align = "center"): string {
+  const clipped = clipGlyphs(text, width)
+  const remaining = Math.max(0, width - glyphLength(clipped))
+
+  if (align === "left") {
+    return clipped + " ".repeat(remaining)
+  }
+
+  if (align === "right") {
+    return " ".repeat(remaining) + clipped
+  }
+
+  const left = Math.floor(remaining / 2)
+  const right = remaining - left
+
+  return " ".repeat(left) + clipped + " ".repeat(right)
+}
+
+function pair(left: string, right: string, width = INNER_WIDTH): string {
+  const safeLeft = clipGlyphs(left, width)
+  const safeRight = clipGlyphs(right, width)
+  const gap = width - glyphLength(safeLeft) - glyphLength(safeRight)
+
+  if (gap < 1) {
+    return fit(`${safeLeft} ${safeRight}`, width, "left")
+  }
+
+  return safeLeft + " ".repeat(gap) + safeRight
+}
+
+function framed(content = "", align: Align = "center"): string {
+  return `│${fit(content, INNER_WIDTH, align)}│`
+}
+
+function framedPair(left: string, right: string): string {
+  return `│${pair(left, right)}│`
+}
+
+function topBorder(): string {
+  return `╭${"─".repeat(INNER_WIDTH)}╮`
+}
+
+function divider(): string {
+  return `├${"─".repeat(INNER_WIDTH)}┤`
+}
+
+function bottomBorder(): string {
+  return `╰${"─".repeat(INNER_WIDTH)}╯`
+}
+
+function GradientRow(props: { row: LogoRow; y: number; totalRows: number }) {
+  const chars = Array.from(props.row.text)
+  const width = Math.max(1, chars.length)
+  const palette = props.row.palette ?? JEKKO_PALETTE
+
+  const attrs = props.row.bold
+    ? TextAttributes.BOLD
+    : props.row.dim
+      ? TextAttributes.DIM
+      : undefined
+
+  return (
+    <box flexDirection="row">
+      <For each={chars}>
+        {(char, x) => (
+          <text
+            fg={brilliantGeckoColor(x(), props.y, width, props.totalRows, palette)}
+            attributes={attrs}
+            selectable={false}
+          >
+            {char}
+          </text>
+        )}
+      </For>
+    </box>
+  )
+}
+
+const GECKO_CREST = [
+  "           _..-''  .-...-.  ''-.._           ",
+  "      _..-'      .'  o o  '.      '-.._      ",
+  "   .-'       .--.|    Y    |.--.       '-.   ",
+  "  /     _   /  _ \\  '---'  / _  \\   _     \\  ",
+  "  \\____/ \\__\\_/ \\_\\___|___/_/ \\_/__/ \\____/  ",
+  "             /_/    / \\    \\_\\              ",
+  "                  __/   \\__                  ",
+]
+
+const JEKKO_WORDMARK = [
+  "     ██╗███████╗██╗  ██╗██╗  ██╗ ██████╗ ",
+  "     ██║██╔════╝██║ ██╔╝██║ ██╔╝██╔═══██╗",
+  "     ██║█████╗  █████╔╝ █████╔╝ ██║   ██║",
+  "██   ██║██╔══╝  ██╔═██╗ ██╔═██╗ ██║   ██║",
+  "╚█████╔╝███████╗██║  ██╗██║  ██╗╚██████╔╝",
+  " ╚════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ",
+]
+
+function buildLogoRows(props: {
+  shape?: unknown
+  ink?: RGBA
+  idle?: boolean
+  support?: string
+  status?: string
+}): LogoRow[] {
+  const support = props.support ?? "ZYAL"
+  const status =
+    props.status ??
+    (props.idle
+      ? "camouflage idle • watching the wall"
+      : "safe autonomous coding ready")
+
+  const palette = props.idle ? IDLE_PALETTE : JEKKO_PALETTE
+
+  return [
+    { text: topBorder(), palette },
+    {
+      text: framedPair(
+        " ›_ JEKKO",
+        props.idle ? "gecko mode idle  ● ● ● " : "gecko mode active  ● ● ● ",
+      ),
+      bold: true,
+      palette,
+    },
+    { text: divider(), palette },
+
+    { text: framed(), palette },
+    ...GECKO_CREST.map((line) => ({
+      text: framed(line),
+      bold: true,
+      palette,
+    })),
+
+    {
+      text: framed("sticky toes • sharp eyes • quick tail"),
+      dim: true,
+      palette,
+    },
+
+    { text: framed(), palette },
+    ...JEKKO_WORDMARK.map((line) => ({
+      text: framed(line),
+      bold: true,
+      palette,
+    })),
+
+    { text: framed(), palette },
+    {
+      text: framed(`AI coding gecko • ${support} support • climbs hard problems`),
+      bold: true,
+      palette,
+    },
+    {
+      text: framed(`gecko:// ${status}`),
+      dim: true,
+      palette,
+    },
+
+    { text: bottomBorder(), palette },
+  ]
+}
+
+export function Logo(
+  props: {
+    shape?: unknown
+    ink?: RGBA
+    idle?: boolean
+    support?: string
+    status?: string
+  } = {},
+) {
+  const rows = createMemo(() => buildLogoRows(props))
+
+  return (
+    <box flexDirection="column">
+      <For each={rows()}>
+        {(row, y) => (
+          <GradientRow row={row} y={y()} totalRows={rows().length} />
+        )}
+      </For>
+    </box>
+  )
+}
+
+const GO_WORDMARK = [
+  " ██████   ██████ ",
+  "██       ██    ██",
+  "██  ████ ██    ██",
+  "██    ██ ██    ██",
+  " ██████   ██████ ",
+]
+
+export function GoLogo(props: { idle?: boolean } = {}) {
+  const rows = createMemo<LogoRow[]>(() => {
+    const width = Math.max(...GO_WORDMARK.map(glyphLength))
+    const palette = props.idle ? IDLE_PALETTE : GO_PALETTE
+
+    return GO_WORDMARK.map((line) => ({
+      text: fit(line, width),
+      bold: !props.idle,
+      dim: props.idle,
+      palette,
+    }))
+  })
+
+  return (
+    <box flexDirection="column">
+      <For each={rows()}>
+        {(row, y) => (
+          <GradientRow row={row} y={y()} totalRows={rows().length} />
+        )}
+      </For>
+    </box>
+  )
+}
+```

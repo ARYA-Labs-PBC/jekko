@@ -1,0 +1,3 @@
+export const ZYAL_CONTRACT_VERSION = "2.6.0"
+export const ZYAL_RUNTIME_SENTINEL_VERSION = "v1"
+export const ZYAL_RESEARCH_BLOCK_VERSION = "v1"

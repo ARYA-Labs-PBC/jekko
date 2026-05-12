@@ -1,0 +1,1214 @@
+Here’s the plan I would actually implement.
+
+The big conclusion from the research is this: **do not make “forever” a prompt instruction.** Make it a **host-level Jekko run controller** with a deliberately armed runbook syntax. The model can be asked to work, reason, spawn helpers, and summarize, but the model should **not** be the authority on whether the loop continues. The Jekko runtime should own continuation, stop conditions, compaction, checkpointing, permission policy, worker orchestration, and crash recovery.
+
+I found no single accepted “standard agent scripting language” that solves this end-to-end today. What exists is fragmented: **AGENTS.md** is emerging as a repo-instruction convention, **MCP** is the protocol for tools/resources/prompts, **PDL/POML/BAML/PromptML/ACDL** are prompt/context DSLs, and frameworks like **LangGraph, AutoGen, CrewAI, and Google ADK** put loops/termination in deterministic orchestration code. Jekko’s community is actively asking for exactly this kind of continuous execution, and there are already loop plugins/wrappers trying to fill the gap. The best Jekko-native design is therefore: **a deterministic runbook DSL plus a durable daemon runner**, not XML tags that the model may or may not obey.
+
+---
+
+## 1. What I found in the Jekko ecosystem
+
+Jekko already has direct community demand for native continuous execution. Issue **#18636**, opened March 22, 2026, explicitly requests a config option for “continuous execution/task loop,” including “resume_after_compaction” and stop conditions; the described loop is basically: read instructions, choose a task, implement, validate, fix failures, update progress, and continue until completion. Another issue, **#18001**, requests a native `/loop` command similar to Claude Code-style iterative workflows. ([GitHub][1])
+
+There are also Jekko-specific community solutions already experimenting with this. `jekko-plugin-jekkor` advertises an autonomous Plan-Build-Commit loop that commits, pushes, and repeats forever. `jekko-ralph-loop` uses a completion promise like `<promise>DONE</promise>`. `open-ralph-wiggum` wraps CLI agents, including Jekko, in a persistent loop until the model emits a done promise. LoopCraft / `jekko-continuous-loop` describes a Plan → Execute → Inspect → Iterate loop with rollback, oscillation detection, budget fuse, and state persisted under `.jekko/loop-state.json`. ([GitHub][2])
+
+The Jekko core already has many of the primitives needed, but not the supervisory layer. The session prompt interface exposes prompt/loop/shell/command behavior, and `runLoop()` is the central agent loop. The key early-exit branch checks whether the last assistant message has a finish reason that is not tool calls, has no pending tool calls, and is newer than the last user message; in that case it logs “exiting loop” and breaks. That confirms the proposed diagnosis: the model saying “I’m done” is currently treated as a real runtime stop. ([GitHub][3])
+
+Jekko also already has compaction infrastructure. Its compaction template preserves goal, constraints, progress, decisions, next steps, critical context, and relevant files; compaction can be triggered on overflow, and auto-compaction may inject a synthetic “Continue if you have next steps…” user message. That is useful, but dangerous: Jekko issues already show users hitting unwanted compaction/continue behavior, including infinite or broken continuation cases. Daemon continuation should therefore be **owned by the daemon runner**, not by generic compaction auto-continue. ([GitHub][4])
+
+Jekko’s docs also support the building blocks: custom slash commands can be defined as Markdown files with frontmatter, shell interpolation, arguments, file references, and subtask mode; MCP servers expose local/remote tools and resources, but too many MCP tools can consume context; permissions can be configured as allow/ask/deny, including wildcard rules; plugins can hook into Jekko events and add custom behavior. ([Jekko][5])
+
+So the architecture is close, but the proposed daemon plan needs to be made much more deterministic, durable, and explicit.
+
+---
+
+## 2. Broader standards and patterns: what matters here
+
+The strongest “standard-ish” repo-level convention is **AGENTS.md**. It is a simple open format for repository instructions used by many coding agents; the site says it is used in tens of thousands of open-source projects, supports nested instruction files, and is stewarded by the Agentic AI Foundation under the Linux Foundation. AGENTS.md is great for static guidance, but it is not an executable workflow language. ([Agents][6])
+
+**MCP** is the strongest tool/context protocol. It standardizes how LLM apps connect to external tools, data, prompts, and resources; MCP resources expose context by URI, MCP prompts can represent reusable workflows, and sampling lets MCP servers request completions through the client while preserving client-side control. MCP is not itself a loop language, but it is the right substrate for external tools, broker state, task boards, and multi-agent coordination. ([Model Context Protocol][7])
+
+The closest emerging “agent context language” I found is **ACDL**, the Agentic Context Description Language, described in a February 2026 paper. It focuses on describing context structure/evolution, loops, marked regions, and rendering/parsing context, but it is explicitly more about context description than executing deterministic workflows. That is relevant for how Jekko should preserve context, but it does not replace a runtime controller. ([arXiv][8])
+
+Prompt DSLs like **PDL**, **POML**, **BAML**, and **PromptML** are useful for structured prompts, typed outputs, prompt composition, and maintainability. IBM’s PDL is YAML-based and composes LLM calls with tools and rules; Microsoft’s POML is a markup language for structured prompt engineering; BAML treats prompts as typed functions. These are valuable references, but they do not directly solve “keep coding forever with git checkpoints, context clearing, worker sessions, and stop validation.” ([IBM GitHub][9])
+
+The orchestration frameworks show the most important lesson: **loops belong in the runtime**. LangGraph emphasizes long-running stateful agents, durable checkpoints, resume, and time travel; AutoGen termination conditions are explicit callables evaluated after agent responses; CrewAI Flows provide event-driven state, loops, and branching; Google ADK has Sequential, Parallel, and Loop workflow agents, where a LoopAgent runs subagents until an iteration limit or termination condition. ([GitHub][10])
+
+Claude Code and Codex discussions reinforce the same pattern. Claude Code has hooks, slash commands, `/compact`, subagents, and lifecycle automation; Codex users have requested more deterministic control over auto-compaction, including off/on/manual/smart-auto modes and host-generated checkpoints instead of lossy summarization. ([Claude][11])
+
+The design implication is clear: **Jekko should not rely on the model to obey `<FOREVER>`**. It should parse an explicit runbook, store durable run state, and repeatedly call the existing agent loop until validated stop conditions pass.
+
+---
+
+## 3. Critical review of the proposed daemon plan
+
+The proposed plan is directionally good, but too thin in the places that matter.
+
+### What it gets right
+
+It correctly identifies the main stop cause: the model emits a non-tool-call finish, and `runLoop()` exits. It correctly notices existing compaction and status/TUI mechanisms. It correctly proposes CLI support, visual daemon status, and some kind of prompt syntax. It also correctly sees that Jekko’s headless `run` command must not simply exit when a daemon session becomes idle.
+
+### What must change
+
+The biggest mistake is trying to make `prompt.ts` itself the daemon brain. `runLoop()` should stay the normal one-turn/multi-tool Jekko loop. A daemon should be an **outer supervisory controller** that calls the existing prompt loop repeatedly, classifies why it stopped, runs validators/checkpoints/compaction, then either exits or re-enters with a continuation capsule.
+
+A daemon must not simply swallow permission denials or transient errors. Permission denial, tool failure, LLM error, validation failure, stop condition success, user cancellation, max-budget, max-iteration, and compaction failure are different events. The controller needs typed stop reasons and explicit retry/escalation policy. In headless daemon mode, `ask` permissions can deadlock, so permissions must be preflighted and either changed to `allow`, `deny`, or `fail-fast`.
+
+Shell-only exit conditions are not enough. A serious system needs typed conditions: shell exit code, regex over stdout/stderr, JSONPath over command output, git clean, file existence, task queue empty, MCP tool result, test pass, audit count, cost/time/iteration budget, worker completion, and human approval.
+
+A checkpoint command like `git add -A && git commit && git push` is dangerous as a generic daemon primitive. Checkpointing needs policy: what paths may be staged, whether generated state is ignored, whether empty commits are allowed, whether tests must pass first, whether push is allowed, which branch/worktree is used, whether rollback snapshots are created, and how commit messages are generated.
+
+Compaction must be daemon-aware. Jekko’s generic compaction auto-continue is useful for normal work, but daemon mode needs a deterministic context capsule containing the runbook, current iteration, task queue state, last commits, validator results, blockers, and next planned unit. The synthetic continuation should come from the runbook runner, not generic compaction.
+
+The syntax must be deliberately gated. YAML frontmatter at the top of an ordinary prompt is too easy to accidentally paste. XML-like tags are worse. A production-grade “forever” syntax should be inert unless launched via `/runbook start`, `/forever start`, `jekko run --runbook`, or an explicit `--allow-forever` flag.
+
+Multi-agent/MCP needs a real broker, not just “tell the model to spawn multiple MCPs.” MCP servers expose tools/resources/prompts; they are not inherently worker agents. For parallel coding, Jekko should use isolated subagents or separate Jekko sessions, preferably in separate git worktrees, coordinated by a runbook broker with leases, heartbeats, task states, and merge validation.
+
+---
+
+## 4. The best architecture: Jekko Runbook Controller
+
+I would name this feature something like **Jekko Runbook**, **Jekko Agent Control Language**, or **OACL**. “Daemon mode” is one runtime mode of the runbook engine.
+
+The core rule:
+
+> The model may propose work. The host decides whether the loop continues.
+
+### Runtime state machine
+
+```text
+CREATED
+  ↓
+ARMED
+  ↓
+ITERATION_START
+  ↓
+CONTEXT_PREP
+  ↓
+PROMPT_LOOP_RUNNING
+  ↓
+LOOP_STOPPED
+  ↓
+CLASSIFY_STOP
+  ↓
+VALIDATE_WORK
+  ↓
+CHECKPOINT
+  ↓
+EVALUATE_STOP
+  ├── success → COMPLETED
+  ├── blocked → BLOCKED / PAUSED
+  ├── failed policy → FAILED
+  └── not done → COMPACT_OR_REFRESH_CONTEXT → ITERATION_START
+```
+
+### Context flow
+
+```text
+Runbook manifest
+  ↓ host parses/validates/arms
+Durable run state + task queue + permissions + MCP profile
+  ↓
+Context capsule injected into Jekko prompt loop
+  ↓
+Jekko normal agent loop: model → tools → diagnostics → model
+  ↓
+Assistant stops / errors / tool calls finish / compaction boundary
+  ↓
+Runbook controller classifies result
+  ↓
+Validators + git checkpoint + task broker updates
+  ↓
+Stop condition true? exit. Else compact/clear/reinject capsule.
+```
+
+### Why this is better than raw infinite prompt syntax
+
+The agent can stop, hallucinate that it is done, lose context, summarize badly, or refuse to continue. None of that matters if the host controller says:
+
+```text
+audit != clean → create next iteration
+task queue not empty → create next iteration
+worker leases outstanding → create next iteration
+git dirty but uncommitted → create next iteration
+```
+
+The “forever” promise comes from Jekko’s runtime, not the LLM’s willingness.
+
+---
+
+## 5. Concrete Jekko implementation plan
+
+### New modules
+
+#### `packages/jekko/src/session/runbook/schema.ts`
+
+Defines the validated runbook schema using Jekko’s existing schema style.
+
+Responsibilities:
+
+```text
+Runbook metadata
+Mode: once | until | loop | forever
+Task body
+Stop conditions
+Validators
+Checkpoint policy
+Context/compaction policy
+Worker policy
+MCP/tool policy
+Permissions policy
+Budgets and safety fuses
+Event hooks
+UI metadata
+```
+
+Unknown keys should fail closed. Dangerous features should require explicit flags.
+
+#### `packages/jekko/src/session/runbook/parser.ts`
+
+Parses runbooks from:
+
+```text
+/runbook start <block>
+/forever start <block>
+jekko run --runbook path
+.jekko/runbooks/*.yaml
+```
+
+It should **not** auto-activate a pasted block in ordinary chat. The parser can recognize blocks for display, but execution requires a command/flag.
+
+#### `packages/jekko/src/session/runbook/state.ts`
+
+Stores durable state:
+
+```text
+.jekko/runs/<run-id>/state.json
+.jekko/runs/<run-id>/events.jsonl
+.jekko/runs/<run-id>/tasks.jsonl
+.jekko/runs/<run-id>/workers.json
+.jekko/runs/<run-id>/context-capsule.md
+```
+
+Optionally mirror this in Jekko’s internal storage/database, but keep a project-visible state directory for crash recovery and human inspection.
+
+State should include:
+
+```text
+runID
+sessionID
+status
+iteration
+phase
+current task
+stop condition history
+validator history
+last compaction
+last commits
+active workers
+leases
+cost/tokens/time
+user cancellation flag
+```
+
+#### `packages/jekko/src/session/runbook/runner.ts`
+
+The outer daemon brain.
+
+Pseudocode-level behavior:
+
+```text
+preflight runbook
+arm run
+emit runbook.started
+while active:
+  set status runbook/daemon
+  prepare context capsule
+  call existing Jekko prompt loop
+  classify loop stop reason
+  run validators
+  run checkpoint policy
+  evaluate stop conditions
+  if stop true: complete
+  if blocked/failure policy says pause: pause
+  if compact policy says compact: compact
+  update durable state
+  continue
+```
+
+This is where “forever” is actually enforced.
+
+#### `packages/jekko/src/session/runbook/evaluator.ts`
+
+Typed condition evaluator.
+
+Supports:
+
+```text
+shell exit code
+stdout/stderr regex
+JSONPath over command output
+file predicates
+git predicates
+task queue predicates
+MCP tool predicates
+budget predicates
+worker predicates
+manual approval predicates
+```
+
+Every command needs timeout, cwd, env allowlist, output capture limit, and secret redaction.
+
+#### `packages/jekko/src/session/runbook/checkpoint.ts`
+
+Git and artifact checkpointing.
+
+Policies:
+
+```text
+none
+snapshot only
+git commit only
+git commit + push
+branch-per-run
+branch-per-worker
+PR branch
+stash on failure
+rollback on validator failure
+```
+
+It must prevent accidental staging of `.jekko/runs/**` unless explicitly requested.
+
+#### `packages/jekko/src/session/runbook/context.ts`
+
+Builds the deterministic context capsule.
+
+The capsule should contain:
+
+```text
+Runbook name and mode
+Original task
+Hard constraints
+Current iteration
+Current task lease
+Completed tasks
+Open blockers
+Latest validator results
+Latest git status summary
+Relevant files
+Pinned memory
+Worker summaries
+Exact next instruction
+```
+
+This becomes the continuation prompt. It is much safer than “Continue if you have next steps.”
+
+#### `packages/jekko/src/session/runbook/broker.ts`
+
+Multi-agent coordinator.
+
+Responsibilities:
+
+```text
+Task queue
+Worker leases
+Heartbeats
+Worker session IDs
+Worker worktree paths
+Worker outputs
+Patch submission
+Integrator/reviewer routing
+Conflict detection
+```
+
+This replaces “everyone update THIS_TRACKER.md” as the source of truth.
+
+A Markdown tracker can still be rendered from broker state, but it should not be the primary coordination mechanism.
+
+---
+
+## 6. Existing files to modify
+
+### `packages/jekko/src/session/prompt.ts`
+
+Make minimal changes.
+
+Do **not** embed daemon policy directly into `runLoop()`. Instead:
+
+1. Add a richer loop result type:
+
+```text
+assistant_stop
+tool_loop_done
+processor_stop
+permission_blocked
+llm_error
+max_steps
+structured_output
+compaction_stop
+cancelled
+```
+
+2. Emit a `session.loop.ended` event with the stop reason.
+
+3. Accept metadata on synthetic user messages:
+
+```text
+runbookID
+iteration
+continuationReason
+contextCapsuleID
+```
+
+4. Allow the runbook runner to call the existing prompt loop again with a controlled continuation message.
+
+This avoids contaminating normal Jekko behavior.
+
+### `packages/jekko/src/session/status.ts`
+
+Add a status variant:
+
+```text
+type: "runbook"
+runID
+mode
+iteration
+phase
+forever: boolean
+workersActive
+workersTotal
+stopSummary
+budgetSummary
+armed: true
+```
+
+This is more useful than just `type: "daemon"`.
+
+### `packages/jekko/src/cli/cmd/run.ts`
+
+Add headless support:
+
+```text
+--runbook <path>
+--daemon
+--exit-when <condition>
+--checkpoint <policy>
+--compact-policy <policy>
+--max-iterations <n>
+--max-runtime <duration>
+--max-cost <amount>
+--allow-forever
+--allow-push
+--resume-run <run-id>
+```
+
+Important: `--daemon` without `--allow-forever` should require at least one non-cost stop condition. Truly unbounded execution should be possible, but explicitly armed.
+
+### Command system
+
+Add built-in commands:
+
+```text
+/runbook start
+/runbook status
+/runbook pause
+/runbook resume
+/runbook stop
+/runbook workers
+/runbook compact
+/forever start
+/forever stop
+```
+
+Jekko already supports custom commands and subtask mode, so the new built-ins should integrate with the command framework rather than bypass it. ([Jekko][5])
+
+### `packages/jekko/src/session/compaction.ts`
+
+Add runbook-aware compaction.
+
+Changes:
+
+```text
+Include runbook state capsule in compaction summary.
+Preserve pinned constraints.
+Preserve stop conditions.
+Preserve current task lease.
+Disable generic auto-continue while runbook controller is active.
+Emit compaction result back to runbook runner.
+```
+
+### TUI session header
+
+When status is `runbook` and `forever: true`, render an always-visible gold banner.
+
+Example:
+
+```text
+╔════════════════════════════════════════════════════════════════════╗
+║  FOREVER ARMED  ♾  rb_01HY... · iter 177 · validate · workers 3/5 ║
+║  exit: jankurai audit == 0 findings, 0 caps · checkpoint: push     ║
+╚════════════════════════════════════════════════════════════════════╝
+```
+
+Use gold for border/accent, but preserve the user’s active theme for the rest of the UI. The user specifically wants obvious gold with smaller “forever” text at the top. That should be a status overlay, not a full theme replacement.
+
+### Plugin events
+
+Expose runbook lifecycle hooks:
+
+```text
+runbook.started
+runbook.paused
+runbook.resumed
+runbook.stopped
+runbook.completed
+runbook.iteration.started
+runbook.iteration.ended
+runbook.validator.failed
+runbook.checkpoint.before
+runbook.checkpoint.after
+runbook.worker.spawned
+runbook.worker.completed
+runbook.compaction.before
+runbook.compaction.after
+```
+
+This lets the community build dashboards, notifications, approval gates, and specialized plugins.
+
+---
+
+## 7. How I would do this in Jekko today, before core support
+
+A robust core implementation is best, but today’s practical path is:
+
+1. Use a disposable branch or git worktree.
+2. Use an Jekko loop plugin/wrapper such as the existing Ralph-style or Opencoder-style plugins.
+3. Use strict permissions rather than headless `ask`.
+4. Use a visible task board plus `jankurai audit` as the real stop condition.
+5. Commit after validated units, not after every arbitrary model stop.
+6. Keep `.jekko/run-state` or equivalent out of commits.
+7. Run tests/audit externally after each loop iteration.
+
+That is still not bulletproof, because wrappers depend on promise strings or repeated prompting. Native Jekko should implement the controller described above.
+
+---
+
+# 8. The syntax: Jekko Runbook / OACL
+
+## 8.1 Activation must be deliberate
+
+A block should **never** activate just because it appears in a normal prompt.
+
+Valid activation paths:
+
+```text
+/forever start <runbook>
+/runbook start <runbook>
+jekko run --runbook .jekko/runbooks/jankurai.yaml --allow-forever
+jekko run --daemon --exit-when ... --allow-forever "task..."
+```
+
+A pasted block in normal chat is inert unless the user launches it through `/runbook start` or CLI flags.
+
+For embedded blocks, require exact sentinels:
+
+```yaml
+%%%JEKKO-RUNBOOK v1
+arm:
+  require_command: true
+  require_phrase: "RUN FOREVER"
+  phrase: "RUN FOREVER"
+name: jankurai-cleanup
+mode: forever
+task: |
+  ...
+%%%/JEKKO-RUNBOOK
+```
+
+The exact sentinel matters. Plain tags like `<FOREVER>` should not be executable. They can be discussed, copied, or analyzed, but the runtime ignores them.
+
+## 8.2 Minimal example for your Jankurai case
+
+```yaml
+%%%JEKKO-RUNBOOK v1
+name: jankurai-dirty-worktree-cleanup
+mode: forever
+
+arm:
+  require_command: true
+  require_phrase: "RUN FOREVER"
+  phrase: "RUN FOREVER"
+
+task: |
+  We have a dirty worktree from work implementing @agent/JANKURAI_STANDARD.md.
+  We have been running @JANKURAI_TASKLIST.md.
+
+  Investigate uncommitted code. Run git diff. Look for mistakes,
+  regressions, missing tests, broken assumptions, and incomplete tasklist items.
+
+  Pick one dirty worktree item or tasklist item at a time.
+  Fix it. Verify it. Commit it. Push it.
+  Continue until the stop conditions pass.
+
+scope:
+  include:
+    - "."
+  exclude:
+    - ".git/**"
+    - ".jekko/runs/**"
+    - "node_modules/**"
+
+loop:
+  strategy: one_task_per_iteration
+  selection: random_pending_or_dirty_item
+  continue_on_model_stop: true
+  clear_context_between_iterations: compact
+
+stop:
+  all:
+    - shell:
+        name: jankurai_findings_zero
+        command: "jankurai audit --json"
+        jsonpath: "$.findings"
+        equals: 0
+        fallback_regex: "0 findings"
+    - shell:
+        name: jankurai_caps_zero
+        command: "jankurai audit --json"
+        jsonpath: "$.caps"
+        equals: 0
+        fallback_regex: "0 caps"
+    - git:
+        clean: true
+
+tasklist:
+  source: "JANKURAI_TASKLIST.md"
+  completed_archive: "JANKURAI_TASKLIST.md.completed"
+  on_audit_findings: append_all_new
+  on_completed_items: move_to_archive
+
+validate:
+  after_each_task:
+    - shell: "git diff --check"
+    - shell: "jankurai audit"
+  before_checkpoint:
+    - shell: "git status --short"
+    - shell: "git diff --check"
+
+checkpoint:
+  git:
+    when: after_each_verified_task
+    add:
+      - "."
+    exclude:
+      - ".jekko/runs/**"
+    commit:
+      message: "jankurai: {{task.title_or_hash}}"
+      allow_empty: false
+    push:
+      enabled: true
+      remote: origin
+      branch: current
+
+context:
+  compact:
+    when:
+      - "tokens > 65%"
+      - "iteration % 3 == 0"
+    preserve:
+      - "Original runbook"
+      - "JANKURAI_STANDARD.md constraints"
+      - "JANKURAI_TASKLIST.md unresolved items"
+      - "Latest audit result"
+      - "Current git status"
+      - "Completed commits"
+  inject_each_iteration:
+    - run_state
+    - latest_audit
+    - current_task
+    - validator_results
+
+permissions:
+  headless_policy: fail_on_ask
+  tools:
+    "*": ask
+    "bash:jankurai *": allow
+    "bash:git status*": allow
+    "bash:git diff*": allow
+    "bash:git add*": allow
+    "bash:git commit*": allow
+    "bash:git push*": allow
+
+workers:
+  max_parallel: 3
+  isolation: git_worktree
+  merge_strategy: integrator_reviews_each_patch
+
+safety:
+  oscillation:
+    detect_same_failure: 3
+    action: spawn_debugger_then_pause
+  budget:
+    max_cost_usd: 50
+    max_runtime_hours: 24
+    allow_unbounded_iterations: true
+
+ui:
+  banner: forever_gold
+%%%/JEKKO-RUNBOOK
+```
+
+That is the spirit of your original `<FOREVER>` prompt, but made deliberate, parseable, recoverable, testable, and non-ambiguous.
+
+---
+
+# 9. Syntax library
+
+Below is the complete function vocabulary I would design for v1/v2. Not every command must ship on day one, but the schema should leave room for these.
+
+## 9.1 Top-level blocks
+
+| Block           | Purpose                                                  |
+| --------------- | -------------------------------------------------------- |
+| `version`       | Runbook language version.                                |
+| `name`          | Stable run name.                                         |
+| `description`   | Human-readable summary.                                  |
+| `mode`          | `once`, `until`, `loop`, or `forever`.                   |
+| `arm`           | Deliberate activation requirements.                      |
+| `task`          | Main natural-language task.                              |
+| `scope`         | Files, directories, repos, branches, worktrees in scope. |
+| `variables`     | Named constants and shell/env substitutions.             |
+| `loop`          | Iteration strategy and continuation behavior.            |
+| `steps`         | Deterministic workflow steps.                            |
+| `stop`          | Exit criteria.                                           |
+| `validate`      | Tests/checks that must pass.                             |
+| `checkpoint`    | Git/artifact checkpoint policy.                          |
+| `context`       | Context loading, clearing, compaction, memory.           |
+| `memory`        | Durable notes and state exports.                         |
+| `permissions`   | Tool and shell approval policy.                          |
+| `tools`         | Built-in tool policy.                                    |
+| `mcp`           | MCP server/tool/resource/prompt policy.                  |
+| `agents`        | Agent personas and capabilities.                         |
+| `workers`       | Multi-agent parallelism.                                 |
+| `coordination`  | Task queue, leases, board, consensus.                    |
+| `events` / `on` | Lifecycle hooks.                                         |
+| `safety`        | Budgets, fuses, dangerous command policy.                |
+| `observability` | Logs, dashboard, traces, metrics.                        |
+| `ui`            | TUI banner, labels, warnings.                            |
+
+## 9.2 Loop commands
+
+| Command    | Function                                                                                                 |
+| ---------- | -------------------------------------------------------------------------------------------------------- |
+| `RUN`      | Execute a single step or agent instruction.                                                              |
+| `SEQUENCE` | Run steps in order.                                                                                      |
+| `PARALLEL` | Run independent branches concurrently.                                                                   |
+| `RACE`     | Run branches and keep the first successful result.                                                       |
+| `LOOP`     | Repeat until condition or count.                                                                         |
+| `FOREVER`  | Repeat without iteration limit until external stop/manual kill/stop condition. Requires explicit arming. |
+| `UNTIL`    | Repeat until a condition becomes true.                                                                   |
+| `WHILE`    | Repeat while condition remains true.                                                                     |
+| `FOR_EACH` | Iterate over files/tasks/findings/workers.                                                               |
+| `MAP`      | Apply a worker/task to each item.                                                                        |
+| `REDUCE`   | Merge worker outputs into one result.                                                                    |
+| `WAIT`     | Wait for event, worker, condition, or time.                                                              |
+| `SLEEP`    | Fixed delay.                                                                                             |
+| `BACKOFF`  | Retry with increasing delay.                                                                             |
+| `PAUSE`    | Pause run while preserving state.                                                                        |
+| `RESUME`   | Resume from stored state.                                                                                |
+| `CANCEL`   | Stop run and release leases.                                                                             |
+| `RETRY`    | Retry a failed step according to policy.                                                                 |
+| `ESCALATE` | Move to human, reviewer agent, or debugger agent.                                                        |
+
+## 9.3 Stop-condition functions
+
+| Function                | Meaning                                      |
+| ----------------------- | -------------------------------------------- |
+| `all`                   | All child conditions must pass.              |
+| `any`                   | Any child condition may pass.                |
+| `not`                   | Negate condition.                            |
+| `shell.exit_code`       | Command exits with expected code.            |
+| `shell.stdout_contains` | Stdout contains string.                      |
+| `shell.stderr_contains` | Stderr contains string.                      |
+| `shell.regex`           | Regex over stdout/stderr.                    |
+| `shell.jsonpath`        | JSONPath over command output.                |
+| `file.exists`           | File exists.                                 |
+| `file.not_exists`       | File does not exist.                         |
+| `file.contains`         | File contains literal/regex.                 |
+| `file.unchanged`        | File hash has not changed.                   |
+| `git.clean`             | `git status --short` is empty.               |
+| `git.diff_empty`        | No diff for selected paths.                  |
+| `git.branch_is`         | Current branch matches expected branch.      |
+| `test.passes`           | Test command passes.                         |
+| `audit.zero_findings`   | Typed audit result has zero findings.        |
+| `task_queue.empty`      | No pending/in-progress tasks.                |
+| `workers.all_done`      | All worker leases resolved.                  |
+| `budget.under_cost`     | Cost below threshold.                        |
+| `budget.under_tokens`   | Token use below threshold.                   |
+| `budget.under_runtime`  | Runtime below threshold.                     |
+| `manual.approved`       | Human approval received.                     |
+| `mcp.tool_result`       | MCP tool returns expected structured result. |
+
+## 9.4 Context commands
+
+| Command              | Function                                          |
+| -------------------- | ------------------------------------------------- |
+| `LOAD_FILE`          | Load file into context.                           |
+| `LOAD_GLOB`          | Load matching files.                              |
+| `LOAD_AGENT`         | Load agent/persona instructions.                  |
+| `LOAD_AGENTS_MD`     | Load applicable AGENTS.md hierarchy.              |
+| `LOAD_MCP_RESOURCE`  | Load MCP resource by URI.                         |
+| `LOAD_COMMAND`       | Load custom slash command template.               |
+| `PIN`                | Preserve content across compaction.               |
+| `UNPIN`              | Remove pinned content.                            |
+| `INJECT`             | Add host-generated context capsule.               |
+| `SUMMARIZE`          | Summarize selected content.                       |
+| `COMPACT`            | Force model-assisted or deterministic compaction. |
+| `CLEAR_CONTEXT`      | Start fresh with only pinned/run state.           |
+| `PRUNE_TOOL_OUTPUTS` | Remove or summarize large tool outputs.           |
+| `TAIL`               | Keep last N lines/messages/events.                |
+| `READ_MEMORY`        | Read durable run/project memory.                  |
+| `WRITE_MEMORY`       | Persist durable memory.                           |
+| `STATE_VIEW`         | Render state as context.                          |
+| `CONTEXT_BUDGET`     | Set token budget for context categories.          |
+| `JUST_IN_TIME`       | Load resources only when needed.                  |
+
+## 9.5 Git/checkpoint commands
+
+| Command               | Function                              |
+| --------------------- | ------------------------------------- |
+| `GIT_STATUS`          | Capture status.                       |
+| `GIT_DIFF`            | Capture diff.                         |
+| `GIT_DIFF_CHECK`      | Run whitespace/conflict-marker check. |
+| `GIT_ADD`             | Stage allowed paths.                  |
+| `GIT_COMMIT`          | Commit staged changes.                |
+| `GIT_PUSH`            | Push according to policy.             |
+| `GIT_STASH`           | Stash changes.                        |
+| `GIT_BRANCH`          | Create/switch branch.                 |
+| `GIT_WORKTREE_CREATE` | Create isolated worker worktree.      |
+| `GIT_WORKTREE_REMOVE` | Clean worker worktree.                |
+| `GIT_TAG`             | Tag checkpoint.                       |
+| `SNAPSHOT`            | Save non-git run snapshot.            |
+| `RESTORE`             | Restore snapshot.                     |
+| `REVERT_ON_FAIL`      | Revert if validation fails.           |
+| `OPEN_PR`             | Open PR through configured tool/MCP.  |
+| `MERGE_BRANCH`        | Merge worker branch after validation. |
+
+## 9.6 Validation commands
+
+| Command                | Function                                |
+| ---------------------- | --------------------------------------- |
+| `TEST`                 | Run test command.                       |
+| `LINT`                 | Run lint command.                       |
+| `TYPECHECK`            | Run typecheck command.                  |
+| `BUILD`                | Run build command.                      |
+| `AUDIT`                | Run project audit.                      |
+| `VERIFY_DIFF`          | Ask reviewer agent to inspect diff.     |
+| `VERIFY_NO_REGRESSION` | Compare before/after behavior.          |
+| `VERIFY_TASK_DONE`     | Check current task acceptance criteria. |
+| `VERIFY_STOP`          | Evaluate all stop conditions.           |
+| `REPAIR_ON_FAIL`       | Feed failure back into next iteration.  |
+
+## 9.7 Agent and worker commands
+
+| Command          | Function                                              |
+| ---------------- | ----------------------------------------------------- |
+| `AGENT`          | Define agent role/model/tools/permissions.            |
+| `SPAWN`          | Start one worker.                                     |
+| `SPAWN_PARALLEL` | Start many workers.                                   |
+| `SUBTASK`        | Run isolated subtask to avoid polluting main context. |
+| `HANDOFF`        | Transfer work to another agent.                       |
+| `ASK_AGENT`      | Query specialist agent.                               |
+| `REVIEW`         | Run reviewer agent on diff/output.                    |
+| `DEBUGGER`       | Run debugger agent on failing validation.             |
+| `INTEGRATOR`     | Merge worker outputs.                                 |
+| `CLAIM_TASK`     | Worker claims a queued task.                          |
+| `LEASE`          | Assign task with TTL.                                 |
+| `HEARTBEAT`      | Worker proves liveness.                               |
+| `RELEASE_TASK`   | Worker releases task.                                 |
+| `SUBMIT_PATCH`   | Worker submits patch/branch.                          |
+| `MERGE_RESULTS`  | Integrator combines results.                          |
+| `QUORUM`         | Require N reviewers/agents to agree.                  |
+| `CONSENSUS`      | Resolve conflicting worker recommendations.           |
+| `BROADCAST`      | Send message to all workers.                          |
+| `ASK_HUMAN`      | Request human input through UI/CLI.                   |
+
+## 9.8 MCP commands
+
+| Command        | Function                                          |
+| -------------- | ------------------------------------------------- |
+| `MCP_ENABLE`   | Enable MCP server/profile.                        |
+| `MCP_DISABLE`  | Disable MCP server/profile.                       |
+| `MCP_TOOL`     | Call or allow an MCP tool.                        |
+| `MCP_RESOURCE` | Load MCP resource.                                |
+| `MCP_PROMPT`   | Invoke MCP prompt template.                       |
+| `MCP_ROOT`     | Restrict MCP filesystem root.                     |
+| `MCP_ELICIT`   | Request structured user input through MCP/client. |
+| `MCP_SAMPLE`   | Allow controlled model sampling through MCP.      |
+| `MCP_PROFILE`  | Bundle MCP servers/tools/resources by task.       |
+
+## 9.9 Safety commands
+
+| Command                      | Function                                   |
+| ---------------------------- | ------------------------------------------ |
+| `ALLOW`                      | Permit tool/command pattern.               |
+| `DENY`                       | Deny tool/command pattern.                 |
+| `ASK`                        | Require human approval.                    |
+| `FAIL_ON_ASK`                | In headless mode, fail instead of hanging. |
+| `REQUIRE_APPROVAL`           | Gate a step on approval.                   |
+| `MAX_COST`                   | Cost limit.                                |
+| `MAX_TOKENS`                 | Token limit.                               |
+| `MAX_RUNTIME`                | Runtime limit.                             |
+| `MAX_ITERATIONS`             | Iteration limit.                           |
+| `ALLOW_UNBOUNDED_ITERATIONS` | Explicitly allow forever.                  |
+| `STALL_DETECT`               | Detect no progress.                        |
+| `OSCILLATION_DETECT`         | Detect repeated same failure/diff.         |
+| `DUPLICATE_TOOL_CALL_LIMIT`  | Stop repeated identical calls.             |
+| `DANGEROUS_COMMAND_DENYLIST` | Block destructive commands.                |
+| `SECRET_SCAN`                | Prevent secret leakage/commit.             |
+| `NETWORK_POLICY`             | Control network usage.                     |
+| `PUSH_POLICY`                | Control git push.                          |
+| `HUMAN_GATE`                 | Require human confirmation at boundary.    |
+
+## 9.10 Event hooks
+
+| Hook                          | Trigger                |
+| ----------------------------- | ---------------------- |
+| `on_start`                    | Run starts.            |
+| `on_arm`                      | Run is armed.          |
+| `on_iteration_start`          | Iteration starts.      |
+| `on_iteration_end`            | Iteration ends.        |
+| `on_model_stop`               | Model stops naturally. |
+| `on_tool_error`               | Tool fails.            |
+| `on_validator_fail`           | Validator fails.       |
+| `on_checkpoint_before`        | Before checkpoint.     |
+| `on_checkpoint_after`         | After checkpoint.      |
+| `on_compact_before`           | Before compaction.     |
+| `on_compact_after`            | After compaction.      |
+| `on_worker_spawned`           | Worker starts.         |
+| `on_worker_heartbeat_missing` | Worker may be dead.    |
+| `on_worker_completed`         | Worker completes.      |
+| `on_blocked`                  | Run is blocked.        |
+| `on_pause`                    | Run pauses.            |
+| `on_resume`                   | Run resumes.           |
+| `on_success`                  | Stop conditions pass.  |
+| `on_failure`                  | Run fails.             |
+| `on_cancel`                   | User cancels.          |
+
+## 9.11 Output and observability commands
+
+| Command     | Function                              |
+| ----------- | ------------------------------------- |
+| `REPORT`    | Generate final or periodic report.    |
+| `DASHBOARD` | Render live state.                    |
+| `EMIT`      | Emit structured event.                |
+| `ANNOTATE`  | Add human-readable note.              |
+| `METRIC`    | Record metric.                        |
+| `TRACE`     | Attach trace span/event.              |
+| `ARTIFACT`  | Save output artifact.                 |
+| `NOTIFY`    | Send notification through plugin/MCP. |
+
+---
+
+# 10. Multi-agent collaboration design
+
+The current “read THIS_TRACKER.md and update it” pattern is fragile because Markdown becomes both human UI and source of truth. Agents overwrite each other, miss updates, or make inconsistent state changes.
+
+The better design is a **runbook broker**.
+
+## Broker state
+
+```text
+.jekko/runs/<run-id>/tasks.jsonl
+.jekko/runs/<run-id>/events.jsonl
+.jekko/runs/<run-id>/workers.json
+.jekko/runs/<run-id>/leases.json
+.jekko/runs/<run-id>/artifacts/
+```
+
+Task states:
+
+```text
+pending
+leased
+in_progress
+needs_review
+done
+failed
+blocked
+superseded
+```
+
+Worker lifecycle:
+
+```text
+spawned
+claimed_task
+heartbeat
+submitted_patch
+reviewed
+merged
+released
+completed
+failed
+timed_out
+```
+
+## Worker isolation
+
+For write-capable workers, use git worktrees:
+
+```text
+main run worktree
+worker-1 worktree on branch run/<id>/worker-1
+worker-2 worktree on branch run/<id>/worker-2
+worker-3 worktree on branch run/<id>/worker-3
+```
+
+Workers submit patches or branches. An integrator agent validates and merges. This prevents parallel agents from stomping on the same working directory.
+
+## MCP broker tools
+
+Expose coordination through MCP or internal tools:
+
+```text
+runbook_claim_task
+runbook_release_task
+runbook_heartbeat
+runbook_publish_event
+runbook_get_state
+runbook_get_context
+runbook_submit_patch
+runbook_mark_blocked
+runbook_request_review
+runbook_merge_result
+```
+
+This gives agents structured collaboration instead of “edit this tracker file.”
+
+## Human-readable tracker
+
+Still render:
+
+```text
+RUNBOOK_DASHBOARD.md
+```
+
+But it is generated from state. Agents do not directly edit it unless explicitly allowed.
+
+---
+
+# 11. Safety and failure handling
+
+A real forever mode needs strong fuses even when “forever” is allowed.
+
+### Permission deadlock
+
+Problem: headless daemon hits `ask` permission and hangs.
+
+Solution:
+
+```yaml
+permissions:
+  headless_policy: fail_on_ask
+```
+
+Preflight the runbook and warn before launch.
+
+### Context drift
+
+Problem: compaction loses the original mission.
+
+Solution:
+
+```yaml
+context:
+  preserve:
+    - original_runbook
+    - stop_conditions
+    - hard_constraints
+    - current_task
+    - validator_failures
+```
+
+The runbook controller injects a deterministic capsule every iteration.
+
+### False completion
+
+Problem: model says “done.”
+
+Solution:
+
+```yaml
+loop:
+  continue_on_model_stop: true
+stop:
+  all:
+    - audit.zero_findings
+    - git.clean
+```
+
+Only host validators can stop the run.
+
+### Oscillation
+
+Problem: model repeats same failed fix.
+
+Solution:
+
+```yaml
+safety:
+  oscillation:
+    detect_same_failure: 3
+    action: spawn_debugger_then_pause
+```
+
+### Bad commits
+
+Problem: daemon commits broken work.
+
+Solution:
+
+```yaml
+checkpoint:
+  git:
+    require_validators:
+      - test
+      - audit
+      - diff_check
+    allow_empty: false
+    push:
+      enabled: true
+      require_branch_pattern: "run/**"
+```
+
+### MCP/tool bloat
+
+Problem: too many MCP tools consume context and confuse the model.
+
+Solution:
+
+```yaml
+mcp:
+  profile: jankurai
+  lazy_enable: true
+  max_tools_visible: 20
+```
+
+Jekko’s own MCP docs warn that MCP servers add tool schemas to context, and too many tools can exceed model context. ([Jekko][12])
+
+---
+
+# 12. Recommended implementation order
+
+## Phase 1: Deterministic daemon runner
+
+Build:
+
+```text
+runbook schema
+parser
+durable state
+runner
+typed stop conditions
+CLI --runbook / --daemon
+status variant
+gold TUI banner
+```
+
+Do not implement multi-agent yet.
+
+## Phase 2: Compaction and context capsules
+
+Build:
+
+```text
+daemon-aware compaction
+pinned context
+iteration capsule
+disable generic compaction auto-continue under runbook
+resume after crash
+```
+
+## Phase 3: Checkpoint policy
+
+Build:
+
+```text
+git checkpoint module
+path allow/exclude
+commit message templates
+push policy
+rollback/snapshot
+validator gates
+```
+
+## Phase 4: Worker broker
+
+Build:
+
+```text
+task queue
+leases
+heartbeats
+worker sessions
+git worktree isolation
+integrator/reviewer flow
+MCP broker tools
+```
+
+## Phase 5: Full syntax library and plugins
+
+Build:
+
+```text
+hooks
+dashboards
+notifications
+metrics/traces
+community plugin extension points
+```
+
+---
+
+# 13. Final recommendation
+
+The proposed daemon plan should be reframed from:
+
+```text
+Modify prompt.ts so the model cannot stop.
+```
+
+to:
+
+```text
+Add a host-level Jekko Runbook Controller that repeatedly invokes the normal prompt loop until typed stop conditions pass.
+```
+
+That gives you the actual “PROMISED infinite loop” behavior:
+
+```text
+model stops → host checks audit → not clean → host continues
+context full → host compacts → host reinjects run state → continues
+worker fails → host retries/escalates → continues
+git dirty → host validates/checkpoints → continues
+audit clean + caps zero + git clean → host exits
+manual kill → host stops
+```
+
+The syntax should be powerful, but it should not be magic XML. It should be a **deliberately armed runbook** with exact sentinels, slash-command/CLI activation, typed stop conditions, typed checkpoint policy, deterministic context capsules, and structured worker orchestration.
+
+That is the path to “GOD mode” without letting accidental pasted text become an unbounded autonomous process.
+
+[1]: https://github.com/anomalyco/jekko/issues/18636 "[FEATURE]: Config option for continuous execution loop until task completion · Issue #18636 · anomalyco/jekko · GitHub"
+[2]: https://github.com/jekkoco/jekko-plugin-jekkor?utm_source=chatgpt.com "Jekko plugin providing autonomous development ..."
+[3]: https://raw.githubusercontent.com/anomalyco/jekko/dev/packages/jekko/src/session/prompt.ts "raw.githubusercontent.com"
+[4]: https://raw.githubusercontent.com/anomalyco/jekko/dev/packages/jekko/src/session/compaction.ts "raw.githubusercontent.com"
+[5]: https://jekko.ai/docs/commands/ "Commands | Jekko"
+[6]: https://agents.md/ "AGENTS.md"
+[7]: https://modelcontextprotocol.io/specification/2025-11-25?utm_source=chatgpt.com "Specification"
+[8]: https://arxiv.org/html/2605.01920v1 "A Language for Describing Agentic LLM Contexts"
+[9]: https://ibm.github.io/prompt-declaration-language/?utm_source=chatgpt.com "Prompt Declaration Language"
+[10]: https://github.com/langchain-ai/langgraph?utm_source=chatgpt.com "langchain-ai/langgraph: Build resilient language agents as ..."
+[11]: https://code.claude.com/docs/en/hooks?utm_source=chatgpt.com "Hooks reference - Claude Code Docs"
+[12]: https://jekko.ai/docs/mcp-servers/ "MCP servers | Jekko"

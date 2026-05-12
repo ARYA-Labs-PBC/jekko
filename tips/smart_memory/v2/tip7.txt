@@ -1,0 +1,2545 @@
+I unpacked and studied the archive: `CLAUDE_MEMSPEC.md`, `CODEX_MEMSPEC.md`, `tip1` through `tip13`, and the pasted ANTIGRAVITY/CMC design. The strongest pattern is unmistakable: the winning system is **not** a vector DB, not a wiki, not a graph DB, and not a giant context window. It is a **Rust memory compiler** that turns raw experience into typed, temporal, provenance-backed, compressed, queryable, and executable memory.
+
+Below is the design I would build.
+
+# MNEMOS-II: Rust Superhuman Cognitive Memory Compiler
+
+## 0. The core thesis
+
+The optimal future memory system is a **compiler**, not a database.
+
+A database stores things. A compiler transforms one representation into a more useful representation. A superhuman memory system must continuously compile:
+
+```text
+raw experience
+→ observations
+→ episodes
+→ claims / equations / entities / skills
+→ temporal graph facts
+→ belief states
+→ concept kernels
+→ compressed maps
+→ executable procedures
+→ bounded context packs
+→ outcome feedback
+→ stronger future retrieval
+```
+
+Long context windows do not solve this by themselves. “Lost in the Middle” showed that models can fail to reliably use information buried in long contexts, with performance often best near the beginning or end of the prompt. That is the reason memory must select, rank, compress, and structure evidence before the model sees it. ([MIT Press Direct][1])
+
+The public research and systems landscape points to the same synthesis: MIRIX gives typed cognitive lanes; Graphiti/Zep gives temporal validity and provenance; Hindsight separates facts, experiences, observations, and beliefs; A-MEM gives self-organizing Zettelkasten-style concept evolution; Mastra Observational Memory gives stable low-latency compressed context; HippoRAG gives graph activation and Personalized PageRank-style multi-hop recall; RAPTOR and GraphRAG give hierarchical and community-level compression; Voyager gives executable procedural skill memory. ([Mirix Documentation][2])
+
+The design below is my best synthesis.
+
+---
+
+# 1. The architecture in one sentence
+
+**MNEMOS-II is a Rust-first, event-sourced, multi-lane cognitive memory compiler that stores canonical truth in append-only, provenance-backed records; maintains fast rebuildable projections for BM25, vector, graph, temporal, symbol, and skill retrieval; continuously compresses knowledge into concept kernels and stable observation prefixes; and returns small, cited, contradiction-aware context packs instead of overwhelming the model.**
+
+---
+
+# 2. What I would improve over CLAUDE, CODEX, and CMC
+
+The uploaded specs are already extremely strong. I would keep their core insights and tighten five things.
+
+First, I would make **event sourcing absolutely central**. The append-only mutation ledger is not a phase-one convenience; it is the source of truth. All databases and indexes are projections. This guarantees deterministic rebuilds, reproducibility, auditability, and safe experimentation.
+
+Second, I would separate **fact, belief, observation, and answer** with no exceptions. Hindsight is especially right on this: a fact is not a belief, and an extracted source assertion is not agent knowledge. Hindsight’s public description emphasizes structured memory networks for world facts, agent experiences, synthesized observations, and evolving beliefs, governed by retain, recall, and reflect operations. ([Hugging Face][3])
+
+Third, I would combine **Mastra-style stable observation context** with **dynamic retrieval**. Mastra’s Observational Memory is compelling because it maintains a stable, prompt-cacheable observation prefix while compressing message history through Observer and Reflector agents. That gives speed. But for science, math, and code, stable observations alone are not enough; the system must also retrieve exact equations, citations, counterexamples, source spans, code paths, and graph neighborhoods. ([Mastra][4])
+
+Fourth, I would make **science/math objects first-class**, not generic notes. Equations, theorems, assumptions, regimes of validity, units, datasets, observables, predictions, experiments, and counterexamples need typed schemas and validators.
+
+Fifth, I would make the hot path **zero-LLM by default**. LLMs can extract, reflect, compress, and propose mutations in background jobs. The realtime recall path must run locally from compiled indexes: exact search, vector search, graph activation, temporal filtering, score fusion, and context packing.
+
+---
+
+# 3. High-level Mermaid architecture
+
+```mermaid
+flowchart TD
+    A[Agent / ZYAL / CLI / MCP Client] --> B[Memory API: observe, recall, reflect, feedback]
+
+    B --> C[Hot Path Runtime]
+    B --> D[Write Compiler]
+    B --> E[Background Compilers]
+
+    C --> C1[Core Cache]
+    C --> C2[Tantivy BM25]
+    C --> C3[HNSW Vector Index]
+    C --> C4[Temporal Graph Projection]
+    C --> C5[Symbol / Equation Index]
+    C --> C6[Skill Index]
+    C --> C7[Eval / Failure Index]
+    C --> C8[Context Pack Compiler]
+
+    D --> D1[Event Segmenter]
+    D --> D2[Observer Compressor]
+    D --> D3[Candidate Extractor]
+    D --> D4[Entity Linker]
+    D --> D5[Grounder + Provenance]
+    D --> D6[Validator]
+    D --> D7[Mutation Ledger]
+
+    E --> E1[Reflector]
+    E --> E2[Concept Kernel Compiler]
+    E --> E3[Belief Updater]
+    E --> E4[Contradiction Resolver]
+    E --> E5[Skill Distiller]
+    E --> E6[RAPTOR Tree Builder]
+    E --> E7[Graph Community Summarizer]
+    E --> E8[Topic Strengthener]
+
+    D7 --> F[Canonical Memory Store]
+    F --> F1[Append-only JSONL/CBOR Ledger]
+    F --> F2[redb Object Store]
+    F --> F3[Git-backed Curated Cards]
+    F --> F4[Resource Vault Pointers]
+
+    F --> G[Rebuildable Projections]
+    G --> C2
+    G --> C3
+    G --> C4
+    G --> C5
+    G --> C6
+    G --> C7
+
+    C8 --> H[Bounded, Cited, Contradiction-Aware ContextPack]
+    H --> A
+```
+
+---
+
+# 4. The non-negotiable design rule
+
+```text
+Canonical truth is append-only and auditable.
+Indexes are disposable.
+Summaries are useful but never authoritative.
+LLM outputs are proposals until validated.
+Every factual memory must be traceable to evidence.
+Every belief must be traceable to claims and contradictions.
+Every skill must be traceable to tests.
+```
+
+This is how you get compounding intelligence without memory corruption.
+
+---
+
+# 5. Memory lanes
+
+MNEMOS-II uses **12 logical lanes**. They are not necessarily 12 separate databases; they are typed views over a common memory object system.
+
+MIRIX’s public docs describe six memory components: core, episodic, semantic, procedural, resource, and knowledge, with BM25 and embedding search. MNEMOS-II keeps that shape but adds belief, eval, counterexample, theorem/equation, curriculum, and metacognitive lanes for serious science and engineering work. ([Mirix Documentation][2])
+
+| Lane                 | Purpose                                                                |             Hot-path role | Canonical? |
+| -------------------- | ---------------------------------------------------------------------- | ------------------------: | ---------: |
+| `Core`               | Tiny always-loaded mission, user/project constraints, current frontier |           Always included |        Yes |
+| `Working`            | Current task scratch state, active plan, temporary hypotheses          |                    In RAM |     Partly |
+| `Episodic`           | Immutable event log: what happened, when, with which tools             |        Time/entity recall |        Yes |
+| `Observation`        | Compressed dated observations from raw episodes                        |    Stable prefix + recall |        Yes |
+| `Semantic`           | Atomic claims, facts, definitions, source assertions                   |        Evidence retrieval |        Yes |
+| `Belief`             | Current stance over claims, with support and contradiction             |           Judgment recall |        Yes |
+| `Concept`            | Self-organizing concept kernels, maps, prerequisites                   | Compression and synthesis |        Yes |
+| `Procedural`         | Executable skills, workflows, scripts, tests                           |             Action recall |        Yes |
+| `Resource`           | Papers, datasets, repos, APIs, file manifests, licenses                |       Exact source recall |        Yes |
+| `EquationTheorem`    | Equations, variables, units, theorem DAGs, proof status                | Math/science exact recall |        Yes |
+| `EvalCounterexample` | Failures, bad answers, falsified assumptions, benchmark outcomes       | Prevent repeated mistakes |        Yes |
+| `MetaCurriculum`     | Lessons about how to learn/reason; topic mastery and next questions    |          Self-improvement |        Yes |
+
+---
+
+# 6. Memory compression hierarchy
+
+This is the central trick for millions of memories.
+
+```mermaid
+flowchart BT
+    R0[Raw tool output / messages / PDFs / code logs] --> R1[Episodes]
+    R1 --> R2[Observations]
+    R2 --> R3[Atomic claims / equations / skills / resources]
+    R3 --> R4[Concept kernels]
+    R4 --> R5[Domain maps]
+    R5 --> R6[Core frontier memory]
+
+    R3 --> G[Temporal Knowledge Graph]
+    R4 --> T[RAPTOR Summary Trees]
+    R4 --> C[GraphRAG Community Reports]
+    R3 --> S[Procedural Skill Library]
+
+    G --> P[Context Pack]
+    T --> P
+    C --> P
+    S --> P
+    R6 --> P
+```
+
+Each layer has a different job:
+
+```text
+Raw artifacts       = full source, never blindly stuffed into context
+Episodes            = immutable event history
+Observations        = compressed autobiographical memory
+Atomic objects      = searchable facts, equations, claims, skills
+Concept kernels     = durable conceptual compression
+Domain maps         = navigational memory
+Core frontier       = tiny always-visible strategic memory
+```
+
+RAPTOR-style recursive clustering and summarization is ideal for document-scale compression because it retrieves over both leaf chunks and higher-level summaries. ([ICLR Proceedings][5]) GraphRAG-style community summaries are ideal for corpus-level “what are the main themes?” questions. ([Microsoft][6])
+
+---
+
+# 7. Source-of-truth model
+
+## 7.1 Canonical truth
+
+Canonical memory lives in four places:
+
+```text
+1. append-only mutation ledger
+2. redb object store
+3. Git-backed curated cards
+4. external resource vault pointers
+```
+
+I would use `redb` for the pure-Rust embedded store because it is an ACID, MVCC, crash-safe, copy-on-write B-tree database written in Rust. ([GitHub][7])
+
+## 7.2 Rebuildable projections
+
+These are not truth:
+
+```text
+- Tantivy BM25 indexes
+- HNSW vector indexes
+- temporal graph adjacency cache
+- equation/symbol inverted index
+- topic-strength cache
+- context-pack cache
+- RAPTOR trees
+- GraphRAG community summaries
+```
+
+Tantivy is the Rust Lucene-like full-text search engine I would use for BM25, phrase queries, and exact-symbol retrieval. ([Docs.rs][8]) For local vector search, `hnsw_rs` is a Rust HNSW implementation with insert/search APIs and file dump/reload support. ([Docs.rs][9]) For embeddings, `fastembed` gives a Rust retrieval-embedding interface with supported text embedding models. ([Docs.rs][10])
+
+At larger team scale, optional adapters can target Qdrant, LanceDB, Postgres/pgvector, or Kuzu. Qdrant supports dense and sparse vectors, LanceDB supports vector, full-text, SQL, and hybrid search, and Kuzu is an embedded property graph database with Cypher, disk-backed storage, and Rust API support. ([Qdrant][11])
+
+---
+
+# 8. Full file tree
+
+```text
+mnemos-ii/
+├── Cargo.toml
+├── Cargo.lock
+├── rust-toolchain.toml
+├── README.md
+├── AGENTS.md
+├── justfile
+├── crates/
+│   ├── mnemos-types/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── ids.rs
+│   │       ├── lane.rs
+│   │       ├── temporal.rs
+│   │       ├── provenance.rs
+│   │       ├── memory_object.rs
+│   │       ├── episode.rs
+│   │       ├── observation.rs
+│   │       ├── claim.rs
+│   │       ├── belief.rs
+│   │       ├── concept.rs
+│   │       ├── equation.rs
+│   │       ├── theorem.rs
+│   │       ├── skill.rs
+│   │       ├── resource.rs
+│   │       ├── eval.rs
+│   │       ├── context_pack.rs
+│   │       └── receipt.rs
+│   │
+│   ├── mnemos-ledger/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── append_log.rs
+│   │       ├── cbor_event.rs
+│   │       ├── jsonl_event.rs
+│   │       ├── hash_chain.rs
+│   │       ├── signer.rs
+│   │       ├── replay.rs
+│   │       └── compaction_manifest.rs
+│   │
+│   ├── mnemos-store/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── redb_store.rs
+│   │       ├── tables.rs
+│   │       ├── object_codec.rs
+│   │       ├── snapshot.rs
+│   │       ├── migrations.rs
+│   │       └── transaction.rs
+│   │
+│   ├── mnemos-index/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── tantivy_index.rs
+│   │       ├── hnsw_index.rs
+│   │       ├── graph_projection.rs
+│   │       ├── temporal_index.rs
+│   │       ├── symbol_index.rs
+│   │       ├── roaring_filters.rs
+│   │       ├── topic_index.rs
+│   │       ├── skill_index.rs
+│   │       └── rebuild.rs
+│   │
+│   ├── mnemos-embed/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── embedder_trait.rs
+│   │       ├── fastembed_backend.rs
+│   │       ├── candle_backend.rs
+│   │       ├── hosted_backend.rs
+│   │       ├── sparse_embedder.rs
+│   │       └── quantization.rs
+│   │
+│   ├── mnemos-graph/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── entity_resolver.rs
+│   │       ├── temporal_edge.rs
+│   │       ├── csr_graph.rs
+│   │       ├── ppr.rs
+│   │       ├── community.rs
+│   │       ├── contradiction.rs
+│   │       ├── ontology.rs
+│   │       └── kuzu_adapter.rs
+│   │
+│   ├── mnemos-compiler/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── observe.rs
+│   │       ├── segment.rs
+│   │       ├── extract.rs
+│   │       ├── normalize.rs
+│   │       ├── ground.rs
+│   │       ├── validate.rs
+│   │       ├── mutate.rs
+│   │       ├── reflect.rs
+│   │       ├── consolidate.rs
+│   │       ├── belief_update.rs
+│   │       ├── concept_kernel.rs
+│   │       ├── raptor.rs
+│   │       ├── graphrag.rs
+│   │       ├── skill_distill.rs
+│   │       └── topic_strength.rs
+│   │
+│   ├── mnemos-retrieval/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── query_parse.rs
+│   │       ├── channels.rs
+│   │       ├── rrf.rs
+│   │       ├── ppr_expand.rs
+│   │       ├── temporal_filter.rs
+│   │       ├── rerank.rs
+│   │       ├── budget.rs
+│   │       ├── pack.rs
+│   │       ├── stable_prefix.rs
+│   │       └── trace.rs
+│   │
+│   ├── mnemos-science/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── units.rs
+│   │       ├── dimensions.rs
+│   │       ├── latex.rs
+│   │       ├── theorem_dag.rs
+│   │       ├── proof_adapter.rs
+│   │       ├── dataset_manifest.rs
+│   │       ├── experiment.rs
+│   │       ├── prediction.rs
+│   │       └── observable.rs
+│   │
+│   ├── mnemos-skill/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── sandbox.rs
+│   │       ├── rust_skill.rs
+│   │       ├── python_skill.rs
+│   │       ├── shell_skill.rs
+│   │       ├── verifier.rs
+│   │       ├── preconditions.rs
+│   │       ├── test_runner.rs
+│   │       └── promotion.rs
+│   │
+│   ├── mnemos-eval/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── fixtures.rs
+│   │       ├── recall_metrics.rs
+│   │       ├── context_metrics.rs
+│   │       ├── contradiction_metrics.rs
+│   │       ├── latency.rs
+│   │       ├── science_bench.rs
+│   │       └── report.rs
+│   │
+│   ├── mnemos-api/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── engine.rs
+│   │       ├── config.rs
+│   │       ├── mcp.rs
+│   │       ├── grpc.rs
+│   │       ├── http.rs
+│   │       └── tool_schema.rs
+│   │
+│   ├── mnemos-cli/
+│   │   ├── Cargo.toml
+│   │   └── src/main.rs
+│   │
+│   └── mnemosd/
+│       ├── Cargo.toml
+│       └── src/
+│           ├── main.rs
+│           ├── daemon.rs
+│           ├── scheduler.rs
+│           ├── workers.rs
+│           └── ipc.rs
+│
+├── memory/
+│   ├── ROOT.md
+│   ├── ACTIVE_FRONTIER.md
+│   ├── RETRIEVAL_PLAYBOOK.md
+│   ├── CONTRADICTIONS.md
+│   ├── OPEN_QUESTIONS.md
+│   ├── domains/
+│   │   ├── physics/
+│   │   ├── math/
+│   │   ├── computer_science/
+│   │   ├── biology/
+│   │   └── engineering/
+│   ├── concepts/
+│   ├── resources/
+│   ├── skills/
+│   └── evals/
+│
+├── schemas/
+│   ├── memory.schema.json
+│   ├── claim.schema.json
+│   ├── equation.schema.json
+│   ├── theorem.schema.json
+│   ├── skill.schema.json
+│   ├── resource.schema.json
+│   ├── context_pack.schema.json
+│   └── ontology/
+│       ├── predicates.yaml
+│       ├── entity_types.yaml
+│       └── shacl_shapes.ttl
+│
+├── examples/
+│   ├── paper_ingest/
+│   ├── coding_agent/
+│   ├── scientific_dataset/
+│   ├── equation_memory/
+│   └── skill_promotion/
+│
+├── benches/
+│   ├── million_memory_recall.rs
+│   ├── ten_million_projection.rs
+│   ├── context_pack_latency.rs
+│   └── graph_ppr.rs
+│
+├── tests/
+│   ├── fixtures/
+│   ├── unit/
+│   ├── integration/
+│   ├── property/
+│   ├── crash/
+│   ├── adversarial/
+│   └── eval/
+│
+└── .mnemos/
+    ├── ledger/
+    ├── objects.redb
+    ├── projections/
+    │   ├── tantivy/
+    │   ├── hnsw/
+    │   ├── graph/
+    │   ├── temporal/
+    │   ├── symbols/
+    │   └── skills/
+    ├── caches/
+    │   ├── context_packs/
+    │   ├── stable_prefix/
+    │   └── summaries/
+    └── vault/
+        ├── raw_refs/
+        ├── blobs/
+        └── manifests/
+```
+
+---
+
+# 9. Core Rust schemas
+
+## 9.1 IDs, time, and provenance
+
+Use UUIDv7-style sortable IDs, BLAKE3 hashes, bitemporal validity, and signed receipts.
+
+```rust
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MemoryId(pub uuid::Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EpisodeId(pub uuid::Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EntityId(pub uuid::Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EdgeId(pub uuid::Uuid);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bitemporal {
+    /// When the fact was true in the world being modeled.
+    pub valid_from: DateTime<Utc>,
+    pub valid_to: Option<DateTime<Utc>>,
+
+    /// When this system learned or recorded the fact.
+    pub recorded_from: DateTime<Utc>,
+    pub recorded_to: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceSpan {
+    pub uri: String,
+    pub byte_start: Option<u64>,
+    pub byte_end: Option<u64>,
+    pub page: Option<u32>,
+    pub section: Option<String>,
+    pub line_start: Option<u32>,
+    pub line_end: Option<u32>,
+    pub source_hash_blake3: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provenance {
+    pub primary: SourceSpan,
+    pub supporting: Vec<SourceSpan>,
+    pub extraction_method: ExtractionMethod,
+    pub extractor_model: Option<String>,
+    pub extracted_at: DateTime<Utc>,
+    pub confidence: CalibratedConfidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExtractionMethod {
+    HumanAuthored,
+    RuleBased { rule_id: String },
+    LlmProposed { prompt_hash: String },
+    ToolGenerated { tool: String, version: String },
+    FormalVerifier { tool: String, version: String },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CalibratedConfidence {
+    /// Confidence in extraction correctness, not truth.
+    pub extraction: f32,
+    /// Confidence in source quality.
+    pub source_quality: f32,
+    /// Confidence in current belief after evidence fusion.
+    pub belief: Option<f32>,
+}
+```
+
+## 9.2 Universal memory envelope
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MemoryLane {
+    Core,
+    Working,
+    Episodic,
+    Observation,
+    Semantic,
+    Belief,
+    Concept,
+    Procedural,
+    Resource,
+    EquationTheorem,
+    EvalCounterexample,
+    MetaCurriculum,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MemoryStatus {
+    Proposed,
+    Trusted,
+    Contested,
+    Superseded,
+    Deprecated,
+    Rejected,
+    Archived,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryObject {
+    pub id: MemoryId,
+    pub schema_version: u32,
+    pub lane: MemoryLane,
+    pub status: MemoryStatus,
+
+    pub title: String,
+    pub summary: String,
+    pub content: MemoryPayload,
+
+    pub entities: Vec<EntityId>,
+    pub tags: Vec<String>,
+    pub domains: Vec<String>,
+
+    pub temporal: Bitemporal,
+    pub provenance: Vec<Provenance>,
+
+    pub retrieval: RetrievalHints,
+    pub learning: LearningState,
+    pub security: AccessPolicy,
+
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetrievalHints {
+    pub exact_terms: Vec<String>,
+    pub symbols: Vec<String>,
+    pub embedding_ref: Option<EmbeddingRef>,
+    pub bm25_doc_ref: Option<u64>,
+    pub graph_node_ref: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearningState {
+    pub importance: f32,
+    pub novelty: f32,
+    pub utility: f32,
+    pub surprise: f32,
+    pub retrieval_success_ema: f32,
+    pub access_count: u64,
+    pub last_accessed: Option<DateTime<Utc>>,
+    pub stability_days: f32,
+    pub difficulty: f32,
+}
+```
+
+## 9.3 Payloads
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MemoryPayload {
+    Core(CoreBlock),
+    Working(WorkingBlock),
+    Episode(Episode),
+    Observation(Observation),
+    Claim(ClaimCard),
+    Belief(BeliefState),
+    Concept(ConceptKernel),
+    Skill(SkillCard),
+    Resource(ResourceCard),
+    Equation(EquationCard),
+    Theorem(TheoremCard),
+    Eval(EvalMemory),
+    Counterexample(CounterexampleCard),
+    MetaLesson(MetaLesson),
+    Question(QuestionCard),
+}
+```
+
+---
+
+# 10. Scientific memory schemas
+
+## 10.1 Claim card
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimCard {
+    pub statement: String,
+    pub normalized_subject: EntityId,
+    pub predicate: Predicate,
+    pub normalized_object: ClaimObject,
+
+    pub assumptions: Vec<String>,
+    pub regime_of_validity: Option<String>,
+    pub scope: ClaimScope,
+
+    pub supports: Vec<EvidenceLink>,
+    pub contradicts: Vec<EvidenceLink>,
+    pub derived_from: Vec<MemoryId>,
+
+    pub status: ClaimStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ClaimObject {
+    Entity(EntityId),
+    Literal(String),
+    Quantity(Quantity),
+    Equation(MemoryId),
+    Dataset(MemoryId),
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ClaimStatus {
+    SourceAssertion,
+    Corroborated,
+    Contested,
+    Falsified,
+    HistoricalOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceLink {
+    pub memory_id: MemoryId,
+    pub role: EvidenceRole,
+    pub weight: f32,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EvidenceRole {
+    DirectSupport,
+    IndirectSupport,
+    DirectContradiction,
+    MethodologicalCaveat,
+    Replication,
+    FailedReplication,
+}
+```
+
+## 10.2 Equation card
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EquationCard {
+    pub name: Option<String>,
+    pub latex: String,
+    pub normalized_symbolic: Option<String>,
+
+    pub variables: Vec<VariableDef>,
+    pub unit_constraints: Vec<UnitConstraint>,
+    pub assumptions: Vec<String>,
+    pub limiting_cases: Vec<String>,
+    pub regime_of_validity: Option<String>,
+
+    pub derivation_steps: Vec<DerivationStep>,
+    pub related_claims: Vec<MemoryId>,
+    pub related_theorems: Vec<MemoryId>,
+    pub examples_used_successfully: Vec<MemoryId>,
+
+    pub dimension_check: VerificationResult,
+    pub symbolic_check: VerificationResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariableDef {
+    pub symbol: String,
+    pub canonical_name: String,
+    pub description: String,
+    pub unit: Option<UnitExpr>,
+    pub bounds: Option<(f64, f64)>,
+    pub is_constant: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnitExpr {
+    pub repr: String,
+    pub si_powers: [i8; 7],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VerificationResult {
+    NotChecked,
+    Passed { tool: String, version: String },
+    Failed { reason: String },
+    Inconclusive { reason: String },
+}
+```
+
+## 10.3 Belief state
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeliefState {
+    pub proposition: String,
+    pub stance: BeliefStance,
+    pub confidence: f32,
+
+    pub supporting_claims: Vec<MemoryId>,
+    pub contradicting_claims: Vec<MemoryId>,
+    pub open_questions: Vec<MemoryId>,
+
+    pub last_revision: BeliefRevision,
+    pub revision_history: Vec<BeliefRevision>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BeliefStance {
+    Unknown,
+    Tentative,
+    Supported,
+    StronglySupported,
+    Contested,
+    Rejected,
+    Retired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeliefRevision {
+    pub at: DateTime<Utc>,
+    pub reason: String,
+    pub confidence_before: f32,
+    pub confidence_after: f32,
+    pub receipt_id: MutationReceiptId,
+}
+```
+
+This is the key epistemic protection: the agent never says “this is true because a chunk said so.” It says, “this is my current belief because these claims support it, these contradict it, and this is when the belief changed.”
+
+---
+
+# 11. Temporal graph model
+
+Graphiti’s most important idea is that facts have validity windows and trace back to episodes; changed facts are invalidated, not deleted. ([GitHub][12]) MNEMOS-II adopts that but adds scientific predicates, bitemporal recording, and contradiction pressure.
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityNode {
+    pub id: EntityId,
+    pub canonical_name: String,
+    pub aliases: Vec<String>,
+    pub kind: EntityKind,
+    pub summary: String,
+    pub embedding_ref: Option<EmbeddingRef>,
+    pub merged_into: Option<EntityId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EntityKind {
+    Person,
+    Institution,
+    Paper,
+    Dataset,
+    CodeRepository,
+    Concept,
+    Theory,
+    Model,
+    Method,
+    Equation,
+    Variable,
+    Parameter,
+    Observable,
+    Experiment,
+    Instrument,
+    Software,
+    Theorem,
+    Unit,
+    Field,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporalFactEdge {
+    pub id: EdgeId,
+    pub subject: EntityId,
+    pub predicate: Predicate,
+    pub object: EntityId,
+
+    pub temporal: Bitemporal,
+    pub provenance: Vec<Provenance>,
+
+    pub confidence: f32,
+    pub contradiction_pressure: f32,
+    pub supersedes: Vec<EdgeId>,
+    pub superseded_by: Vec<EdgeId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Predicate {
+    Supports,
+    Contradicts,
+    Extends,
+    Refines,
+    Supersedes,
+    Assumes,
+    Derives,
+    Formalizes,
+    Predicts,
+    Measures,
+    Implements,
+    UsesDataset,
+    HasParameter,
+    HasEquation,
+    HasRegimeOfValidity,
+    HasCounterexample,
+    Cites,
+    AuthoredBy,
+    DependsOn,
+    PrerequisiteOf,
+    AnalogousTo,
+}
+```
+
+---
+
+# 12. Write path
+
+The write path is a compiler pipeline. It should accept raw events quickly, then perform extraction and consolidation asynchronously.
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant API
+    participant Ledger
+    participant Observer
+    participant Extractor
+    participant Validator
+    participant Store
+    participant Indexes
+    participant Reflector
+
+    Agent->>API: observe(EventEnvelope)
+    API->>Ledger: append raw episode receipt
+    Ledger-->>API: EpisodeReceipt
+    API-->>Agent: fast ack
+
+    API->>Observer: segment + compress
+    Observer->>Extractor: candidate memories
+    Extractor->>Validator: claims/equations/entities/skills
+    Validator->>Store: apply mutation transaction
+    Store->>Ledger: append mutation receipt
+    Store->>Indexes: update projections
+    Indexes-->>Store: index receipts
+
+    Store->>Reflector: schedule consolidation
+    Reflector->>Store: concept/belief/topic updates
+```
+
+## 12.1 Event envelope
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventEnvelope {
+    pub source_kind: SourceKind,
+    pub source_uri: Option<String>,
+    pub actor: Option<EntityId>,
+    pub observed_at: DateTime<Utc>,
+    pub payload: EventPayload,
+    pub payload_hash: String,
+    pub privacy: PrivacyClass,
+    pub extraction_policy: ExtractionPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SourceKind {
+    UserMessage,
+    AgentMessage,
+    ToolCall,
+    ToolResult,
+    FileIngest,
+    PaperIngest,
+    CodeRun,
+    DatasetPreview,
+    HumanNote,
+    SelfReflection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExtractionPolicy {
+    RawOnly,
+    ObserveOnly,
+    ExtractCandidates,
+    FullCompile,
+}
+```
+
+## 12.2 Mutation event
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MemoryMutation {
+    AppendEpisode(Episode),
+    AddObject(MemoryObject),
+    UpdateObject {
+        id: MemoryId,
+        patch: MemoryPatch,
+        reason: String,
+    },
+    Supersede {
+        old_id: MemoryId,
+        new_id: MemoryId,
+        reason: String,
+    },
+    AddEdge(TemporalFactEdge),
+    CloseEdge {
+        edge_id: EdgeId,
+        valid_to: DateTime<Utc>,
+        reason: String,
+    },
+    AddIndexReceipt(IndexUpdateReceipt),
+    AddFeedback(OutcomeFeedback),
+}
+```
+
+The most important rule:
+
+```text
+Never rewrite a fact into a different fact.
+Add a new fact.
+Close or supersede the old one.
+Keep both.
+```
+
+---
+
+# 13. Read path: the Context Pack Compiler
+
+The model should not retrieve “chunks.” It should request a **ContextPack**.
+
+```mermaid
+flowchart LR
+    Q[RecallQuery] --> P[Query Parser]
+    P --> I[Intent + Time + Entities + Symbols]
+    I --> R1[Core/Stable Prefix]
+    I --> R2[BM25 Exact]
+    I --> R3[Vector ANN]
+    I --> R4[Entity Resolver]
+    I --> R5[Temporal Graph]
+    I --> R6[Hippo PPR]
+    I --> R7[Symbol / Equation]
+    I --> R8[Skill Library]
+    I --> R9[Eval / Failures]
+    I --> R10[Concept / RAPTOR / Community Summaries]
+
+    R1 --> F[Candidate Fusion]
+    R2 --> F
+    R3 --> F
+    R4 --> F
+    R5 --> F
+    R6 --> F
+    R7 --> F
+    R8 --> F
+    R9 --> F
+    R10 --> F
+
+    F --> T[Temporal + Status Filter]
+    T --> S[Score + Rerank]
+    S --> C[Budgeted Context Compiler]
+    C --> X[ContextPack with Citations, Contradictions, Freshness, Omitted Evidence]
+```
+
+HippoRAG’s key retrieval insight is to combine LLM-built knowledge graphs with Personalized PageRank-style activation for efficient multi-hop retrieval. ([Hugging Face][13]) MNEMOS-II uses that as one retrieval channel, not as the whole memory system.
+
+## 13.1 Recall query
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallQuery {
+    pub text: String,
+    pub intent: RecallIntent,
+    pub domains: Vec<String>,
+    pub time_scope: TimeScope,
+    pub evidence_level: EvidenceLevel,
+    pub token_budget: usize,
+    pub latency_budget_ms: u64,
+    pub include_contradictions: bool,
+    pub include_failures: bool,
+    pub include_omitted_evidence_notes: bool,
+    pub deterministic_seed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RecallIntent {
+    Answer,
+    Explain,
+    Plan,
+    Implement,
+    Debug,
+    LiteratureReview,
+    MathDerivation,
+    ScientificClaim,
+    Compare,
+    Reflect,
+    SkillLookup,
+    HistoricalAudit,
+}
+```
+
+## 13.2 Retrieval channels
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RetrievalChannel {
+    CorePinned,
+    StableObservations,
+    Bm25Exact,
+    VectorAnn,
+    EntityExact,
+    TemporalGraph,
+    PersonalizedPageRank,
+    SymbolEquation,
+    TheoremDag,
+    ProceduralSkill,
+    EvalFailure,
+    ConceptKernel,
+    RaptorTree,
+    GraphCommunity,
+}
+```
+
+## 13.3 Score fusion
+
+Use Reciprocal Rank Fusion plus calibrated features:
+
+```text
+score =
+  0.18 * rrf_channel_score
++ 0.15 * exact_match_score
++ 0.13 * semantic_similarity
++ 0.12 * entity_overlap
++ 0.11 * temporal_validity
++ 0.10 * graph_activation
++ 0.08 * source_quality
++ 0.07 * topic_strength
++ 0.06 * retrieval_success_ema
++ 0.05 * utility
++ 0.04 * recency
+- 0.10 * contradiction_penalty
+- 0.08 * stale_penalty
+```
+
+For math and science, change weights:
+
+```text
+MathDerivation:
+  exact symbols ↑
+  theorem prerequisites ↑
+  equation unit validity ↑
+  vector similarity ↓
+
+ScientificClaim:
+  source quality ↑
+  contradictions ↑
+  temporal validity ↑
+  belief state ↑
+
+Coding/Debug:
+  failed prior attempts ↑
+  exact error strings ↑
+  skill reliability ↑
+  environment recency ↑
+```
+
+## 13.4 Context pack schema
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextPack {
+    pub id: uuid::Uuid,
+    pub query: RecallQuery,
+    pub generated_at: DateTime<Utc>,
+    pub token_budget: usize,
+    pub estimated_tokens: usize,
+
+    pub core: Vec<PackItem>,
+    pub observations: Vec<PackItem>,
+    pub evidence: Vec<PackItem>,
+    pub concepts: Vec<PackItem>,
+    pub equations: Vec<PackItem>,
+    pub skills: Vec<PackItem>,
+    pub failures: Vec<PackItem>,
+    pub contradictions: Vec<PackItem>,
+    pub omitted: Vec<OmittedEvidenceNote>,
+
+    pub trace: RetrievalTrace,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackItem {
+    pub memory_id: MemoryId,
+    pub lane: MemoryLane,
+    pub rendered: String,
+    pub why_included: String,
+    pub score: f32,
+    pub citations: Vec<SourceSpan>,
+    pub freshness: Freshness,
+    pub confidence: CalibratedConfidence,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Freshness {
+    Current,
+    Historical { valid_to: DateTime<Utc> },
+    StaleWarning { reason: String },
+    Unknown,
+}
+```
+
+A context pack is allowed to be small because it is **dense**:
+
+```text
+- direct answer-relevant evidence
+- direct contradictions
+- current belief state
+- prerequisite concept kernels
+- exact equations/symbols
+- prior failures
+- executable skills
+- omitted-evidence note
+```
+
+---
+
+# 14. Stable prefix + dynamic retrieval
+
+The system uses two recall modes simultaneously.
+
+## 14.1 Stable prefix
+
+A tiny stable prefix is compiled from:
+
+```text
+memory/ROOT.md
+memory/ACTIVE_FRONTIER.md
+latest high-priority observations
+current task state
+known hard constraints
+```
+
+Mastra’s Observational Memory argues strongly for stable, prompt-cacheable context. Its Observer/Reflector architecture compresses raw history into dated observations and keeps the prompt predictable instead of rebuilding retrieval every turn. ([Mastra][4])
+
+## 14.2 Dynamic ContextPack
+
+For actual hard tasks, dynamic retrieval still happens:
+
+```text
+query → exact/vector/entity/graph/symbol/skill/eval retrieval → pack
+```
+
+This hybrid is better than either approach alone:
+
+```text
+stable prefix = speed and continuity
+dynamic pack  = precision and depth
+```
+
+---
+
+# 15. Agent calls: what agents should do
+
+This is the operational interface.
+
+```rust
+#[async_trait::async_trait]
+pub trait MnemosEngine {
+    async fn observe(&self, event: EventEnvelope) -> Result<EpisodeReceipt>;
+
+    async fn propose(&self, episode: EpisodeId) -> Result<Vec<CandidateMutation>>;
+
+    async fn commit(&self, mutations: Vec<CandidateMutation>) -> Result<MutationReceipt>;
+
+    async fn recall(&self, query: RecallQuery) -> Result<ContextPack>;
+
+    async fn recall_deep(&self, query: RecallQuery) -> Result<ContextPack>;
+
+    async fn reflect(&self, scope: ReflectionScope) -> Result<ReflectionReport>;
+
+    async fn consolidate(&self, job: ConsolidationJob) -> Result<ConsolidationReport>;
+
+    async fn feedback(&self, outcome: OutcomeFeedback) -> Result<MutationReceipt>;
+
+    async fn promote_skill(&self, candidate: SkillCandidate) -> Result<SkillPromotionReport>;
+
+    async fn explain(&self, id: MemoryId) -> Result<MemoryExplanation>;
+
+    async fn rebuild_projection(&self, projection: ProjectionKind) -> Result<RebuildReport>;
+
+    async fn audit(&self, scope: AuditScope) -> Result<AuditReport>;
+}
+```
+
+## 15.1 Mandatory agent behavior
+
+For a serious autonomous agent, I would enforce this policy:
+
+```text
+Before work:
+  recall(task)
+
+During work:
+  observe(tool calls, errors, discoveries)
+
+After work:
+  feedback(success/failure)
+  observe(final result)
+  propose candidate memories
+
+During idle:
+  reflect()
+  consolidate()
+  rehearse()
+  resolve contradictions
+  update topic strengths
+  promote repeated successful workflows into skills
+```
+
+## 15.2 Best agent calls for organization and compression
+
+The most useful calls are:
+
+```text
+observe(event)
+  Records what happened. Fast, append-only.
+
+compile_observations(scope)
+  Compresses raw episodes into dated observations.
+
+extract_candidates(episode)
+  Proposes claims, equations, resources, skills, questions.
+
+link_entities(candidates)
+  Resolves aliases, merges duplicates, creates graph links.
+
+validate_candidates(candidates)
+  Checks source spans, units, status transitions, duplicate risk.
+
+commit(mutations)
+  Applies only valid memory mutations.
+
+recall(query)
+  Returns a bounded context pack.
+
+reflect(scope)
+  Creates concept kernels, belief updates, meta-lessons.
+
+consolidate(topic)
+  Compresses many low-level memories into concept/domain maps.
+
+resolve_contradictions(topic)
+  Finds live conflicting claims and updates belief states.
+
+promote_skill(workflow)
+  Turns repeated successful action traces into tested procedures.
+
+log_outcome(pack_id, outcome)
+  Teaches the retriever what helped and what hurt.
+
+rehearse_next(n)
+  Selects memories/topics that should be reviewed or strengthened.
+
+explain(memory_id)
+  Shows provenance, why it exists, who/what supports it, and what contradicts it.
+```
+
+The agent gets smarter only when it closes the loop:
+
+```text
+retrieve → act → measure outcome → update utility → consolidate → improve retrieval
+```
+
+---
+
+# 16. Procedural memory
+
+Voyager’s most important lesson is that skill memory must be executable and improve through environment feedback, execution errors, and self-verification; its skill library helped the agent compound abilities and generalize to new tasks. ([Hugging Face][14])
+
+MNEMOS-II stores skills as tested artifacts, not loose snippets.
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillCard {
+    pub name: String,
+    pub description: String,
+    pub task_signature: TaskSignature,
+    pub language: SkillLanguage,
+
+    pub code_ref: CodeRef,
+    pub preconditions: Vec<Condition>,
+    pub postconditions: Vec<Condition>,
+    pub examples: Vec<SkillExample>,
+
+    pub tests: Vec<SkillTest>,
+    pub verification: SkillVerification,
+    pub reliability: SkillReliability,
+
+    pub failure_modes: Vec<String>,
+    pub linked_episodes: Vec<EpisodeId>,
+    pub linked_resources: Vec<MemoryId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SkillLanguage {
+    Rust,
+    Python,
+    Shell,
+    Sql,
+    Zyal,
+    McpTool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillReliability {
+    pub success_count: u64,
+    pub failure_count: u64,
+    pub last_success: Option<DateTime<Utc>>,
+    pub last_failure: Option<DateTime<Utc>>,
+    pub avg_runtime_ms: f64,
+    pub reliability_score: f32,
+}
+```
+
+Promotion rule:
+
+```text
+draft → tested → trusted → degraded → retired
+```
+
+A skill becomes `trusted` only if:
+
+```text
+- task signature is clear
+- preconditions are explicit
+- at least one successful episode exists
+- test or verification recipe exists
+- failure modes are recorded
+- sandbox execution passes
+```
+
+---
+
+# 17. Knowledge compounding over time
+
+MNEMOS-II has five compounding loops.
+
+## 17.1 Observation loop
+
+```text
+raw interaction → dated observation → stable prefix
+```
+
+Purpose: continuity and low-latency recall.
+
+## 17.2 Semantic loop
+
+```text
+observation/resource → claims/equations/entities → temporal graph
+```
+
+Purpose: evidence-grounded knowledge.
+
+## 17.3 Belief loop
+
+```text
+claims + contradictions + source quality → belief state
+```
+
+Purpose: current stance without erasing history.
+
+## 17.4 Concept loop
+
+```text
+claim clusters + episodes + questions → concept kernels
+```
+
+Purpose: compression and abstraction.
+
+A-MEM is directly relevant here because it dynamically organizes memories using Zettelkasten-like notes, links, tags, context, and memory evolution when new memories arrive. ([NeurIPS Papers][15])
+
+## 17.5 Skill loop
+
+```text
+repeated successful workflow → tested skill → faster future action
+```
+
+Purpose: procedural intelligence.
+
+---
+
+# 18. Concept kernel design
+
+A concept kernel is the durable compressed form of knowledge.
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConceptKernel {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub short_definition: String,
+
+    pub prerequisites: Vec<MemoryId>,
+    pub core_claims: Vec<MemoryId>,
+    pub core_equations: Vec<MemoryId>,
+    pub canonical_examples: Vec<MemoryId>,
+
+    pub common_misconceptions: Vec<MemoryId>,
+    pub counterexamples: Vec<MemoryId>,
+    pub open_questions: Vec<MemoryId>,
+
+    pub datasets: Vec<MemoryId>,
+    pub code_repositories: Vec<MemoryId>,
+    pub skills: Vec<MemoryId>,
+
+    pub graph_community_id: Option<String>,
+    pub raptor_node_id: Option<String>,
+
+    pub compression: CompressionMetadata,
+    pub topic_state: TopicState,
+}
+```
+
+Required sections in the Markdown/YAML card:
+
+```text
+name
+aliases
+definition
+why it matters
+prerequisites
+core claims
+core equations
+assumptions
+regime of validity
+canonical examples
+source evidence
+contradictions
+counterexamples
+datasets
+code and tools
+open questions
+skills
+last review
+topic strength explanation
+```
+
+---
+
+# 19. Topic strength and memory utility
+
+The system should not treat every memory equally. It needs a visible utility model.
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopicState {
+    pub topic_id: String,
+    pub label: String,
+
+    pub strength: f32,
+    pub mastery: f32,
+    pub half_life_hours: f32,
+
+    pub recency: f32,
+    pub recurrence: f32,
+    pub utility: f32,
+    pub novelty: f32,
+    pub surprise: f32,
+    pub source_quality: f32,
+    pub contradiction_pressure: f32,
+    pub retrieval_success: f32,
+    pub graph_centrality: f32,
+
+    pub next_review_at: Option<DateTime<Utc>>,
+    pub last_consolidated_at: Option<DateTime<Utc>>,
+}
+```
+
+Update formula:
+
+```text
+topic_strength =
+  0.16 * recurrence
++ 0.14 * utility
++ 0.13 * retrieval_success
++ 0.12 * source_quality
++ 0.11 * graph_centrality
++ 0.10 * novelty
++ 0.09 * contradiction_pressure
++ 0.08 * recency
++ 0.07 * surprise
++ reinforcement_bonus
+- decay
+```
+
+This is explainable. The agent should be able to ask:
+
+```text
+why is this topic strong?
+why was this concept consolidated?
+why was this memory omitted?
+why is this belief contested?
+```
+
+---
+
+# 20. Million-memory scale strategy
+
+The target is millions to tens of millions of memory objects on commodity hardware.
+
+## 20.1 Tiering
+
+```text
+Tier 0: Core
+  Always loaded. Tiny. < 32 KB.
+
+Tier 1: Hot
+  Current project, active topics, recent high-utility observations.
+  In RAM + redb + indexes.
+
+Tier 2: Warm
+  Trusted concept cards, claims, resources, skills.
+  Local disk + projections.
+
+Tier 3: Cold
+  Raw episodes, old tool logs, low-utility traces.
+  zstd-compressed, retrieved only by exact/time/source.
+
+Tier 4: External
+  PDFs, datasets, repos, raw data.
+  Stored as pointers, manifests, checksums, download scripts.
+```
+
+## 20.2 Segmentation
+
+```text
+segment key = tenant / project / lane / domain / epoch
+```
+
+Example:
+
+```text
+project=openqg
+lane=semantic
+domain=physics.qft
+epoch=2026-Q2
+```
+
+Each segment has:
+
+```text
+- ledger slice
+- redb key range
+- Tantivy segment
+- HNSW shard
+- temporal graph delta
+- roaring bitmap filters
+- checksum manifest
+```
+
+## 20.3 Query planning
+
+A query does not search everything.
+
+```text
+1. parse intent
+2. detect exact IDs/symbols/entities/time
+3. choose relevant lanes
+4. choose relevant segments
+5. run fanout
+6. fuse
+7. expand graph only from strong seeds
+8. pack
+```
+
+## 20.4 Compressed indexes
+
+Use:
+
+```text
+- Roaring bitmaps for lane/tag/domain/time filters
+- zstd for raw episodes
+- f16 or int8 vectors for cold embeddings
+- full precision vectors for hot/warm
+- CSR adjacency for graph traversal
+- append-only graph deltas before compaction
+```
+
+Roaring bitmaps are a strong fit for fast compressed set filtering because they are designed as compressed bitmaps and can be dramatically faster than conventional compressed bitmap approaches. ([Roaring Bitmap][16])
+
+---
+
+# 21. Hot-path latency targets
+
+These are engineering targets, not guaranteed claims before benchmarking.
+
+| Operation              | Target p50 |     Target p95 | Notes                 |
+| ---------------------- | ---------: | -------------: | --------------------- |
+| `observe(raw event)`   |     < 5 ms |        < 25 ms | Append only, no LLM   |
+| `recall(simple exact)` |    < 30 ms |       < 120 ms | BM25/entity only      |
+| `recall(hybrid)`       |   < 120 ms |       < 750 ms | BM25 + vector + graph |
+| `recall(math exact)`   |   < 100 ms |       < 500 ms | Symbol index critical |
+| `context_pack compile` |    < 20 ms |        < 80 ms | No LLM                |
+| `feedback(outcome)`    |    < 10 ms |        < 50 ms | Updates utility/event |
+| `reflect/consolidate`  | background |     background | LLM allowed           |
+| `deep research recall` |     1–10 s | task-dependent | LLM multi-hop allowed |
+
+The key is that only the hot path must be realtime. Reflection, contradiction review, extraction, and summarization can happen asynchronously.
+
+---
+
+# 22. Engineering implementation choices
+
+## Rust-first baseline
+
+| Need                     | Choice                           | Why                               |
+| ------------------------ | -------------------------------- | --------------------------------- |
+| Canonical embedded store | `redb`                           | Pure Rust, ACID, MVCC, crash-safe |
+| Mutation log             | JSONL + CBOR + BLAKE3 hash chain | Reviewable + compact              |
+| Exact search             | Tantivy                          | Rust full-text/BM25               |
+| Vector search            | `hnsw_rs`                        | Rust HNSW                         |
+| Embeddings               | `fastembed` / Candle             | Local inference                   |
+| Graph projection         | custom CSR + petgraph algorithms | Fast local traversal              |
+| Graph scale adapter      | Kuzu optional                    | Embedded graph DB and Rust API    |
+| Filters                  | Roaring bitmaps                  | Fast compressed set ops           |
+| Async runtime            | Tokio                            | Mature Rust async                 |
+| Serialization            | serde + postcard/CBOR            | Deterministic records             |
+| Compression              | zstd                             | Cold storage                      |
+| Signing                  | ed25519-dalek                    | Signed receipts                   |
+| Hashing                  | blake3                           | Fast content hashes               |
+| CLI                      | clap                             | Rust CLI                          |
+| API                      | MCP + gRPC + HTTP                | Agent integration                 |
+
+Tantivy, redb, hnsw_rs, fastembed, and Kuzu cover the essential local-first Rust stack. ([Docs.rs][8])
+
+---
+
+# 23. Merkle/event-sourced ledger
+
+Every mutation produces a signed receipt.
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MutationReceipt {
+    pub id: MutationReceiptId,
+    pub seq: u64,
+    pub created_at: DateTime<Utc>,
+
+    pub mutation_hash: String,
+    pub prev_receipt_hash: String,
+    pub resulting_store_hash: String,
+
+    pub objects_created: Vec<MemoryId>,
+    pub objects_updated: Vec<MemoryId>,
+    pub objects_superseded: Vec<MemoryId>,
+    pub edges_created: Vec<EdgeId>,
+    pub edges_closed: Vec<EdgeId>,
+
+    pub source_hashes: Vec<String>,
+    pub warnings: Vec<MutationWarning>,
+    pub index_updates: Vec<IndexUpdateReceipt>,
+
+    pub signer: Option<String>,
+    pub signature: Option<String>,
+}
+```
+
+This enables:
+
+```text
+- deterministic replay
+- crash recovery
+- audit diffs
+- branch/merge
+- bad-memory rollback
+- projection rebuilds
+- memory provenance
+```
+
+---
+
+# 24. Contradiction handling
+
+Contradictions are first-class. The system must preserve them.
+
+```mermaid
+flowchart TD
+    A[New Claim] --> B{Matches existing subject/predicate/scope?}
+    B -- No --> C[Add claim]
+    B -- Yes --> D{Compatible object/regime?}
+    D -- Yes --> E[Add support edge / update confidence]
+    D -- No --> F[Create contradiction edge]
+    F --> G[Raise contradiction pressure]
+    G --> H[Update belief state]
+    H --> I{Old claim invalidated?}
+    I -- Yes --> J[Close valid_to on old edge]
+    I -- No --> K[Keep contested live claims]
+```
+
+Scientific domains often contain contested evidence. Automatically closing an old fact is only valid when the system has a clear supersession relation, such as a changed user preference, a replaced API endpoint, or a deprecated dataset version. For science, many contradictions stay live until a human or trusted verifier resolves them.
+
+---
+
+# 25. Belief update algorithm
+
+```text
+for each proposition P:
+  collect supporting claims S
+  collect contradicting claims C
+  weight by:
+    source_quality
+    recency
+    method quality
+    replication count
+    contradiction pressure
+    domain trust policy
+  update belief confidence
+  record revision receipt
+  never delete old stance
+```
+
+Pseudo-code:
+
+```rust
+pub fn update_belief(input: BeliefUpdateInput) -> BeliefRevision {
+    let support = weighted_evidence(&input.supporting_claims);
+    let contradiction = weighted_evidence(&input.contradicting_claims);
+    let prior = input.current_confidence;
+
+    let delta = sigmoid(support - contradiction) - 0.5;
+    let posterior = clamp01(prior + input.learning_rate * delta);
+
+    BeliefRevision {
+        at: Utc::now(),
+        reason: explain_delta(support, contradiction, posterior),
+        confidence_before: prior,
+        confidence_after: posterior,
+        receipt_id: input.receipt_id,
+    }
+}
+```
+
+---
+
+# 26. Math/science specialization
+
+This is where MNEMOS-II becomes more than agent memory.
+
+## 26.1 Equation discipline
+
+Every equation stores:
+
+```text
+- original source span
+- LaTeX
+- normalized symbolic form
+- variables
+- units
+- assumptions
+- regime of validity
+- derivation chain
+- limiting cases
+- related claims
+- known counterexamples
+- use cases
+```
+
+Vector search is never enough for equations. Use exact symbol search and BM25/phrase indexing.
+
+## 26.2 Units and dimensional analysis
+
+Reject or flag equations when units do not match.
+
+```rust
+pub fn check_dimensions(eq: &EquationCard) -> VerificationResult {
+    // Parse normalized symbolic form.
+    // Infer dimensions of LHS and RHS.
+    // Compare SI base powers.
+    // Return Passed / Failed / Inconclusive.
+    todo!()
+}
+```
+
+## 26.3 Theorem DAG
+
+```text
+theorem A uses theorem B
+theorem B invalidated
+→ theorem A downgraded from FormalCheckPassed to DependencyInvalidated
+```
+
+## 26.4 Dataset and code memory
+
+Raw data stays out of Git. Memory stores:
+
+```text
+- dataset DOI / URL / API endpoint
+- license
+- checksum if available
+- schema preview
+- download script
+- transform script
+- smoke test
+- benchmark result
+```
+
+## 26.5 Open-question generation
+
+Every concept kernel maintains:
+
+```text
+what is unknown?
+what would falsify this?
+what dataset would test it?
+what code needs to be written?
+what search query should run next?
+what contradiction is unresolved?
+```
+
+---
+
+# 27. Ingestion examples
+
+## 27.1 Paper ingestion
+
+```text
+observe(PaperIngest)
+→ ResourceCard
+→ Episode
+→ observations
+→ ClaimCards
+→ EquationCards
+→ entities
+→ citation edges
+→ concept updates
+→ open questions
+```
+
+## 27.2 Code run ingestion
+
+```text
+observe(CodeRun)
+→ Episode
+→ EvalMemory
+→ if repeated success: SkillCandidate
+→ if failure: CounterexampleCard / failure mode
+→ update skill reliability
+```
+
+## 27.3 Scientific dataset ingestion
+
+```text
+observe(DatasetPreview)
+→ ResourceCard
+→ DatasetManifest
+→ schema preview
+→ smoke-test skill
+→ linked observables
+→ benchmark recipe
+```
+
+---
+
+# 28. Example context pack
+
+```text
+ContextPack: cp_018f...
+Query: "Can we test model X against public gravitational-wave data?"
+
+CORE
+- Project invariant: do not store raw upstream datasets in repo.
+- Active goal: generate scripts and smoke tests, not large data commits.
+
+CURRENT BELIEF
+- Belief: Public data can be used if license/terms permit and scripts reproduce access.
+  Confidence: 0.82
+  Basis: dataset manifests + prior successful download scripts.
+
+EVIDENCE
+1. ResourceCard: GWOSC API/data portal
+   why_included: exact entity match + dataset relevance
+   citation: source span...
+   freshness: current as of retrieved_at...
+
+2. SkillCard: download_dataset_preview
+   why_included: matching task signature
+   reliability: 7 successes / 1 failure
+
+CONTRADICTIONS / WARNINGS
+- Prior failure: checksum mismatch on mirror endpoint.
+- Omitted evidence: 14 older dataset cards excluded by budget.
+
+NEXT ACTIONS
+- Run skill: preview_public_dataset
+- Create dataset manifest
+- Record license and checksum
+- Commit script, not data
+```
+
+---
+
+# 29. Evaluation system
+
+LongMemEval is useful because it tests information extraction, multi-session reasoning, temporal reasoning, knowledge updates, and abstention over long chat histories. ([Hugging Face][17]) But for your goal, LongMemEval is not enough. You need science/code/memory benchmarks.
+
+## 29.1 Required benchmark suites
+
+```text
+1. LongMemEval-style memory QA
+2. LoCoMo-style multi-session recall
+3. BEAM/10M-token scale tests
+4. Lost-in-the-middle context packing tests
+5. Exact equation retrieval tests
+6. Theorem dependency invalidation tests
+7. Temporal contradiction tests
+8. Scientific literature review tests
+9. Dataset manifest reproducibility tests
+10. Procedural skill promotion tests
+11. Coding-agent regression tests
+12. Memory poisoning/adversarial source tests
+```
+
+## 29.2 Metrics
+
+```text
+retrieval_recall@k
+citation_precision
+citation_coverage
+context_pack_density
+answer_groundedness
+contradiction_warning_rate
+stale_fact_leak_rate
+belief_revision_accuracy
+equation_exact_hit_rate
+unit_validation_catch_rate
+skill_reuse_success_rate
+skill_regression_rate
+latency_p50/p95/p99
+cost_per_recall
+compression_ratio
+rebuild_determinism
+mutation_audit_completeness
+```
+
+## 29.3 Context-pack density
+
+```text
+density = useful_tokens / total_tokens
+```
+
+Track whether each packed item was actually used in the final answer or action.
+
+## 29.4 Outcome feedback
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomeFeedback {
+    pub context_pack_id: uuid::Uuid,
+    pub task_id: Option<String>,
+    pub outcome: Outcome,
+    pub human_rating: Option<f32>,
+    pub automatic_score: Option<f32>,
+    pub used_memory_ids: Vec<MemoryId>,
+    pub harmful_memory_ids: Vec<MemoryId>,
+    pub missing_memory_description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Outcome {
+    Success,
+    Partial,
+    Failure,
+    IncorrectAnswer,
+    UnsupportedClaim,
+    RepeatedKnownMistake,
+    ToolError,
+    Timeout,
+}
+```
+
+Feedback updates:
+
+```text
+memory.utility
+retrieval_success_ema
+topic_strength
+skill_reliability
+contradiction_pressure
+future ranking weights
+```
+
+---
+
+# 30. Testing plan
+
+## 30.1 Unit tests
+
+```text
+- schema round trips preserve version
+- invalid status transitions rejected
+- bitemporal intervals work
+- facts supersede, not overwrite
+- beliefs require support links
+- equations require source spans
+- trusted claims require provenance
+- skills require tests before trusted
+- context packs enforce token budget
+```
+
+## 30.2 Property tests
+
+```text
+- ledger replay is deterministic
+- rebuild(projections) yields same index manifests
+- mutation receipts form valid hash chain
+- no rejected memory appears unless explicitly requested
+- historical query returns historical fact
+- current query excludes expired fact
+```
+
+## 30.3 Integration tests
+
+```text
+- ingest a paper and retrieve cited claims
+- ingest a contradiction and see belief update
+- ingest a failed code run and retrieve prior failure during debug
+- promote successful workflow into skill
+- run dataset preview without storing raw data
+- rebuild from ledger after simulated crash
+```
+
+## 30.4 Adversarial tests
+
+```text
+- prompt injection inside scraped PDF
+- malicious README telling agent to alter memory policy
+- fake citation
+- duplicate paper with changed title
+- stale API docs
+- conflicting claims with same source
+- poisoned skill snippet
+```
+
+## 30.5 Performance tests
+
+```text
+1M objects:
+  hybrid recall p50 <= 120 ms
+  p95 <= 750 ms
+  p99 <= 1500 ms
+
+10M objects:
+  filtered recall p50 <= 250 ms
+  p95 <= 1500 ms
+  p99 <= 3000 ms
+
+write:
+  observe p50 <= 5 ms
+  append ledger p50 <= 3 ms
+  async compile no hot-path blocking
+```
+
+---
+
+# 31. Security and memory poisoning rules
+
+All external content is hostile until validated.
+
+```text
+raw episode      = untrusted
+candidate memory = untrusted proposal
+trusted memory   = validated, cited, status-approved
+belief           = evidence-weighted stance, not raw assertion
+skill            = executable only after sandbox/test
+```
+
+Rules:
+
+```text
+- LLM cannot directly mutate trusted memory.
+- LLM can propose mutations.
+- Validators enforce schemas.
+- Secrets never enter semantic memory.
+- Vault pointers are access-controlled.
+- Prompt injection inside sources is stored as source text, never obeyed.
+- Tool outputs get privacy classes.
+- Agent policy/core memory cannot be edited without explicit permission.
+```
+
+---
+
+# 32. MCP / ZYAL tool interface
+
+Expose a small, powerful tool set.
+
+```json
+{
+  "tools": [
+    "mnemos.observe",
+    "mnemos.recall",
+    "mnemos.recall_deep",
+    "mnemos.commit",
+    "mnemos.feedback",
+    "mnemos.reflect",
+    "mnemos.consolidate",
+    "mnemos.promote_skill",
+    "mnemos.explain",
+    "mnemos.audit"
+  ]
+}
+```
+
+## 32.1 Tool examples
+
+```json
+{
+  "tool": "mnemos.recall",
+  "args": {
+    "text": "What do we know about equation extraction from arXiv PDFs?",
+    "intent": "LiteratureReview",
+    "domains": ["memory", "scientific-ingest"],
+    "time_scope": "current",
+    "evidence_level": "cited",
+    "token_budget": 6000,
+    "include_contradictions": true,
+    "include_failures": true
+  }
+}
+```
+
+```json
+{
+  "tool": "mnemos.feedback",
+  "args": {
+    "context_pack_id": "cp_018f...",
+    "outcome": "Failure",
+    "harmful_memory_ids": ["mem_..."],
+    "missing_memory_description": "Did not include prior failed regex extractor attempt."
+  }
+}
+```
+
+---
+
+# 33. Git-backed curated memory
+
+Machine memory is not enough. The human-readable repo memory should be curated.
+
+```text
+memory/
+  ROOT.md
+  ACTIVE_FRONTIER.md
+  RETRIEVAL_PLAYBOOK.md
+  CONTRADICTIONS.md
+  domains/
+    physics/
+      ROOT.md
+      quantum_gravity.md
+      qft.md
+      gr.md
+      cosmology.md
+    math/
+      topology.md
+      differential_geometry.md
+      category_theory.md
+  concepts/
+    gauge_invariance.yaml
+    path_integral.yaml
+  resources/
+    papers/
+    datasets/
+    repos/
+  skills/
+    paper_ingest.yaml
+    dataset_preview.yaml
+```
+
+Every curated card should be generated from canonical records or explicitly human-authored.
+
+---
+
+# 34. Example curated concept card
+
+```yaml
+id: concept:gauge-invariance
+schema_version: 1
+name: Gauge invariance
+aliases:
+  - gauge symmetry
+lane: Concept
+status: Trusted
+
+definition: >
+  A redundancy in the mathematical description of a physical system where
+  different field configurations represent the same physical state.
+
+prerequisites:
+  - concept:field-theory
+  - concept:symmetry
+  - concept:lagrangian
+
+core_claims:
+  - claim:...
+core_equations:
+  - equation:...
+counterexamples: []
+common_misconceptions:
+  - claim:...
+
+evidence:
+  - source_uri: doi:...
+    span: ...
+  - source_uri: arxiv:...
+    span: ...
+
+open_questions:
+  - question:...
+
+linked_skills:
+  - skill:derive-noether-current
+
+topic_state:
+  strength: 0.84
+  mastery: 0.61
+  contradiction_pressure: 0.12
+  next_review_at: 2026-05-19T00:00:00Z
+```
+
+---
+
+# 35. Rollout plan
+
+## Phase 0: Schema and ledger
+
+```text
+Deliver:
+- mnemos-types
+- append-only ledger
+- redb object store
+- mutation receipts
+- replay
+- CLI inspect
+
+Acceptance:
+- cargo test
+- crash replay passes
+- deterministic object hashes
+```
+
+## Phase 1: Local recall
+
+```text
+Deliver:
+- Tantivy BM25
+- HNSW vector index
+- entity resolver
+- context pack compiler
+- recall traces
+
+Acceptance:
+- exact queries work
+- cited context packs
+- p50 recall under target on fixture corpus
+```
+
+## Phase 2: Temporal graph
+
+```text
+Deliver:
+- entity graph
+- temporal edges
+- contradiction detection
+- historical queries
+- PPR activation
+
+Acceptance:
+- current vs historical facts correct
+- contradictions included in context packs
+```
+
+## Phase 3: Observation and compression
+
+```text
+Deliver:
+- Observer compiler
+- stable prefix
+- concept kernels
+- topic strength
+- consolidation jobs
+
+Acceptance:
+- raw logs compress 5–20x
+- source drill-through preserved
+```
+
+## Phase 4: Science/math specialization
+
+```text
+Deliver:
+- equation cards
+- unit checks
+- theorem DAG
+- dataset manifests
+- experiment logs
+
+Acceptance:
+- exact equation recall
+- unit mismatch catches
+- dataset scripts reproducible
+```
+
+## Phase 5: Procedural memory
+
+```text
+Deliver:
+- skill cards
+- sandbox runner
+- promotion rules
+- reliability updates
+
+Acceptance:
+- failed skills degrade
+- repeated successful workflows promote
+```
+
+## Phase 6: Agent integration
+
+```text
+Deliver:
+- MCP server
+- ZYAL integration
+- memory policy
+- feedback loop
+
+Acceptance:
+- agent calls observe/recall/feedback automatically
+- memory improves future tasks measurably
+```
+
+---
+
+# 36. Detailed 0–100 rubric
+
+## 36.1 Rubric
+
+| Axis                           |  Weight | What perfect means                                                                              |
+| ------------------------------ | ------: | ----------------------------------------------------------------------------------------------- |
+| Taxonomic fidelity             |       8 | Clean separation of core, episodic, semantic, belief, concept, procedural, resource, eval, meta |
+| Temporal + epistemic grounding |      10 | Bitemporal facts, supersession, contradictions, belief/fact separation                          |
+| Provenance + auditability      |       8 | Source spans, hashes, signed receipts, deterministic rebuilds                                   |
+| Retrieval quality              |      10 | Hybrid exact/vector/entity/graph/symbol/skill/eval retrieval                                    |
+| Realtime speed                 |       8 | Zero-LLM hot path, low-latency projections, segment filtering                                   |
+| Compression efficiency         |       8 | Observation prefix, concept kernels, RAPTOR, community summaries                                |
+| Adaptability                   |       8 | Reflection, topic strength, contradiction pressure, learned utility                             |
+| Procedural compounding         |       8 | Tested executable skills, failure memory, reliability tracking                                  |
+| Math/science rigor             |       8 | Equations, units, theorem DAGs, datasets, experiments, regimes                                  |
+| Outcome learning               |       7 | Feedback-driven retrieval/utility updates and eval memory                                       |
+| Million-memory scalability     |       8 | Shards, tiers, compressed indexes, rebuildable projections                                      |
+| Security/privacy               |       5 | Poisoning resistance, vault separation, access policies                                         |
+| Buildability/operability       |       6 | Rust-first, staged rollout, local-first baseline, clear tests                                   |
+| **Total**                      | **100** |                                                                                                 |
+
+## 36.2 MNEMOS-II score
+
+| Axis                           |  Weight |    Score | Why                                                                               |
+| ------------------------------ | ------: | -------: | --------------------------------------------------------------------------------- |
+| Taxonomic fidelity             |       8 |      7.9 | Covers all necessary cognitive and scientific lanes without collapsing categories |
+| Temporal + epistemic grounding |      10 |      9.9 | Bitemporal facts, contradiction pressure, belief/fact separation, supersession    |
+| Provenance + auditability      |       8 |      8.0 | Ledger, source spans, hashes, receipts, deterministic replay                      |
+| Retrieval quality              |      10 |      9.8 | Exact + vector + graph + PPR + symbol + skill + eval + temporal                   |
+| Realtime speed                 |       8 |      7.7 | Hot path is zero-LLM; deep reflection is async; scale still must be proven        |
+| Compression efficiency         |       8 |      7.9 | Stable observations, concept kernels, RAPTOR, GraphRAG community reports          |
+| Adaptability                   |       8 |      7.8 | Topic strength, reflection, utility, belief revision, consolidation               |
+| Procedural compounding         |       8 |      7.8 | Voyager-style skills with tests, failure modes, reliability                       |
+| Math/science rigor             |       8 |      7.9 | First-class equations, units, theorem DAGs, datasets, experiments                 |
+| Outcome learning               |       7 |      6.8 | Feedback updates utility and retrieval; learned policy comes later                |
+| Million-memory scalability     |       8 |      7.8 | Segmenting, tiering, compressed filters, rebuildable projections                  |
+| Security/privacy               |       5 |      4.9 | Strong poisoning boundaries and vault isolation                                   |
+| Buildability/operability       |       6 |      5.6 | Large system, but modular and phaseable                                           |
+| **Total**                      | **100** | **97.8** | Best architecture I would build now                                               |
+
+I would not score it 100 because no architecture deserves 100 before real benchmark results. The remaining uncertainty is empirical: extraction quality, contradiction resolution quality, graph noise, and latency at 10M+ objects must be measured.
+
+---
+
+# 37. Comparative score snapshot
+
+| System                            |    Score | Why                                                                                                 |
+| --------------------------------- | -------: | --------------------------------------------------------------------------------------------------- |
+| Flat vector RAG                   |       35 | Fast-ish but temporally blind, epistemically weak, poor procedural memory                           |
+| Letta/MemGPT-style hierarchy      |       72 | Excellent core/archival framing, but self-editing memory can corrupt without stricter provenance    |
+| Mem0-style production memory      |       78 | Practical extraction/retrieval and graph variant, but insufficient for formal science               |
+| MIRIX-style typed memory          |       84 | Strong taxonomy; needs stricter temporal/belief/provenance/science machinery                        |
+| Graphiti/Zep-style temporal graph |       86 | Excellent temporal truth and provenance; weak procedural/math specialization                        |
+| A-MEM-style Zettelkasten          |       82 | Excellent concept evolution; needs stronger temporal and audit controls                             |
+| Hindsight-style epistemic memory  |       90 | Excellent fact/experience/belief separation; needs procedural and science tooling                   |
+| Mastra Observational Memory       |       84 | Excellent compression and prompt-cache speed; not enough for deep scientific graph reasoning        |
+| ANTIGRAVITY CMC as pasted         |       93 | Very strong synthesis; needs more explicit event sourcing, scale/tiering, and science schemas       |
+| CLAUDE/MNEMOS spec                |       95 | Extremely strong; slightly too broad and optimistic, but excellent                                  |
+| CODEX_MEMSPEC                     |       94 | More buildable and disciplined, slightly less ambitious                                             |
+| **MNEMOS-II**                     | **97.8** | Combines the strongest ideas with event sourcing, zero-LLM hot path, science rigor, and compression |
+
+---
+
+# 38. The final design principle
+
+The memory system should make the agent smarter in four ways:
+
+```text
+1. Recall faster than a human.
+2. Remember more accurately than a human.
+3. Compress knowledge more aggressively than a human.
+4. Preserve provenance better than a human.
+```
+
+But it should **not** pretend that summaries are truth.
+
+The killer architecture is:
+
+```text
+event-sourced canonical memory
++ typed cognitive lanes
++ temporal knowledge graph
++ belief/fact separation
++ stable observation prefix
++ hybrid retrieval compiler
++ concept-kernel compression
++ procedural skill memory
++ science/math validators
++ feedback-driven utility learning
++ Git-readable curated maps
+```
+
+That is the system I would build.
+
+[1]: https://direct.mit.edu/tacl/article/doi/10.1162/tacl_a_00638/119630/Lost-in-the-Middle-How-Language-Models-Use-Long?utm_source=chatgpt.com "Lost in the Middle: How Language Models Use Long Contexts | Transactions of the Association for Computational Linguistics | MIT Press"
+[2]: https://docs.mirix.io/getting-started/overview/ "Overview - MIRIX Documentation"
+[3]: https://huggingface.co/papers/2512.12818?utm_source=chatgpt.com "Paper page - Hindsight is 20/20: Building Agent Memory that Retains, Recalls, and Reflects"
+[4]: https://mastra.ai/research/observational-memory "Observational Memory: 95% on LongMemEval | Mastra Research"
+[5]: https://proceedings.iclr.cc/paper_files/paper/2024/hash/8a2acd174940dbca361a6398a4f9df91-Abstract-Conference.html "RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval"
+[6]: https://www.microsoft.com/en-us/research/publication/from-local-to-global-a-graph-rag-approach-to-query-focused-summarization/?msockid=304a4b771776652210765d9616aa64a3 "From Local to Global: A Graph RAG Approach to Query-Focused Summarization - Microsoft Research"
+[7]: https://github.com/cberner/redb?utm_source=chatgpt.com "GitHub - cberner/redb: An embedded key-value database in pure Rust · GitHub"
+[8]: https://docs.rs/tantivy/?utm_source=chatgpt.com "tantivy - Rust"
+[9]: https://docs.rs/hnsw_rs/latest/hnsw_rs/?utm_source=chatgpt.com "hnsw_rs - Rust"
+[10]: https://docs.rs/fastembed/?utm_source=chatgpt.com "fastembed - Rust"
+[11]: https://qdrant.tech/documentation/manage-data/vectors/?utm_source=chatgpt.com "Vectors - Qdrant"
+[12]: https://github.com/getzep/graphiti "GitHub - getzep/graphiti: Build Real-Time Knowledge Graphs for AI Agents · GitHub"
+[13]: https://huggingface.co/papers/2405.14831 "Paper page - HippoRAG: Neurobiologically Inspired Long-Term Memory for Large Language
+  Models"
+[14]: https://huggingface.co/papers/2305.16291 "Paper page - Voyager: An Open-Ended Embodied Agent with Large Language Models"
+[15]: https://papers.nips.cc/paper_files/paper/2025/hash/19909c36f51abc4856b4560aff3d36d6-Abstract-Conference.html "A-Mem: Agentic Memory for LLM Agents"
+[16]: https://roaringbitmap.org/about/?utm_source=chatgpt.com "Roaring Bitmaps -"
+[17]: https://huggingface.co/papers/2410.10813?utm_source=chatgpt.com "Paper page - LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory"

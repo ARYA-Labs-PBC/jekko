@@ -1,0 +1,369 @@
+## My strongest recommendation
+
+For an agent like OpenCode, I would **not** use plain `/tmp` as the sandbox. I would use a **three-layer sandbox**:
+
+1. **Workspace isolation:** a throwaway Git clone or worktree so the agent cannot alter your main working tree.
+2. **Runtime isolation:** rootless Podman/Docker, Docker Sandboxes, `bubblewrap`, `nsjail`, or a VM/microVM when the agent will run arbitrary code.
+3. **Observation/logging:** a wrapper that streams stdout/stderr back to the agent and records exit code, cwd, command, duration, diff, and artifacts.
+
+The key distinction: **Git/worktree/tmp protects your repo workflow; it does not sandbox code execution.** OpenCode’s own security page says OpenCode “does not sandbox the agent” and that its permission system is only a UX feature; it recommends Docker or a VM for true isolation. ([GitHub][1])
+
+## Best overall setup for OpenCode-style live sandboxing
+
+The best practical stack today is:
+
+**Docker Sandboxes / `sbx` → OpenCode → branch mode / worktree → logs + patch extraction**
+
+Docker’s current sandbox product is purpose-built for coding agents. Its docs say each sandbox gets its own Docker daemon, filesystem, and network, and that agents can install packages and modify files without touching the host. It is Early Access, but it is directly aimed at Claude Code, Codex, OpenCode, and similar agents. ([Docker Documentation][2])
+
+For OpenCode specifically, Docker documents:
+
+```bash
+cd ~/my-project
+sbx run opencode
+```
+
+and also supports stored secrets for providers like OpenAI, Anthropic, Google, xAI, Groq, and AWS. ([Docker Documentation][3])
+
+Why I like this best for your case: Docker Sandboxes use a microVM-style boundary with a separate Linux kernel, isolated filesystem, isolated network, isolated Docker Engine, and a host-side credential proxy. The docs explicitly note that mounting the host Docker socket would give the agent full access to the host Docker environment, so Docker Sandboxes avoid that by giving the sandbox its own Docker Engine. ([Docker Documentation][4])
+
+A very good pattern is:
+
+```bash
+cd ~/my-project
+sbx run opencode --branch agent/spike-auth-flow
+```
+
+Docker’s guide says branch mode creates a Git worktree under `.sbx/`, lets the agent work on its own branch/directory, and then you can review `git log`, `git diff main`, push, or open a PR. ([Docker Documentation][5])
+
+**Use this when:** you want the agent to run unattended, install dependencies, run tests, start dev servers, and still not touch your host environment.
+
+**Caveat:** It is Early Access and has platform requirements. As of the current Docker docs, `sbx` does not require Docker Desktop, but the prerequisites vary by OS: Apple silicon macOS Tahoe 26+, Windows 11 with Hypervisor Platform, or Ubuntu 24.04+ with KVM. ([Docker Documentation][5])
+
+---
+
+## If you want to avoid “full Docker”: my best lightweight local pattern
+
+Use a **throwaway Git clone**, not just `/tmp`, and give the agent a fake home directory.
+
+I would create a session layout like this:
+
+```text
+~/.local/state/agent-sandboxes/
+  2026-05-11T143012Z-opencode-auth-spike/
+    repo/          # disposable clone or worktree
+    home/          # fake HOME
+    tmp/           # TMPDIR
+    cache/         # pip/npm/cargo/go caches if you allow them
+    logs/
+      transcript.log
+      commands.jsonl
+    artifacts/
+      changes.patch
+      junit.xml
+      stdout.txt
+      stderr.txt
+```
+
+A minimal launcher:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+src_repo="${1:-$(pwd)}"
+id="$(date -u +%Y%m%dT%H%M%SZ)-agent-$RANDOM"
+root="${AGENT_SANDBOX_ROOT:-$HOME/.local/state/agent-sandboxes}/$id"
+
+mkdir -p "$root"/{home,tmp,cache,logs,artifacts}
+
+# Prefer a real clone when you want to avoid touching repo metadata.
+git clone --no-local --no-hardlinks "$src_repo" "$root/repo"
+git -C "$root/repo" checkout -b "agent/$id"
+
+(
+  cd "$root/repo"
+
+  env -i \
+    HOME="$root/home" \
+    TMPDIR="$root/tmp" \
+    XDG_CACHE_HOME="$root/cache" \
+    PATH="$PATH" \
+    AGENT_SANDBOX_ROOT="$root" \
+    bash -lc '
+      set -o pipefail
+      opencode 2>&1 | tee "$AGENT_SANDBOX_ROOT/logs/transcript.log"
+    '
+)
+
+git -C "$root/repo" status --short > "$root/artifacts/status.txt"
+git -C "$root/repo" diff --binary > "$root/artifacts/changes.patch"
+
+echo "Sandbox: $root"
+echo "Patch:   $root/artifacts/changes.patch"
+```
+
+I prefer `git clone --no-local --no-hardlinks` over a local worktree when I care about not affecting repo metadata. Git’s docs say local path cloning defaults to local optimizations and hardlinks object files when possible; `--no-hardlinks` forces copies. Git also warns that `--shared` can make the clone dependent on the source repository and potentially corrupt if source objects are later removed. ([Git][6])
+
+A `git worktree` is still great for normal development because Git officially supports multiple working trees attached to one repository. ([Git][7]) But for an agent, a worktree is **workflow isolation**, not security isolation. It prevents dirtying your checked-out files, but the agent still has a `.git` file pointing back into shared repo metadata. For untrusted or overly autonomous agents, use a clone or container.
+
+---
+
+## Should this live in `/tmp`?
+
+Use `/tmp` only as a **scratch backing store**, not as your sandbox strategy.
+
+`mktemp -d` is the right way to create unique temp directories safely. ([Linux Die][8]) But `/tmp` gives you no protection from reading your home directory, touching your repo, using your SSH agent, accessing your network, or consuming CPU/RAM. It is just a directory.
+
+Use:
+
+```bash
+root="$(mktemp -d "${TMPDIR:-/tmp}/agent-sandbox.XXXXXX")"
+trap 'rm -rf "$root"' EXIT
+```
+
+when the sandbox should disappear immediately. Use `~/.local/state/agent-sandboxes` when you want logs, diffs, and artifacts to survive for debugging. Use `/var/tmp` only when you intentionally want temporary data to survive reboot; the Filesystem Hierarchy Standard says `/var/tmp` is for temporary files preserved between reboots and is more persistent than `/tmp`. ([specifications.freedesktop.org][9])
+
+---
+
+## Best runtime isolation options, ranked
+
+### 1. MicroVM / Docker Sandboxes: best for autonomous agents
+
+Best when the agent runs inside the environment and needs freedom. You get separate filesystem, network controls, isolated Docker Engine, and better credential handling. Docker’s isolation docs say each agent runs in its own microVM with hypervisor, network, Docker Engine, and credential isolation. ([Docker Documentation][4])
+
+Use this for OpenCode in “do real work, run tests, install deps” mode.
+
+```bash
+cd ~/project
+sbx run opencode --branch agent/my-spike
+```
+
+This is my top pick if you can tolerate the Early Access tooling.
+
+### 2. Rootless Podman or rootless Docker: best mature local default
+
+If you do not want Docker Sandboxes, I would use **rootless Podman** on Linux. Podman is daemonless and supports running containers as a non-root user; Red Hat’s rootless Podman writeup calls out that rootless containers can be created and managed without admin rights and add a security layer because a compromised container engine/runtime should not directly give host root. ([Red Hat Developer][10])
+
+A hardened command template:
+
+```bash
+podman run --rm -it \
+  --userns=keep-id \
+  --user "$(id -u):$(id -g)" \
+  --network=none \
+  --cpus=2 \
+  --memory=4g \
+  --pids-limit=512 \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+  --tmpfs /var/tmp:rw,nosuid,nodev,size=512m \
+  --mount type=bind,src="$root/repo",dst=/workspace,rw \
+  --mount type=bind,src="$root/home",dst=/home/agent,rw \
+  -w /workspace \
+  your-agent-image \
+  opencode
+```
+
+For Docker, use the same shape:
+
+```bash
+docker run --rm -it \
+  --user "$(id -u):$(id -g)" \
+  --network none \
+  --cpus=2 \
+  --memory=4g \
+  --pids-limit=512 \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+  --mount type=bind,src="$root/repo",dst=/workspace,rw \
+  -w /workspace \
+  your-agent-image \
+  opencode
+```
+
+Important Docker details: bind mounts are writable by default and can let container processes modify host files, so mount only the disposable clone/worktree or use `readonly/ro`. ([Docker Documentation][11]) Docker’s `--network none` isolates the container networking stack so only loopback exists. ([Docker Documentation][12]) Docker also supports CPU and memory constraints; without limits, containers can use as much host CPU/memory as the scheduler allows. ([Docker Documentation][13])
+
+For hardening, OWASP recommends running as an unprivileged user, dropping capabilities, using `no-new-privileges`, and making filesystems/read-write mounts as narrow as possible. ([OWASP Cheat Sheet Series][14])
+
+### 3. `bubblewrap` / `bwrap`: best lightweight Linux filesystem sandbox
+
+`bubblewrap` is attractive if you want “not Docker.” It can make a private mount namespace, fake home, private `/tmp`, read-only `/usr`, and only bind the workspace. But its own maintainers emphasize that it is a tool for constructing sandboxes, not a complete sandbox policy; protection depends entirely on the arguments you pass. ([GitHub][15])
+
+A rough shape:
+
+```bash
+bwrap \
+  --unshare-all \
+  --share-net \
+  --die-with-parent \
+  --new-session \
+  --proc /proc \
+  --dev /dev \
+  --ro-bind /usr /usr \
+  --ro-bind /bin /bin \
+  --ro-bind /lib /lib \
+  --ro-bind /lib64 /lib64 \
+  --ro-bind /etc/resolv.conf /etc/resolv.conf \
+  --bind "$root/repo" /workspace \
+  --bind "$root/home" /home/agent \
+  --tmpfs /tmp \
+  --setenv HOME /home/agent \
+  --setenv TMPDIR /tmp \
+  --chdir /workspace \
+  /bin/bash
+```
+
+This is good for local guardrails, but I would not treat a hand-written `bwrap` policy as equivalent to a VM unless you have tested it carefully.
+
+### 4. `nsjail`: best lightweight “serious” Linux process jail
+
+`nsjail` is a better fit if you want a CLI jail with namespaces, cgroups, rlimits, and seccomp filters. Its project describes it as a lightweight process isolation tool using Linux namespaces, cgroups, rlimits, and seccomp-bpf. ([GitHub][16])
+
+Use this when you want to build an internal “agent executor” service that runs each command with limits and returns stdout/stderr. It is less ergonomic than Docker/Podman, but better suited than ad hoc `/tmp`.
+
+### 5. `systemd-run`: surprisingly useful for Linux local execution limits
+
+For Linux machines with systemd, you can use `systemd-run --user --pty` to give an agent process a private `/tmp`, private network, memory limits, and CPU limits. `PrivateTmp` creates `/tmp` and `/var/tmp` not shared with outside processes and removes temporary files when the service stops; `PrivateNetwork` creates a network namespace with only loopback. ([Arch Manual Pages][17]) systemd resource controls support memory throttling and hard memory limits via `MemoryHigh` and `MemoryMax`. ([Arch Manual Pages][18])
+
+Example:
+
+```bash
+systemd-run --user --pty --same-dir --wait --collect \
+  -p PrivateTmp=disconnected \
+  -p PrivateNetwork=yes \
+  -p ProtectHome=yes \
+  -p MemoryMax=4G \
+  -p TasksMax=512 \
+  -p CPUQuota=200% \
+  bash
+```
+
+This is a nice “middle ground” for resource and namespace control, but it is OS-specific and still not as clean as a container/microVM for complex dev environments.
+
+### 6. macOS: Agent Safehouse or Docker Sandboxes
+
+On macOS, consider **Agent Safehouse** for lightweight local hardening. It uses `sandbox-exec` profiles with a deny-first model and profiles for coding agents, but it explicitly describes itself as a hardening layer, not a perfect security boundary. ([GitHub][19])
+
+For stronger macOS isolation, I would choose Docker Sandboxes or a VM/microVM approach.
+
+---
+
+## The architecture I would build
+
+For an agent doing concept work outside the codebase but needing useful execution feedback, I would build this:
+
+```text
+Agent UI / OpenCode
+   |
+   | asks to edit / run
+   v
+Sandbox Manager
+   - creates disposable clone or branch worktree
+   - creates fake HOME/TMP/cache
+   - launches runtime isolation
+   - streams stdout/stderr
+   - records commands.jsonl
+   - collects diff/artifacts
+   |
+   v
+Sandbox Runtime
+   - Docker Sandbox / rootless Podman / nsjail / bwrap
+   - no host HOME
+   - no host Docker socket
+   - no host SSH agent
+   - restricted network
+   - CPU/RAM/PID/time limits
+```
+
+Every command execution should produce a JSONL record:
+
+```json
+{
+  "ts": "2026-05-11T20:31:12Z",
+  "cwd": "/workspace",
+  "cmd": "npm test",
+  "exit_code": 1,
+  "duration_ms": 8432,
+  "stdout_path": "logs/004.stdout",
+  "stderr_path": "logs/004.stderr",
+  "changed_files": ["src/auth.ts", "package-lock.json"]
+}
+```
+
+That gives the agent exactly what it needs: exceptions, stdout, stderr, failing test names, stack traces, and a diff, without letting it scribble over your real working tree.
+
+---
+
+## Network policy: the part people under-build
+
+Network access is the hardest part. Agents often need model APIs, package registries, docs, GitHub, or browser previews. But full egress means generated code can exfiltrate `.env`, SSH keys, source, or data.
+
+My rule:
+
+**Default deny. Temporarily allow only what the task needs. Log egress.**
+
+Docker Sandboxes expose this directly during setup: Open, Balanced, or Locked Down network policies, where Balanced is default-deny with common dev sites allowed and Locked Down blocks all traffic unless explicitly allowed. ([Docker Documentation][5])
+
+For normal containers, use `--network none` for pure test runs. If installs are needed, split the workflow:
+
+1. **Bootstrap phase:** network allowed to package registries only.
+2. **Execution phase:** no network.
+3. **Agent/model phase:** credentials go through a proxy or remain outside the sandbox.
+
+This is why I like the “agent outside, executor inside” architecture when you are building your own tool: the LLM API key stays outside; only code execution happens inside.
+
+---
+
+## What not to do
+
+Do not run OpenCode directly in your main repo and rely on prompt instructions. OpenCode says its permissions are not a sandbox. ([GitHub][1])
+
+Do not mount your whole home directory. Mount a fake `HOME`.
+
+Do not mount `/var/run/docker.sock`. Docker’s sandbox docs explicitly call out that mounting the host Docker socket gives the agent access to your host Docker environment. ([Docker Documentation][4])
+
+Do not use Docker bind mounts casually. Docker’s docs say bind mounts have write access by default and can let container processes create, modify, or delete host files. ([Docker Documentation][11])
+
+Do not rely on `/tmp` as a boundary. It is just storage.
+
+Do not pass your whole shell environment. Use `env -i` and re-add only the variables you intend.
+
+Do not let dependency caches write into your real home. Redirect `npm`, `pip`, `cargo`, `go`, and model/tool caches into the sandbox root.
+
+---
+
+## My final answer by threat level
+
+For **“I just don’t want my tree dirtied”**: use a Git worktree or disposable clone under `~/.local/state/agent-sandboxes`, fake `HOME`, fake `TMPDIR`, and capture logs.
+
+For **“I want it to run tests and generated code safely”**: use rootless Podman/Docker with a disposable clone mounted in, non-root user, dropped capabilities, read-only root FS, tmpfs `/tmp`, resource limits, and no network unless explicitly needed.
+
+For **“I want OpenCode to run autonomously with minimal babysitting”**: use Docker Sandboxes `sbx run opencode --branch ...`, or a managed sandbox provider like E2B/Daytona. E2B documents coding-agent sandboxes with full terminal/filesystem/git access isolated from your infrastructure, and Daytona has an OpenCode plugin where each session runs in a secure sandbox and syncs changes to local Git branches. ([E2B][20])
+
+For **“I want the best security boundary”**: use a VM/microVM sandbox, not just `/tmp`, Git, or a hand-written namespace wrapper.
+
+[1]: https://github.com/anomalyco/opencode/security "Overview · anomalyco/opencode · GitHub"
+[2]: https://docs.docker.com/ai/sandboxes/ "Docker Sandboxes | Docker Docs"
+[3]: https://docs.docker.com/ai/sandboxes/agents/opencode/ "OpenCode | Docker Docs"
+[4]: https://docs.docker.com/ai/sandboxes/security/isolation/ "Isolation layers | Docker Docs"
+[5]: https://docs.docker.com/ai/sandboxes/get-started/ "Get started with Docker Sandboxes | Docker Docs"
+[6]: https://git-scm.com/docs/git-clone "Git - git-clone Documentation"
+[7]: https://git-scm.com/docs/git-worktree "Git - git-worktree Documentation"
+[8]: https://linux.die.net/man/1/mktemp "mktemp(1): create temporary file/directory - Linux man page"
+[9]: https://specifications.freedesktop.org/fhs/latest/varTmp.html "/var/tmp : Temporary files preserved between system reboots | Filesystem Hierarchy Standard"
+[10]: https://developers.redhat.com/blog/2020/09/25/rootless-containers-with-podman-the-basics?utm_source=chatgpt.com "Rootless containers with Podman: The basics"
+[11]: https://docs.docker.com/engine/storage/bind-mounts/ "Bind mounts | Docker Docs"
+[12]: https://docs.docker.com/engine/network/drivers/none/ "None network driver | Docker Docs"
+[13]: https://docs.docker.com/engine/containers/resource_constraints/ "Resource constraints | Docker Docs"
+[14]: https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html "Docker Security - OWASP Cheat Sheet Series"
+[15]: https://github.com/containers/bubblewrap "GitHub - containers/bubblewrap: Low-level unprivileged sandboxing tool used by Flatpak and similar projects · GitHub"
+[16]: https://github.com/google/nsjail "GitHub - google/nsjail: A lightweight process isolation tool that utilizes Linux namespaces, cgroups, rlimits and seccomp-bpf syscall filters, leveraging the Kafel BPF language for enhanced security. · GitHub"
+[17]: https://man.archlinux.org/man/systemd.exec.5.en "systemd.exec(5) — Arch manual pages"
+[18]: https://man.archlinux.org/man/systemd.resource-control.5.en "systemd.resource-control(5) — Arch manual pages"
+[19]: https://github.com/eugene1g/agent-safehouse "GitHub - eugene1g/agent-safehouse: Sandbox your local AI agents so they can read/write only what they need · GitHub"
+[20]: https://e2b.dev/docs/use-cases/coding-agents "Documentation - E2B"

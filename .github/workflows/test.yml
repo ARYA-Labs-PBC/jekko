@@ -1,0 +1,157 @@
+name: test
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # Keep every run on dev so cancelled checks do not pollute the default branch
+  # commit history. PRs and other branches still share a group and cancel stale runs.
+  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  unit:
+    name: unit (${{ matrix.settings.name }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: linux
+            host: ubuntu-latest
+    runs-on: ${{ matrix.settings.host }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@jekko.ai"
+          git config --global user.name "jekko"
+
+      - name: Cache Turbo
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57
+        with:
+          path: node_modules/.cache/turbo
+          key: turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
+            turbo-${{ runner.os }}-
+
+      - name: Run unit tests
+        run: bun turbo test:ci
+        env:
+          JEKKO_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
+
+      - name: Publish unit reports
+        if: always()
+        uses: mikepenz/action-junit-report@bccf2e31636835cf0874589931c4116687171386
+        with:
+          report_paths: packages/*/.artifacts/unit/junit.xml
+          check_name: "unit results (${{ matrix.settings.name }})"
+          detailed_summary: true
+          include_time_in_summary: true
+          fail_on_failure: false
+
+      - name: Upload unit artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unit-${{ matrix.settings.name }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+          path: packages/*/.artifacts/unit/junit.xml
+
+  tui:
+    name: tui binary
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: stable
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@jekko.ai"
+          git config --global user.name "jekko"
+
+      - name: Cache Turbo
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57
+        with:
+          path: node_modules/.cache/turbo
+          key: tui-turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-${{ github.sha }}
+          restore-keys: |
+            tui-turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
+            tui-turbo-${{ runner.os }}-
+
+      - name: Build host Jekko binary
+        run: bun --cwd packages/jekko ./script/build.ts --single --skip-install
+
+      - name: Smoke test TUI-only binary
+        run: bun --cwd packages/jekko ./script/tui-binary-smoke.ts
+
+      - name: Run rendered TUI tests
+        run: bun --cwd packages/jekko test test/cli/tui/ test/cli/cmd/tui/
+
+      - name: Compile TUIwright tests
+        run: |
+          JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" \
+            cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
+
+      - name: Run CI-safe TUIwright tests
+        run: |
+          JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" \
+            cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-fail-fast
+
+      - name: Upload TUI artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tui-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+          path: target/tuiwright-jekko/**

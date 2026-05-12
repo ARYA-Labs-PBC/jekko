@@ -1,0 +1,253 @@
+# ZYAL v2.6 - AutoResearch Memory Benchmark Basic
+#
+# Minimal sandboxed AutoResearch loop for the memory benchmark: 4 lanes,
+# deny-by-default network sandboxing, executable Rust scoring, append-only
+# memory, and best_verified_patch reduction.
+
+<<<ZYAL v1:daemon id=memory-benchmark-autoresearch-basic>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Memory benchmark AutoResearch basic"
+  objective: |
+    Run a compact AutoResearch-style tournament against the memory benchmark
+    inside a sandbox. Score a small lane set with executable Rust oracles,
+    preserve append-only progress memory, and promote only when the new best
+    lane beats the current best by at least 0.75 points without new hard-gate
+    failures.
+  risk:
+    - Candidate work must stay in isolated git worktrees
+    - Promotion must be blocked by any new privacy, citation, future-leak, or nondeterminism gate
+    - Persistent progress memory must remain append-only
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  accepted_origins:
+    - trusted_user_message
+    - signed_cli_input
+    - host_ui_button
+  preview_expires_after: 10m
+  arm_token_single_use: true
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [compaction, max_steps]
+  pause_on: [checkpoint_failed, no_progress]
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-autoresearch-basic/best-state.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-autoresearch-basic/scoreboard.tsv"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-autoresearch-basic/promotion-decision.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-autoresearch-basic/best.patch"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-autoresearch-basic/negative-memory.jsonl"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-autoresearch-basic/curriculum-proposals.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+sandbox:
+  network:
+    outbound: deny
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-workspace
+      tool: read
+      decision: allow
+    - id: shell-benchmark
+      tool: shell
+      command_regex: "^(rtk )?(cargo|just|bun) "
+      decision: allow
+    - id: worker-fanout
+      tool: workers
+      decision: allow
+    - id: mcp-readonly
+      tool: mcp
+      decision: allow
+      reason: "read-only MCP profiles only"
+  command_floor:
+    always_block:
+      - "git push"
+      - "git push --force"
+      - 'curl .* \| sh'
+      - 'wget .* \| sh'
+      - "ssh "
+      - "sudo "
+      - "cargo install"
+
+triggers:
+  anti_recursion: true
+  list:
+    - id: manual
+      kind: manual
+      max_runs_per_sha: 1
+
+rollback:
+  required_when:
+    risk_score_gte: 0.6
+  plan_required: true
+  verify_command: "rtk just memory-benchmark-fast"
+  on_failure_after_merge: revert_commit
+
+done:
+  require:
+    - promotion_decision_written
+    - best_state_written
+    - scoreboard_written
+    - best_patch_written
+    - curriculum_proposals_written
+    - determinism_verified
+    - population_ledger_persisted
+  forbid:
+    - hard_gate_regression
+    - model_only_claim
+
+repo_intelligence:
+  scale: large
+  indexes: [rg, ownership, test_graph]
+  scope_control:
+    require_scope_before_edit: true
+    max_initial_scope_files: 20
+  blast_radius:
+    compute_on: [diff]
+    pause_when_score_gte: 0.75
+
+fleet:
+  max_workers: 4
+  isolation: same_session
+
+fan_out:
+  strategy: scatter_gather
+  split:
+    shell: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin dump_tasks -- exec --population 4 --out .jekko/daemon/memory-benchmark-autoresearch-basic/reports/exec-tasks.jsonl"
+  worker:
+    agent: build
+    isolation: git_worktree
+    timeout: 45m
+    max_parallel: 4
+  reduce:
+    strategy: custom_shell
+    command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin population_report -- --lanes .jekko/daemon/memory-benchmark-autoresearch-basic/reports/lanes --population .jekko/daemon/memory-benchmark-autoresearch-basic/memory/population-ledger.jsonl --baseline .jekko/daemon/memory-benchmark-autoresearch-basic/reports/baseline-score.json --exec .jekko/daemon/memory-benchmark-autoresearch-basic/reports/exec-score.json --current-best-state .jekko/daemon/memory-benchmark-autoresearch-basic/best-state.json --best-state .jekko/daemon/memory-benchmark-autoresearch-basic/best-state.json --scoreboard .jekko/daemon/memory-benchmark-autoresearch-basic/scoreboard.tsv --promotion-decision .jekko/daemon/memory-benchmark-autoresearch-basic/promotion-decision.json --negative-memory .jekko/daemon/memory-benchmark-autoresearch-basic/negative-memory.jsonl --best-patch .jekko/daemon/memory-benchmark-autoresearch-basic/best.patch --out .jekko/daemon/memory-benchmark-autoresearch-basic/reports/final-score.json --markdown .jekko/daemon/memory-benchmark-autoresearch-basic/reports/final-score.md --comparison .jekko/daemon/memory-benchmark-autoresearch-basic/reports/comparison-matrix.json --triangulation .jekko/daemon/memory-benchmark-autoresearch-basic/reports/triangulation.json --curriculum .jekko/daemon/memory-benchmark-autoresearch-basic/curriculum-proposals.json"
+  on_partial_failure: continue
+
+experiments:
+  strategy: disjoint_tournament
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.40
+    axes: [provenance, temporal, privacy, compression]
+  lanes:
+    - id: arena_lane_00
+      hypothesis: "Provenance lane 00 keeps citations and traceability visible."
+      prompt_strategy: reference_context_pack
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_04
+      hypothesis: "Temporal lane 04 prioritizes contradiction handling and as-of reasoning."
+      prompt_strategy: temporal_contradiction_scan
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_08
+      hypothesis: "Privacy lane 08 keeps redaction and forgetting rules explicit."
+      prompt_strategy: privacy_redaction
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+    - id: arena_lane_12
+      hypothesis: "Compression lane 12 focuses on context packing and deterministic reuse."
+      prompt_strategy: compression_economics
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 6, max_diff_lines: 1500, max_cost_usd: 4.00 }
+  fork_from: current_head
+  max_parallel: 4
+  scoring:
+    weights:
+      concept_learning: 12
+      transfer_reasoning: 12
+      formal_math: 10
+      scientific_reasoning: 10
+      bitemporal_correctness: 10
+      provenance_support: 10
+      dependency_maintenance: 8
+      contradiction_skepticism: 8
+      privacy_forgetting: 8
+      compression_fidelity: 5
+      procedural_tool_memory: 4
+      determinism_efficiency: 3
+    primary: executable_rust_oracles
+    judge:
+      agent: critic
+      blind: true
+      must_use_different_provider: true
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+  on_partial_failure: continue
+  preserve_failed_lanes_as_negative_memory: true
+
+models:
+  profiles:
+    builder:
+      provider: openai
+      model: gpt-5.5
+      reasoning: true
+    critic:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      reasoning: true
+    reporter:
+      provider: openai
+      model: gpt-5.4-mini
+  routes:
+    build: builder
+    judge: critic
+    report: reporter
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+  confidence_cap: 0.68
+
+memory:
+  stores:
+    population_findings:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+
+<<<END_ZYAL id=memory-benchmark-autoresearch-basic>>>
+ZYAL_ARM RUN_FOREVER id=memory-benchmark-autoresearch-basic

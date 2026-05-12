@@ -1,0 +1,110 @@
+# Continuous low-risk jankurai repair loop.
+<<<ZYAL v1:daemon id=jankurai-continuous-repair>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai continuous repair"
+  objective: |
+    Continuously audit this repository with jankurai, ingest repair-plan
+    packets, repair low-risk agent-assisted findings with ten isolated
+    workers, verify every candidate, commit verified changes, and push when
+    allowed. Stop only when jankurai reports zero findings and git is clean.
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, max_steps, compaction, checkpoint_failed]
+  pause_on: [permission_denied]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+fleet:
+  max_workers: 10
+  isolation: git_worktree
+
+agents:
+  workers:
+    - id: jankurai-low-risk
+      count: 10
+      agent: build
+      isolation: git_worktree
+
+jankurai:
+  enabled: true
+  root: "."
+  audit:
+    mode: advisory
+    json: target/jankurai/repo-score.json
+    md: target/jankurai/repo-score.md
+    repair_queue_jsonl: target/jankurai/repair-queue.jsonl
+    no_score_history: true
+  repair_plan:
+    enabled: true
+    json: target/jankurai/repair-plan.json
+    md: target/jankurai/repair-plan.md
+  task_source: repair_plan
+  selection:
+    order: quick_wins_first
+    randomize_ties: true
+    max_risk: low
+    skip_human_review_required: true
+    defer_rules: [HLT-010-SECRET-SPRAWL]
+  verification:
+    require_clean_start: true
+    require_clean_after_checkpoint: true
+    proof_from_test_map: true
+    commands:
+      - "just fast"
+    audit_delta: no_new_findings
+    rollback_unverified: true
+
+stop:
+  all:
+    - shell:
+        command: "jankurai audit . --mode advisory --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --repair-queue-jsonl target/jankurai/repair-queue.jsonl --no-score-history >/dev/null 2>&1 && jq -e '(.findings // []) | length == 0' target/jankurai/repo-score.json"
+        timeout: 10m
+    - git_clean:
+        allow_untracked: false
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "just fast"
+      timeout: 20m
+  git:
+    add: ["."]
+    commit_message: "jankurai: verified low-risk repair"
+    push: allow
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: allow
+  workers: allow
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+  metrics:
+    - name: jankurai_score
+      type: gauge
+      source: target/jankurai/repo-score.json
+    - name: jankurai_queue_depth
+      type: gauge
+      source: daemon.tasks
+  report:
+    format: markdown
+    on_checkpoint: true
+
+unsupported_feature_policy:
+  required: [jankurai]
+  fail_closed: true
+  on_missing: reject
+<<<END_ZYAL id=jankurai-continuous-repair>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-continuous-repair

@@ -1,0 +1,105 @@
+# ZYAL v2.6 - Memory Benchmark Generated Challenge
+
+<<<ZYAL v1:daemon id=memory-benchmark-generated-challenge>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Memory benchmark generated challenge"
+  objective: |
+    Run the deterministic generated public-dev suite by default. Private
+    challenge seeds must arrive only at runtime through an environment value
+    or external path, and only the SHA-256 commitment may be persisted in the
+    repository.
+  risk:
+    - Never write private seed values to tracked files
+    - Primary scoring is executable Rust oracle scoring, not LLM judging
+
+loop:
+  policy: once
+  sleep: 0s
+
+context:
+  strategy: hard
+  compact_every: 1
+  hard_clear_every: 1
+  preserve:
+    - objective
+    - seed_commitment
+    - generated_report
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/reports/baseline-generated.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/reports/seed-commitment.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+hooks:
+  on_start:
+    - run: "mkdir -p .jekko/daemon/memory-benchmark/reports"
+      timeout: 30s
+      on_fail: warn
+    - run: "bun script/memory-benchmark-seed-commit.ts \"${MEMORY_BENCHMARK_SEED:-public-dev-0001}\" > .jekko/daemon/memory-benchmark/reports/seed-commitment.json"
+      timeout: 30s
+      on_fail: pause
+  before_iteration:
+    - run: "cargo test --manifest-path crates/memory-benchmark/Cargo.toml --locked --no-fail-fast"
+      timeout: 240s
+      on_fail: pause
+  after_iteration:
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin generate_suite -- --split public-dev --seed \"${MEMORY_BENCHMARK_SEED:-public-dev-0001}\" --fixtures 500 --out .jekko/daemon/memory-benchmark/reports/generated-public-dev.json"
+      timeout: 180s
+      on_fail: pause
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate baseline --suite generated --seed \"${MEMORY_BENCHMARK_SEED:-public-dev-0001}\" --fixtures 500 --out .jekko/daemon/memory-benchmark/reports/baseline-generated.json"
+      timeout: 180s
+      on_fail: pause
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin verify_determinism -- --suite generated --seed \"${MEMORY_BENCHMARK_SEED:-public-dev-0001}\" --fixtures 500"
+      timeout: 180s
+      on_fail: pause
+
+permissions:
+  read: allow
+  list: allow
+  glob: allow
+  grep: allow
+  external_directory: deny
+  shell: allow
+  edit: allow
+  git_commit: deny
+  git_push: deny
+  workers: allow
+  mcp: deny
+  research: deny
+  websearch: deny
+  webfetch: deny
+
+sandbox:
+  paths:
+    - path: "crates/memory-benchmark"
+      access: read
+    - path: "script/memory-benchmark-seed-commit.ts"
+      access: read
+    - path: ".jekko/daemon/memory-benchmark"
+      access: write
+  network:
+    outbound: deny
+
+done:
+  require:
+    - generated_report_written
+    - baseline_report_written
+    - seed_commitment_written
+    - determinism_verified
+  forbid:
+    - unredacted_canary
+    - non_deterministic_hash
+    - non_rust_harness_tools
+
+<<<END_ZYAL id=memory-benchmark-generated-challenge>>>
+ZYAL_ARM RUN_FOREVER id=memory-benchmark-generated-challenge

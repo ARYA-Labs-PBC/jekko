@@ -1,0 +1,1131 @@
+Absolutely — this is a fun, high-leverage research area. My strongest recommendation is **not one tool**, but a **privacy-aware agent search stack** with multiple retrieval lanes: private/general web, publication databases, source-specific APIs, extraction/crawling, and durable knowledge management.
+
+## Executive recommendation
+
+For agents that need safe, high-quality internet and publication search, I would build around this stack:
+
+| Layer                          |                                                               Best default |                                       Privacy-first alternative | Why                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------ | -------------------------------------------------------------------------: | --------------------------------------------------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| General web search             |                                         **Brave Search API + LLM Context** |                                **Self-hosted SearXNG + Mojeek** | Brave’s LLM Context endpoint returns pre-extracted, agent-ready grounding content with token budgets, freshness filters, and source control via Goggles. SearXNG is excellent when you want a self-hosted metasearch layer that does not profile users. Mojeek is valuable because it has its own independent index and explicitly avoids tracking. ([Brave][1]) |
+| Deep agent search / extraction |                                                              **Firecrawl** | Self-host Playwright + Readability/Trafilatura-style extractors | Firecrawl is very agent-friendly, has an official Rust SDK, and can search, scrape, parse, crawl, map, and interact with pages. ([Firecrawl][2])                                                                                                                                                                                                                 |
+| AI-native web search           |                                                          **Tavily or Exa** |                                               Brave LLM Context | Tavily is explicitly built to connect agents to real-time search, extraction, research, and crawling, with safety layers advertised for PII/prompt-injection/malicious-source blocking. Exa is strong for neural/hybrid search plus contents extraction. ([Tavily][3])                                                                                           |
+| Publications                   |                     **OpenAlex + Semantic Scholar + Crossref + Unpaywall** |                          Same, plus arXiv/PubMed/CORE by domain | OpenAlex should be your first scholarly discovery graph; Semantic Scholar is good for relevance/citation graph; Crossref normalizes DOI metadata; Unpaywall finds legal OA copies; arXiv/PubMed/PMC/CORE cover domain-specific full text. ([OpenAlex Developers][4])                                                                                             |
+| Code/social sources            | GitHub official APIs, Reddit OAuth API, X API, LinkedIn official APIs only |                                         Avoid scraping LinkedIn | GitHub has mature REST/GraphQL APIs; Reddit requires OAuth and compliance with Reddit terms; X has recent and full-archive search endpoints with access constraints; LinkedIn explicitly forbids third-party crawlers/bots/extensions that scrape or automate its site. ([GitHub Docs][5])                                                                       |
+| Knowledge store                |                    **Qdrant + Tantivy/Meilisearch/LanceDB + FastEmbed-rs** |                                Local-only Qdrant Edge / LanceDB | Qdrant gives vector/semantic retrieval, Tantivy gives Rust-native BM25/full-text, LanceDB gives embedded vector search with Rust support, FastEmbed-rs gives local embeddings/reranking. ([Qdrant][6])                                                                                                                                                           |
+| Agent framework                |                                                        **Rig or Swiftide** |                                       Custom Rust orchestration | Both are Rust-native LLM/agent/RAG frameworks; Swiftide is especially aligned with streaming indexing/query pipelines. ([GitHub][7])                                                                                                                                                                                                                             |
+
+My **best overall production choice** would be:
+
+**Brave LLM Context + Firecrawl + OpenAlex/Semantic Scholar/Crossref/Unpaywall + GitHub/Reddit/X official APIs + Qdrant + Tantivy + FastEmbed-rs + Rig or Swiftide.**
+
+For a stricter privacy posture:
+
+**Self-hosted SearXNG + Mojeek + Brave Enterprise ZDR where available + direct publication APIs + self-hosted extraction + local embeddings/vector store.**
+
+Brave says its Search API is built with privacy at its core and offers enterprise Zero Data Retention; SearXNG does not profile users and can be self-hosted; Mojeek uses its own crawler/index and says it does not track users. ([Brave][8])
+
+---
+
+# 1. Best tools for private / safe general web search
+
+## 1. Brave Search API + Brave LLM Context — best default for production agents
+
+This is my top pick for an agent web-search backend. The normal Brave Web Search API gives ranked web results, while **LLM Context** is better for agents because it returns extracted page chunks, source metadata, token-budget controls, relevance thresholds, freshness filters, and source ranking via Goggles. Brave explicitly describes LLM Context as “web search for agents and chatbots” and says it is optimized for AI agents, grounding, and RAG pipelines. ([Brave][1])
+
+Why it is strong:
+
+| Feature                | Why agents care                                             |
+| ---------------------- | ----------------------------------------------------------- |
+| Pre-extracted snippets | Reduces separate scrape/read steps.                         |
+| Freshness filters      | Essential for current claims, news, docs, regulations.      |
+| Goggles                | Lets you restrict/boost trusted domains.                    |
+| Token budgets          | Controls context cost and latency.                          |
+| Source metadata        | Makes citation/provenance easier.                           |
+| Privacy posture        | Stronger than typical SERP scrapers; enterprise ZDR option. |
+
+Use it when: your agent needs live web grounding with citations and low operational complexity.
+
+Caveat: hosted API means queries leave your environment unless you have a ZDR/enterprise setup.
+
+---
+
+## 2. SearXNG — best self-hosted metasearch layer
+
+SearXNG is a metasearch engine that aggregates other engines while not storing information about users. Its docs also say it does not generate a profile, does not care what users search for, and does not share anything with third parties; it can be run on your own server. ([SearXNG Documentation][9])
+
+It has a simple HTTP API through `/` and `/search`, with JSON/CSV/RSS output if enabled; the docs warn that many public instances disable machine-readable formats, so for agents you should run your own instance. ([SearXNG Documentation][10])
+
+Use it when: privacy and self-hosting matter more than guaranteed search consistency.
+
+Caveats:
+
+* It is a metasearch engine, not its own index.
+* Public instances are unreliable for agent automation.
+* Your instance still sends queries to upstream engines unless you configure engines carefully.
+
+Best deployment pattern:
+
+* Run your own SearXNG.
+* Enable JSON output.
+* Configure only the engines you trust.
+* Add rate limiting.
+* Put it behind your own auth.
+* Log minimally or not at all.
+* Use it as a fallback or “second opinion” beside Brave/Mojeek.
+
+---
+
+## 3. Mojeek — best independent no-tracking index
+
+Mojeek is interesting because it is not just a privacy wrapper around Google/Bing. Mojeek says its web results come from its own crawler and index, ordered with its own ranking algorithms, and it does not use tracking for ranking. ([Mojeek][11])
+
+Use it when: you want an independent search index with a no-tracking philosophy.
+
+Caveat: index coverage and ranking quality may differ from Brave/Google/Bing, so I would pair it with Brave/SearXNG rather than use it alone.
+
+---
+
+## 4. Kagi Search API — excellent quality, but currently access-limited
+
+Kagi’s Search API gives programmable access to Kagi’s premium search results, but the docs state it is in closed beta and available upon request. The docs currently list pricing at $25 per 1,000 queries. ([Kagi Help][12])
+
+Kagi’s privacy policy says server-side web requests may be stored temporarily for debugging and not linked to accounts, and that requests to Kagi AI tools generally are not saved or associated with customer accounts except short debugging retention. ([Kagi][13])
+
+Use it when: you can get API access and want high-quality human-search-style results.
+
+Caveat: not as agent-native as Brave LLM Context or Tavily, and closed beta limits adoption.
+
+---
+
+## 5. DuckDuckGo — good human privacy search, weak official agent API
+
+DuckDuckGo is often the first search engine people think of for “not tracked,” but it is not ideal for production agent search because the official Instant Answer API is not a full search results API. DuckDuckGo’s own documentation says it gives access to instant answers but “does not include all links” and is not a full way to get DuckDuckGo results into applications. ([Postman][14])
+
+Use it for:
+
+* quick facts,
+* definitions,
+* instant answers,
+* low-stakes enrichment.
+
+Avoid it for:
+
+* full SERP-style retrieval,
+* reliable publication discovery,
+* production agent web search,
+* compliance-sensitive automation through unofficial scrapers.
+
+---
+
+# 2. Best AI-native search / extraction tools
+
+## Firecrawl — best crawler/scraper/extractor for agents, with Rust SDK
+
+Firecrawl is one of the strongest tools here because it handles the messy part after search: turning URLs into clean markdown/HTML/JSON, crawling docs, mapping sites, parsing uploaded files, and interacting with browser sessions. Its official Rust quickstart shows `firecrawl = "2"` and examples for search, scrape, and interact. ([Firecrawl][2])
+
+Use Firecrawl when:
+
+* you need clean markdown from arbitrary sites,
+* you need JS-rendered page extraction,
+* you need documentation crawling,
+* you want an agent-ready MCP/tool interface,
+* you want Rust SDK support.
+
+Caveats:
+
+* Hosted use means URL/content data goes to Firecrawl.
+* For confidential browsing, self-hosting or local extraction is safer.
+* Do not use browser interaction tools on sensitive logged-in sites without strict controls.
+
+---
+
+## Tavily — best all-in-one agent web access API
+
+Tavily explicitly markets itself as connecting AI agents to the web with real-time search, extraction, research, and crawling through one API. It also says it returns structured/chunked live web data and includes security/privacy/content validation layers to block PII leakage, prompt injection, and malicious sources. ([Tavily][3])
+
+Its Search endpoint executes web search queries, and its docs expose search depth, topic types, max results, and extraction/crawl/research endpoints. ([Tavily Docs][15])
+
+Use Tavily when: you want a simple production API for agent search/research.
+
+Caveat: it is not primarily a “private search engine” in the DuckDuckGo/SearXNG/Mojeek sense; evaluate privacy terms before sending sensitive queries.
+
+---
+
+## Exa — best neural / semantic web search API
+
+Exa’s Search endpoint lets you search the web and extract contents from results. Its Contents endpoint returns clean structured content for URLs and can handle JavaScript-rendered pages, PDFs, and complex layouts automatically, according to its docs. ([Exa][16])
+
+Use Exa when:
+
+* semantic web discovery matters,
+* query wording differs from source wording,
+* you want web search + extracted content,
+* you are building research agents.
+
+Caveat: like Tavily, this is not the strictest privacy-first option.
+
+---
+
+## Jina Reader — best simple “URL to LLM-readable markdown” utility
+
+Jina Reader is very convenient for converting web pages into LLM-friendly text/markdown. Its Reader page describes HTML-to-Markdown conversion, and its GitHub/readme-style results describe a search flow that retrieves top results and applies the reader to each URL. ([Jina AI][17])
+
+Use it when:
+
+* you need a quick hosted reader,
+* you want markdown extraction without operating a browser stack,
+* you are prototyping.
+
+Caveat: do not send confidential URLs/content to hosted reader services unless your privacy review approves it.
+
+---
+
+# 3. Best methods for agents searching online publications
+
+For publications, do **not** rely on general web search alone. Use scholarly APIs first, then web search/extraction only for landing pages and full text.
+
+## Publication search ranking
+
+| Need                             | Best tool                                                     |
+| -------------------------------- | ------------------------------------------------------------- |
+| Broad scholarly discovery        | **OpenAlex**                                                  |
+| Citation graph / paper relevance | **Semantic Scholar**                                          |
+| DOI metadata normalization       | **Crossref**                                                  |
+| Legal open-access full text      | **Unpaywall**                                                 |
+| Preprints                        | **arXiv API**                                                 |
+| Biomedical literature            | **PubMed / NCBI E-utilities / PMC**                           |
+| Open repositories / full text    | **CORE / Europe PMC**, depending domain                       |
+| Final full-text extraction       | Publisher/OA PDF + GROBID/Firecrawl/Unstructured-style parser |
+
+OpenAlex provides a catalog of scholarly works, authors, sources, institutions, topics, and more. Its 2026 docs include keyword, exact, Boolean, phrase/proximity, wildcard/fuzzy, and semantic search. Its April 2026 town hall also says it shipped semantic search with 413M embeddings and a Content API with 60M+ open-access PDFs/parsed TEI XML. ([OpenAlex Developers][4])
+
+Semantic Scholar’s Academic Graph API is useful for paper discovery and citation-related metadata; most endpoints are public without authentication but share an unauthenticated rate limit and may be throttled. ([Semantic Scholar][18])
+
+Crossref’s REST API exposes deposited scholarly metadata, including funding data, license information, updates, ORCID/ROR IDs, abstracts, and JSON search/filter/facet results. ([www.crossref.org][19])
+
+Unpaywall gives free programmatic access to its open-access database and returns JSON data; it is best used after you have a DOI. ([Unpaywall][20])
+
+arXiv’s API supports fielded search over title, author, abstract, comments, journal reference, categories, IDs, and Boolean operators. ([arXiv][21])
+
+NCBI’s E-utilities provide public API access to Entrez databases including PubMed and PMC, with fixed URL syntax for search, link, and retrieval operations. ([NCBI][22])
+
+## Recommended publication workflow
+
+1. **Classify the query**
+
+   * Known title/DOI?
+   * Broad literature review?
+   * Recent preprints?
+   * Biomedical?
+   * Legal/regulatory/scientific claim verification?
+
+2. **Discover papers**
+
+   * Broad search: OpenAlex `search` and `search.semantic`.
+   * Relevance/citation expansion: Semantic Scholar.
+   * Domain-specific: arXiv, PubMed/PMC, CORE/Europe PMC.
+
+3. **Normalize metadata**
+
+   * Crossref for DOI, publisher, license, dates, journal, ORCID/ROR IDs.
+
+4. **Find legal full text**
+
+   * Unpaywall by DOI.
+   * OpenAlex Content API where available.
+   * PubMed Central / arXiv / institutional repositories.
+
+5. **Parse full text**
+
+   * PDF → GROBID/TEI or Firecrawl parse.
+   * HTML → Readability/Firecrawl/Jina.
+   * Store title, authors, DOI, abstract, sections, references, publication date, license, source URL.
+
+6. **Rank and deduplicate**
+
+   * Deduplicate by DOI, arXiv ID, PubMed ID, normalized title.
+   * Rank by source quality, recency, citation count, venue, relevance, open/full-text availability.
+
+7. **Build memory**
+
+   * Chunk by section, not arbitrary tokens.
+   * Store citation metadata with every chunk.
+   * Keep quotes minimal and provenance exact.
+   * Re-embed when parser or embedding model changes.
+
+---
+
+# 4. GitHub, Reddit, X, LinkedIn: safest access methods
+
+## GitHub
+
+Use official APIs. GitHub’s REST docs state unauthenticated public requests are limited to 60/hour, authenticated personal/API requests are generally 5,000/hour, and GitHub App installation tokens start at 5,000/hour with higher Enterprise limits. ([GitHub Docs][5])
+
+Use GraphQL when you need precise compound retrieval; GitHub says GraphQL offers more precise and flexible queries than REST. ([GitHub Docs][23])
+
+Best GitHub agent use cases:
+
+* repo search,
+* code search,
+* issue/PR mining,
+* release-note monitoring,
+* dependency intelligence,
+* documentation ingestion.
+
+## Reddit
+
+Use the official Reddit Data API with OAuth. Reddit’s support page says clients must authenticate with a registered OAuth token and that unidentified users may be throttled or blocked; it also points developers to Reddit’s Responsible Builder Policy, Developer Terms, and Data API Terms. ([Reddit Help][24])
+
+Reddit listing endpoints use `after`, `before`, `limit`, `count`, and `show` pagination parameters. ([Reddit][25])
+
+Best Reddit agent use cases:
+
+* public discussion mining,
+* error-message research,
+* product/community sentiment,
+* forum-style troubleshooting.
+
+Caveat: do not treat Reddit comments as authoritative; route them as “community signal,” not verified fact.
+
+## X
+
+Use X API search endpoints, not scraping. X’s recent search endpoint retrieves posts from the last 7 days, while X’s Search Posts docs describe recent search and full-archive search with different access requirements. ([X Developer Platform][26])
+
+Best X agent use cases:
+
+* breaking-news discovery,
+* public announcement tracking,
+* source lead generation,
+* social context.
+
+Caveat: X is noisy and adversarial; use it for leads, then verify through primary sources.
+
+## LinkedIn
+
+Do **not** scrape LinkedIn. LinkedIn’s help page explicitly says it does not permit third-party crawlers, bots, browser plugins, or extensions that scrape, modify, or automate activity on LinkedIn’s website. ([LinkedIn][27])
+
+Use LinkedIn only through official API products and approved use cases. LinkedIn’s product catalog lists categories such as consumer, marketing, sales, talent, learning, plugins, and regulatory developer products. ([LinkedIn Developer][28])
+
+Best LinkedIn agent use cases:
+
+* approved marketing/talent workflows,
+* authenticated “share” or profile-related integrations,
+* company/user data only where API permissions explicitly allow it.
+
+---
+
+# 5. Safe agent search architecture
+
+Here is the architecture I would build.
+
+```text
+User / Agent Task
+      |
+      v
+Query Router
+  - web?
+  - publication?
+  - code?
+  - social?
+  - legal/medical/high-risk?
+  - fresh/current?
+      |
+      +--> Web lane: Brave LLM Context / SearXNG / Mojeek / Tavily / Exa
+      |
+      +--> Publication lane: OpenAlex -> Semantic Scholar -> Crossref -> Unpaywall -> arXiv/PubMed/CORE
+      |
+      +--> Code lane: GitHub REST/GraphQL/Search
+      |
+      +--> Social lane: Reddit OAuth / X API / LinkedIn official APIs only
+      |
+      v
+Retriever + Extractor
+  - Firecrawl / Jina / local browser extractor
+  - PDF parser / GROBID
+  - HTML readability parser
+      |
+      v
+Safety Gate
+  - prompt-injection stripping/labeling
+  - no secret exposure
+  - no page instructions treated as agent instructions
+  - domain allow/deny lists
+  - rate limits / robots / ToS checks
+      |
+      v
+Verifier / Ranker
+  - primary sources first
+  - date comparison
+  - independent corroboration
+  - source quality scoring
+      |
+      v
+Knowledge Store
+  - Qdrant vectors
+  - Tantivy/Meilisearch lexical index
+  - Postgres metadata/provenance
+  - object storage for snapshots/PDFs
+      |
+      v
+Answer / Action
+  - citations
+  - uncertainty labels
+  - human approval for consequential actions
+```
+
+Security matters a lot here. OWASP’s LLM Top 10 highlights prompt injection, insecure output handling, supply-chain vulnerabilities, insecure plugin design, excessive agency, sensitive information disclosure, and overreliance as core LLM application risks. ([OWASP][29])
+
+OpenAI’s prompt-injection writeup gives exactly the web-agent threat model: agents may browse the web, access data, and take actions; malicious webpage/email/document content can try to mislead the model into unintended action. It recommends limiting agent access, sandboxing, explicit instructions, user control, and confirmations for sensitive actions. ([OpenAI][30])
+
+OpenAI’s API safety best-practices also recommend human review for high-stakes use, constraining inputs/outputs, and returning outputs from validated backend materials where possible. ([OpenAI Developers][31])
+
+---
+
+# 6. Recommended tool matrix
+
+| Tool                 | Category                       | Agent fit |                       Privacy fit | My rating | Notes                                          |
+| -------------------- | ------------------------------ | --------: | --------------------------------: | --------: | ---------------------------------------------- |
+| Brave LLM Context    | Web search + extracted content | Excellent | Strong, especially ZDR enterprise |    9.5/10 | Best default general web search for agents.    |
+| Brave Web Search API | Web search                     | Excellent |                            Strong |      9/10 | Use when you want URLs/snippets, not chunks.   |
+| SearXNG self-hosted  | Metasearch                     |      Good |      Excellent if configured well |    8.5/10 | Great fallback/privacy layer.                  |
+| Mojeek               | Independent search index       |      Good |                         Excellent |      8/10 | Independent index, no-tracking stance.         |
+| Kagi API             | Premium search                 |      Good |                            Strong |    7.5/10 | Quality likely high, but closed beta/cost.     |
+| DuckDuckGo IA API    | Instant answers                |   Limited |                              Good |      5/10 | Not a full search API.                         |
+| Firecrawl            | Scrape/crawl/extract           | Excellent |  Medium hosted / higher self-host |      9/10 | Best extraction/crawl layer; Rust SDK.         |
+| Tavily               | Agent search/research          | Excellent |                            Medium |    8.5/10 | Very easy for agents; check privacy terms.     |
+| Exa                  | Neural web search              | Excellent |                            Medium |    8.5/10 | Strong semantic discovery + contents.          |
+| Jina Reader          | URL-to-markdown                | Very good |                            Medium |      8/10 | Great utility; not for confidential content.   |
+| OpenAlex             | Scholarly graph                | Excellent |                         Excellent |    9.5/10 | Best scholarly discovery base.                 |
+| Semantic Scholar     | Scholarly search/citations     | Excellent |                              Good |      9/10 | Best for paper/citation enrichment.            |
+| Crossref             | DOI metadata                   | Excellent |                         Excellent |      9/10 | Metadata normalizer.                           |
+| Unpaywall            | OA full-text lookup            | Excellent |                         Excellent |      9/10 | Legal OA discovery.                            |
+| GitHub REST/GraphQL  | Code/source                    | Excellent |                              Good |      9/10 | Use official APIs.                             |
+| Reddit API           | Community search               |      Good |                            Medium |    7.5/10 | OAuth + policy compliance.                     |
+| X API                | Social/current                 |      Good |                            Medium |      7/10 | Useful, noisy, access constrained.             |
+| LinkedIn APIs        | Professional data              |   Limited |                      Policy-bound |      5/10 | Official APIs only; no scraping.               |
+| Qdrant               | Vector DB                      | Excellent |               Excellent self-host |      9/10 | Rust ecosystem fit.                            |
+| Tantivy              | Full-text search               | Excellent |                         Excellent |      9/10 | Rust-native lexical index.                     |
+| FastEmbed-rs         | Local embeddings               | Excellent |                         Excellent |      9/10 | Great for private/local RAG.                   |
+| Rig                  | Rust agent framework           |      Good |                           Depends |      8/10 | Rust-native LLM apps/agents/RAG.               |
+| Swiftide             | Rust indexing/agents           | Very good |                           Depends |    8.5/10 | Strong for streaming indexing/query pipelines. |
+
+---
+
+# 7. Rust-first code examples
+
+## 7.1 Cargo.toml for search clients
+
+```toml
+[package]
+name = "agent-search"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+reqwest = { version = "0.12", features = ["json", "gzip", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+urlencoding = "2"
+```
+
+---
+
+## 7.2 Brave LLM Context search in Rust
+
+```rust
+use anyhow::Result;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize)]
+struct BraveContextRequest<'a> {
+    q: &'a str,
+    count: u8,
+    maximum_number_of_tokens: u32,
+    maximum_number_of_urls: u8,
+    context_threshold_mode: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct BraveContextResponse {
+    grounding: BraveGrounding,
+}
+
+#[derive(Debug, Deserialize)]
+struct BraveGrounding {
+    generic: Vec<BraveGroundingItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BraveGroundingItem {
+    pub url: String,
+    pub title: String,
+    pub snippets: Vec<String>,
+}
+
+pub async fn brave_llm_context(api_key: &str, query: &str) -> Result<Vec<BraveGroundingItem>> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let body = BraveContextRequest {
+        q: query,
+        count: 20,
+        maximum_number_of_tokens: 8192,
+        maximum_number_of_urls: 10,
+        context_threshold_mode: "balanced",
+    };
+
+    let resp = client
+        .post("https://api.search.brave.com/res/v1/llm/context")
+        .header("X-Subscription-Token", api_key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<BraveContextResponse>()
+        .await?;
+
+    Ok(resp.grounding.generic)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let api_key = std::env::var("BRAVE_API_KEY")?;
+    let hits = brave_llm_context(&api_key, "best practices for safe AI agent web search").await?;
+
+    for hit in hits {
+        println!("{}\n{}\n{}\n", hit.title, hit.url, hit.snippets.join("\n---\n"));
+    }
+
+    Ok(())
+}
+```
+
+Use Brave LLM Context when your agent wants direct grounding chunks. For raw URL discovery, use Brave Web Search instead.
+
+---
+
+## 7.3 Self-hosted SearXNG JSON search in Rust
+
+```rust
+use anyhow::Result;
+use reqwest::Client;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+pub struct SearxngResponse {
+    pub results: Vec<SearxngResult>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearxngResult {
+    pub title: Option<String>,
+    pub url: String,
+    pub content: Option<String>,
+    pub engine: Option<String>,
+}
+
+pub async fn searxng_search(base_url: &str, query: &str) -> Result<Vec<SearxngResult>> {
+    let client = Client::new();
+
+    let url = format!("{}/search", base_url.trim_end_matches('/'));
+
+    let resp = client
+        .get(url)
+        .query(&[
+            ("q", query),
+            ("format", "json"),
+            ("safesearch", "2"),
+            ("language", "en"),
+        ])
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<SearxngResponse>()
+        .await?;
+
+    Ok(resp.results)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let results = searxng_search(
+        "https://your-searxng-instance.example",
+        "site:github.com rust agent search framework",
+    )
+    .await?;
+
+    for r in results {
+        println!(
+            "{}\n{}\n{}\n",
+            r.title.unwrap_or_default(),
+            r.url,
+            r.content.unwrap_or_default()
+        );
+    }
+
+    Ok(())
+}
+```
+
+Important: run your own SearXNG instance and enable JSON output. Do not depend on random public instances for agents.
+
+---
+
+## 7.4 OpenAlex scholarly search in Rust
+
+```rust
+use anyhow::Result;
+use reqwest::Client;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct OpenAlexResponse {
+    results: Vec<OpenAlexWork>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAlexWork {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub doi: Option<String>,
+    pub publication_year: Option<i32>,
+    pub relevance_score: Option<f64>,
+}
+
+pub async fn openalex_search(query: &str) -> Result<Vec<OpenAlexWork>> {
+    let client = Client::new();
+
+    let url = format!(
+        "https://api.openalex.org/works?search={}&per-page=10",
+        urlencoding::encode(query)
+    );
+
+    let resp = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<OpenAlexResponse>()
+        .await?;
+
+    Ok(resp.results)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let works = openalex_search("retrieval augmented generation evaluation").await?;
+
+    for w in works {
+        println!(
+            "{} | {} | {:?}",
+            w.publication_year.unwrap_or_default(),
+            w.display_name.unwrap_or_default(),
+            w.doi
+        );
+    }
+
+    Ok(())
+}
+```
+
+For conceptual matching, use OpenAlex `search.semantic` rather than `search` when appropriate.
+
+---
+
+## 7.5 Semantic Scholar search in Rust
+
+```rust
+use anyhow::Result;
+use reqwest::Client;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct S2Response {
+    data: Vec<S2Paper>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct S2Paper {
+    #[serde(rename = "paperId")]
+    pub paper_id: Option<String>,
+    pub title: Option<String>,
+    pub year: Option<i32>,
+    pub url: Option<String>,
+    #[serde(rename = "citationCount")]
+    pub citation_count: Option<i32>,
+}
+
+pub async fn semantic_scholar_search(query: &str, api_key: Option<&str>) -> Result<Vec<S2Paper>> {
+    let client = Client::new();
+
+    let url = format!(
+        "https://api.semanticscholar.org/graph/v1/paper/search?query={}&limit=10&fields=paperId,title,year,citationCount,url",
+        urlencoding::encode(query)
+    );
+
+    let mut req = client.get(url);
+
+    if let Some(key) = api_key {
+        req = req.header("x-api-key", key);
+    }
+
+    let resp = req
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<S2Response>()
+        .await?;
+
+    Ok(resp.data)
+}
+```
+
+---
+
+## 7.6 Crossref metadata search in Rust
+
+```rust
+use anyhow::Result;
+use reqwest::Client;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct CrossrefResponse {
+    message: CrossrefMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct CrossrefMessage {
+    items: Vec<CrossrefWork>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CrossrefWork {
+    #[serde(rename = "DOI")]
+    pub doi: Option<String>,
+    pub title: Option<Vec<String>>,
+    #[serde(rename = "container-title")]
+    pub container_title: Option<Vec<String>>,
+    #[serde(rename = "published-print")]
+    pub published_print: Option<serde_json::Value>,
+    #[serde(rename = "published-online")]
+    pub published_online: Option<serde_json::Value>,
+}
+
+pub async fn crossref_search(query: &str) -> Result<Vec<CrossrefWork>> {
+    let client = Client::new();
+
+    let url = format!(
+        "https://api.crossref.org/works?query.bibliographic={}&rows=10",
+        urlencoding::encode(query)
+    );
+
+    let resp = client
+        .get(url)
+        .header("User-Agent", "agent-search/0.1 (mailto:you@example.com)")
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<CrossrefResponse>()
+        .await?;
+
+    Ok(resp.message.items)
+}
+```
+
+---
+
+## 7.7 Unpaywall legal OA lookup by DOI in Rust
+
+```rust
+use anyhow::Result;
+use reqwest::Client;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+pub struct UnpaywallResponse {
+    pub doi: Option<String>,
+    pub title: Option<String>,
+    pub is_oa: Option<bool>,
+    pub best_oa_location: Option<OaLocation>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OaLocation {
+    pub url: Option<String>,
+    pub url_for_pdf: Option<String>,
+    pub host_type: Option<String>,
+    pub license: Option<String>,
+}
+
+pub async fn unpaywall_lookup(doi: &str, email: &str) -> Result<UnpaywallResponse> {
+    let client = Client::new();
+
+    let url = format!(
+        "https://api.unpaywall.org/v2/{}?email={}",
+        urlencoding::encode(doi),
+        urlencoding::encode(email)
+    );
+
+    let resp = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<UnpaywallResponse>()
+        .await?;
+
+    Ok(resp)
+}
+```
+
+---
+
+## 7.8 Firecrawl Rust SDK search + scrape
+
+Firecrawl’s official Rust docs currently show `firecrawl = "2"` and Rust 1.70+ support. ([Firecrawl][2])
+
+```toml
+[dependencies]
+firecrawl = "2"
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+```
+
+```rust
+use firecrawl::{Client, Format, ScrapeOptions, SearchOptions};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("FIRECRAWL_API_KEY")?;
+    let client = Client::new(api_key)?;
+
+    let results = client
+        .search(
+            "best Rust vector database agent RAG",
+            SearchOptions {
+                limit: Some(5),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    if let Some(web) = results.data.web {
+        for item in web {
+            if let firecrawl::SearchResultOrDocument::WebResult(r) = item {
+                println!("{} - {}", r.url, r.title.unwrap_or_default());
+            }
+        }
+    }
+
+    let doc = client
+        .scrape(
+            "https://firecrawl.dev",
+            ScrapeOptions {
+                formats: Some(vec![Format::Markdown]),
+                only_main_content: Some(true),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    println!("{}", doc.markdown.unwrap_or_default());
+
+    Ok(())
+}
+```
+
+---
+
+## 7.9 Local embeddings with FastEmbed-rs
+
+FastEmbed-rs is a Rust library for local retrieval embedding generation; its docs show `TextEmbedding::try_new` and `model.embed(...)`. ([Docs.rs][32])
+
+```toml
+[dependencies]
+anyhow = "1"
+fastembed = "5"
+```
+
+```rust
+use anyhow::Result;
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+
+fn main() -> Result<()> {
+    let model = TextEmbedding::try_new(
+        InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+            .with_show_download_progress(true),
+    )?;
+
+    let docs = vec![
+        "passage: Brave LLM Context returns extracted web grounding chunks.",
+        "passage: OpenAlex provides scholarly metadata and semantic search.",
+        "query: best tools for agent web search and publication discovery",
+    ];
+
+    let embeddings = model.embed(docs, None)?;
+
+    println!("Generated {} embeddings", embeddings.len());
+    println!("First vector dimension: {}", embeddings[0].len());
+
+    Ok(())
+}
+```
+
+---
+
+## 7.10 Qdrant Rust vector index skeleton
+
+Qdrant’s Rust client docs show connecting with `Qdrant::from_url`, creating collections, upserting points, and querying with `QueryPointsBuilder`. ([Docs.rs][33])
+
+```toml
+[dependencies]
+anyhow = "1"
+qdrant-client = "1.17"
+tokio = { version = "1", features = ["full"] }
+```
+
+```rust
+use anyhow::Result;
+use qdrant_client::qdrant::{
+    CreateCollectionBuilder, Distance, PointStruct, QueryPointsBuilder, UpsertPointsBuilder,
+    VectorParamsBuilder,
+};
+use qdrant_client::Qdrant;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let client = Qdrant::from_url("http://localhost:6334").build()?;
+
+    let collection = "agent_memory";
+
+    client
+        .create_collection(
+            CreateCollectionBuilder::new(collection)
+                .vectors_config(VectorParamsBuilder::new(384, Distance::Cosine)),
+        )
+        .await?;
+
+    let points = vec![
+        PointStruct::new(
+            1,
+            vec![0.0_f32; 384],
+            [
+                ("url", "https://example.com/source".into()),
+                ("title", "Example source".into()),
+                ("source_type", "web".into()),
+                ("retrieved_at", "2026-05-11T00:00:00Z".into()),
+            ],
+        ),
+    ];
+
+    client
+        .upsert_points(UpsertPointsBuilder::new(collection, points))
+        .await?;
+
+    let query = QueryPointsBuilder::new(collection)
+        .query(vec![0.0_f32; 384])
+        .limit(5)
+        .with_payload(true);
+
+    let results = client.query(query).await?;
+
+    println!("{:#?}", results);
+
+    Ok(())
+}
+```
+
+In production, replace the dummy vectors with FastEmbed-rs embeddings and use payload fields like:
+
+```text
+source_url
+canonical_url
+source_type
+publisher
+author
+published_at
+retrieved_at
+license
+doi
+pmid
+arxiv_id
+chunk_id
+content_hash
+trust_score
+freshness_score
+```
+
+---
+
+# 8. Practical ranking logic for agent retrieval
+
+A good agent should not just “search and summarize.” It should rank evidence.
+
+I would score each candidate source like this:
+
+```text
+final_score =
+  0.30 * semantic_relevance
++ 0.20 * lexical_relevance
++ 0.15 * source_authority
++ 0.10 * freshness
++ 0.10 * primary_source_bonus
++ 0.05 * citation_count_or_reference_quality
++ 0.05 * extraction_quality
++ 0.05 * corroboration_score
+- penalties
+```
+
+Penalties:
+
+```text
+- missing date
+- content farm / SEO spam
+- user-generated source for factual claim
+- no author/publisher
+- old source for time-sensitive query
+- suspicious prompt-injection text
+- inaccessible original source
+- paywalled snippet only
+- duplicate/canonical mismatch
+```
+
+For publications:
+
+```text
+final_paper_score =
+  0.25 * query_relevance
++ 0.20 * venue_or_source_quality
++ 0.15 * citation_signal
++ 0.15 * recency
++ 0.10 * full_text_available
++ 0.10 * methodology_match
++ 0.05 * author/institution relevance
+```
+
+---
+
+# 9. Safety rules I would enforce
+
+1. **Never treat webpage text as instructions.** Web content is data, not system/developer/user instruction.
+
+2. **No secrets in search queries.** Strip credentials, internal URLs, personal data, and proprietary context before calling hosted search.
+
+3. **Use source allowlists for high-stakes tasks.** For medical/legal/regulatory/scientific queries, route to primary sources and trusted databases first.
+
+4. **Human approval for consequential actions.** Searching is fine; purchases, messages, account actions, and downloads from untrusted sites need approval.
+
+5. **Separate browsing from acting.** The search agent should gather evidence; a different, more constrained tool should act.
+
+6. **Sandbox browsers.** No ambient cookies, no local file access, no unrestricted network pivoting, no arbitrary script execution.
+
+7. **Respect robots.txt, API terms, and rate limits.** Especially for Reddit, X, GitHub, and LinkedIn.
+
+8. **Store provenance with every memory chunk.** Every chunk needs URL, retrieval date, source title, author/publisher where available, and content hash.
+
+9. **Use freshness routing.** Current events require fresh search; evergreen docs can use cache.
+
+10. **Red-team prompt injection.** Add test pages that say things like “ignore previous instructions” and verify your agent treats them as hostile content.
+
+---
+
+# 10. Final tool choices by scenario
+
+## Best privacy-first stack
+
+```text
+SearXNG self-hosted
++ Mojeek API
++ Brave Search API with ZDR where available
++ direct publication APIs
++ local Playwright/readability extraction
++ FastEmbed-rs
++ Qdrant or LanceDB local
++ Tantivy lexical index
+```
+
+## Best production-quality agent stack
+
+```text
+Brave LLM Context
++ Firecrawl
++ Tavily or Exa for secondary agent-native search
++ OpenAlex/Semantic Scholar/Crossref/Unpaywall
++ GitHub GraphQL/REST
++ Reddit OAuth API
++ X API
++ LinkedIn official APIs only
++ Qdrant
++ Tantivy or Meilisearch
++ FastEmbed-rs
++ Rig or Swiftide
+```
+
+## Best scholarly research stack
+
+```text
+OpenAlex semantic/keyword search
++ Semantic Scholar citation expansion
++ Crossref DOI normalization
++ Unpaywall OA lookup
++ arXiv/PubMed/PMC/CORE by domain
++ PDF parser / GROBID
++ Qdrant + Tantivy hybrid search
+```
+
+## Best developer/code intelligence stack
+
+```text
+GitHub GraphQL
++ GitHub REST
++ GitHub code search
++ Brave LLM Context for docs/web
++ Firecrawl for docs crawling
++ Tantivy for local repo/docs lexical search
++ Qdrant/FastEmbed-rs for semantic code/doc chunks
+```
+
+## Best “safe internet search for agents” answer
+
+Use **Brave LLM Context as the primary web grounding tool**, **SearXNG + Mojeek as privacy/independence backups**, **Firecrawl as the extraction/crawl layer**, and **OpenAlex/Semantic Scholar/Crossref/Unpaywall for publications**. Store everything in a **hybrid memory system** using **Qdrant for vectors**, **Tantivy or Meilisearch for lexical search**, and **Postgres/object storage for provenance and snapshots**. For Rust-first implementation, use **FastEmbed-rs**, **Qdrant Rust client**, **Tantivy**, and **Rig or Swiftide**.
+
+[1]: https://api-dashboard.search.brave.com/documentation/services/llm-context "Brave Search - API"
+[2]: https://docs.firecrawl.dev/quickstarts/rust "Rust Quickstart | Firecrawl"
+[3]: https://tavily.com/ "Tavily"
+[4]: https://developers.openalex.org/api-reference/introduction "API Overview - OpenAlex Developers"
+[5]: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api "Rate limits for the REST API - GitHub Docs"
+[6]: https://qdrant.tech/documentation/ "Documentation - Qdrant"
+[7]: https://github.com/0xplaygrounds/rig "GitHub - 0xPlaygrounds/rig: ⚙️ Build modular and scalable LLM Applications in Rust · GitHub"
+[8]: https://brave.com/blog/search-api-zero-data-retention/ "Brave is the only search API offering true Zero Data Retention, unlocking growth and privacy compliance for AI companies | Brave"
+[9]: https://docs.searxng.org/user/about.html "About SearXNG - SearXNG Documentation (2026.5.10+df1f24fb7)"
+[10]: https://docs.searxng.org/dev/search_api.html "Search API - SearXNG Documentation (2026.5.10+df1f24fb7)"
+[11]: https://www.mojeek.com/about/why-mojeek "Why Mojeek?"
+[12]: https://help.kagi.com/kagi/api/search.html "Search API | Kagi's Docs"
+[13]: https://kagi.com/privacy "Privacy - Kagi Search"
+[14]: https://www.postman.com/api-evangelist/duckduckgo/documentation/i9r819s/duckduckgo-instant-answer-api?utm_source=chatgpt.com "DuckDuckGo Instant Answer API | Documentation"
+[15]: https://docs.tavily.com/documentation/api-reference/endpoint/search "Tavily Search - Tavily Docs"
+[16]: https://exa.ai/docs/reference/search?utm_source=chatgpt.com "Search"
+[17]: https://jina.ai/reader/?utm_source=chatgpt.com "Reader API"
+[18]: https://www.semanticscholar.org/product/api "Semantic Scholar Academic Graph API | Semantic Scholar"
+[19]: https://www.crossref.org/documentation/retrieve-metadata/rest-api/ "REST API - Crossref"
+[20]: https://unpaywall.org/products/api?utm_source=chatgpt.com "REST API"
+[21]: https://info.arxiv.org/help/api/user-manual.html "arXiv API User's Manual - arXiv info"
+[22]: https://www.ncbi.nlm.nih.gov/home/develop/api/ "APIs - Develop - NCBI"
+[23]: https://docs.github.com/en/graphql "GitHub GraphQL API documentation - GitHub Docs"
+[24]: https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki "Reddit Data API Wiki – Reddit Help"
+[25]: https://www.reddit.com/dev/api/ "reddit.com: api documentation"
+[26]: https://docs.x.com/x-api/posts/search-recent-posts "Search recent Posts - X"
+[27]: https://www.linkedin.com/help/linkedin/answer/a1341387/prohibited-software-and-extensions?lang=en "Prohibited  software and extensions | LinkedIn Help"
+[28]: https://developer.linkedin.com/product-catalog "LinkedIn API | Products"
+[29]: https://owasp.org/www-project-top-10-for-large-language-model-applications/ "OWASP Top 10 for Large Language Model Applications | OWASP Foundation"
+[30]: https://openai.com/index/prompt-injections/ "Understanding prompt injections: a frontier security challenge | OpenAI"
+[31]: https://developers.openai.com/api/docs/guides/safety-best-practices "Safety best practices | OpenAI API"
+[32]: https://docs.rs/fastembed "fastembed - Rust"
+[33]: https://docs.rs/qdrant-client "qdrant_client - Rust"

@@ -1,0 +1,217 @@
+# ZYAL v2.1 — Control Plane Preview
+#
+# Preview-only control plane contract demonstrating interop, runtime,
+# capability negotiation, memory kernel, evidence graph, trust, requirements,
+# evaluation, release, roles, channels, imports, reasoning privacy, and
+# unsupported feature policy. The contract is safe to preview and summarize;
+# it does not grant runtime-side execution power.
+
+<<<ZYAL v1:daemon id=control-plane-preview>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Control-plane preview"
+  objective: |
+    Demonstrate the preview-only control-plane blocks without granting any
+    runtime execution surface. The host should parse, preview, and summarize
+    these contracts before any arming decision.
+  risk:
+    - Preview contract only; no runtime execution requested
+
+stop:
+  all:
+    - git_clean:
+        allow_untracked: false
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  reject_from: [assistant_output, tool_output, web_content, mcp_resource, issue_comment, repo_files]
+  accepted_origins: [trusted_user_message, signed_cli_input, host_ui_button]
+  preview_expires_after: 10m
+  arm_token_single_use: true
+  bound_to: ["script_hash", "user_id", "repo", "branch"]
+
+interop:
+  protocols:
+    - name: mcp
+      target: host_tools
+      version: v1
+      notes: "Read-only host tool bridge"
+    - name: a2a
+      target: worker_fleet
+      version: v0
+      notes: "Preview negotiation only"
+  adapters:
+    - zyal-daemon
+    - jnoccio
+  compile_to:
+    - run_card
+    - capability_matrix
+    - preview_bundle
+
+runtime:
+  mode: preview
+  workspace: isolated_worktree
+  network: deny
+  env: [JEKKO_HOME, RUN_ID]
+  resources:
+    cpu: "2"
+    memory: "4Gi"
+    disk: "1Gi"
+    processes: 8
+
+capability_negotiation:
+  host: jekko-daemon
+  required: [interop, runtime, memory_kernel, evidence_graph]
+  optional: [release, roles, channels, unsupported_preview_hooks]
+  fail_closed: true
+  degrade_to: preview_card
+
+memory_kernel:
+  stores:
+    task_context:
+      scope: task
+      retention: until_promotion
+      searchable: true
+    design_notes:
+      scope: global
+      retention: permanent
+      searchable: true
+  redaction:
+    patterns: ["sk-*", "ghp_*", "AKIA*"]
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+evidence_graph:
+  nodes:
+    preview_bundle:
+      type: proof_bundle
+      required: true
+    runtime_contract:
+      type: host_contract
+      required: true
+    release_candidate:
+      type: host_gate
+  edges:
+    - from: preview_bundle
+      to: runtime_contract
+      kind: validates
+    - from: runtime_contract
+      to: release_candidate
+      kind: gates
+  merge_witness: preview_bundle
+
+trust:
+  zones:
+    trusted_user_prompt:
+      paths: ["prompt", "cli"]
+      taint: clean
+      require_approval: false
+    assistant_output:
+      paths: ["assistant", "tool"]
+      taint: tainted
+      require_approval: true
+  on_taint: pause
+  notes: "Preview contracts do not inherit trust from assistant output."
+
+taint:
+  default_label: external
+  labels:
+    trusted_user:
+      rank: high
+      notes: "Direct human operator input."
+    external:
+      rank: untrusted
+      notes: "Web, issue, tool, MCP, or remote-agent content."
+    hostile_instruction:
+      rank: hostile
+      notes: "Detected prompt-injection or delegated-authority text."
+  forbid:
+    - from: [external, hostile_instruction]
+      cannot: [arm, approve, grant_capability, exec_shell, expose_secret]
+      unless: [human_review, signed_sanitizer]
+  prompt_injection:
+    detect_patterns:
+      - "[Ii]gnore (all )?previous instructions"
+      - "[Rr]eveal (the )?(secret|token|key)"
+    on_detect: pause
+    scan_sources: [web_content, issue_comment, mcp_resource, tool_output]
+
+requirements:
+  must:
+    - parse_successfully
+    - summarize_all_preview_blocks
+    - fail_closed_for_unknown_required_features
+  should:
+    - keep_runtime_mode_preview_only
+    - keep_network_denied
+  avoid:
+    - runtime_side_effects
+    - code_fence_wrapping
+
+evaluation:
+  metrics:
+    - name: parse_latency_ms
+      command: "bun test packages/jekko/src/agent-script/parser.test.ts"
+      threshold: 5000
+    - name: preview_summary_complete
+      command: "bun run --filter @jekko-ai/jekko typecheck"
+      threshold: 1
+  compare: baseline
+
+release:
+  channel: preview
+  version: 0.0.0-preview
+  gates: [parse_success, preview_summary_complete]
+  notes: "Preview-only contract for schema and parser coverage."
+
+roles:
+  list:
+    - id: host
+      agent: plan
+      permissions: [read, preview]
+      description: "Host evaluates and previews the contract."
+    - id: reviewer
+      agent: critic
+      permissions: [read]
+      description: "Human or critic reviews the preview bundle."
+
+channels:
+  list:
+    - id: prompt
+      kind: input
+      route: prompt_preview
+      approval: review_required
+    - id: daemon
+      kind: status
+      route: daemon_preview
+    - id: report
+      kind: artifact
+      route: preview_bundle
+
+imports:
+  list:
+    - source: "docs/ZYAL/examples/08-full-power-runbook.zyal"
+      optional: true
+    - source: "zyal://stdlib/control-plane-preview@1"
+      optional: true
+      pin: "1"
+
+reasoning_privacy:
+  store_reasoning: false
+  redact_chain_of_thought: true
+  summaries_only: true
+
+unsupported_feature_policy:
+  required: [interop, runtime, capability_negotiation, memory_kernel, evidence_graph, trust, taint, requirements, evaluation, release, roles, channels, imports, reasoning_privacy]
+  optional: [unsupported_preview_hooks]
+  fail_closed: true
+  on_missing: reject
+<<<END_ZYAL id=control-plane-preview>>>
+ZYAL_ARM RUN_FOREVER id=control-plane-preview

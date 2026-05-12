@@ -1,0 +1,1337 @@
+## Plan update: add **ZYAL Task Forge** for difficult work that needs cross-loop maturation
+
+The ZYAL V1 plan is already strong on the most important baseline: strict `ZYAL v1` gates, no XML `<FOREVER>`, no assistant-generated activation, TUI preview before arming, SQLite as source of truth, generated readable mirrors, context hard-clear as a new daemon epoch/child session, and normal Jekko prompt/session semantics left unchanged. That is the right foundation.
+
+The missing layer is what I would call **ZYAL Task Forge**:
+
+> A bounded, host-controlled maturation loop for hard tasks that are too risky to “just do,” where multiple agents/passes can explore, plan, critique, prototype, preserve structured memory, and eventually promote the task back into the normal implementation queue once evidence-based readiness is high enough.
+
+This should **not** be another forever loop. It should be a **bounded cross-loop collaboration mode** that runs only when a task is classified as hard, uncertain, high blast-radius, repeatedly failed, or when the easy queue is exhausted.
+
+The core idea:
+
+```text
+Normal daemon loop:
+  find easy / medium task → implement → verify → commit → push → repeat forever
+
+Task Forge:
+  hard task detected → bounded research/planning/prototype passes
+  → structured task memory accumulates
+  → independent/fresh agents and refinement agents improve the plan
+  → evidence/readiness threshold passes
+  → task is promoted to implementation
+  → scratchpad is summarized/cleaned
+```
+
+This is the right place for “one agent starts fresh and makes a new plan” versus “one agent is forced to read and improve the existing plan.” Both are useful, but they should be explicitly modeled as different **collaboration modes**, not left to prompt vibes.
+
+---
+
+# 1. What other agent communities already know
+
+There is still no universal standard for “in-prompt agent programming language that safely runs forever and coordinates hard coding tasks.” What exists are several mature patterns that ZYAL should borrow without copying blindly.
+
+**LangGraph** is the strongest prior art for durability: its docs define durable execution as saving progress at key points so workflows can pause, resume, and recover after interruptions, especially for long-running and human-in-the-loop work. ZYAL’s SQLite daemon store and epoch model should follow that same principle: the runtime state is durable; the prompt is not the source of truth. ([LangChain Docs][1])
+
+**CrewAI Flows** is relevant for stateful routing: Flows support state management, persistence, conditional logic, branching, loops, routers, and human feedback. ZYAL Task Forge should use the same conceptual pattern: route tasks by state and evidence, not just by what the model says it feels confident about. ([CrewAI Documentation][2])
+
+**AutoGen** is relevant for explicit termination conditions: its group chat teams evaluate termination after agent responses and include built-in conditions like max messages, text mention, token usage, timeout, and handoff termination. ZYAL already plans host-side stop checks; Task Forge should add host-side **promotion**, **defer**, and **pause** conditions for hard tasks. ([Microsoft GitHub][3])
+
+**Reflexion** is directly relevant to your scratchpad idea: it improves agents through verbal reflection stored in episodic memory, without changing model weights. ZYAL should not store raw private reasoning, but it should store structured reflections: failed assumptions, evidence, blockers, plan deltas, and test results. ([Hugging Face][4])
+
+**Self-Refine** is relevant to bounded improvement loops: it uses generate → feedback → refine iterations and reports improved outputs across diverse tasks. ZYAL Task Forge should support this as a pass type, but cap it with pass limits, evidence gates, and no-progress detection. ([NeurIPS Proceedings][5])
+
+**Tree of Thoughts** and **Graph of Thoughts** are relevant for very hard tasks because they explore multiple reasoning paths, evaluate alternatives, backtrack, and combine intermediate “thought” units into graph-like solutions. ZYAL should implement this as multiple **plan candidates** and **synthesis passes**, not by asking one agent to think harder forever. ([Princeton University][6])
+
+**Voyager** is relevant because it combines an automatic curriculum, iterative prompting, and a growing skill library. ZYAL should allow successful hard-task learnings to be archived as reusable patterns, but not automatically promoted into global skills without explicit config or review. ([Hugging Face][7])
+
+**SWE-agent** is important for coding-agent UX: its docs emphasize that agent-computer interface design matters, including constrained file viewers, concise search results, lint-on-edit feedback, and saved trajectories. ZYAL Task Forge should store task trajectories and provide agent-tailored tools rather than dumping huge logs into context. ([Hugging Face][8])
+
+**OpenHands / AgentSkills** is relevant for progressive disclosure: OpenHands supports always-loaded context and on-demand skills, while Agent Skills use `SKILL.md` packages with progressive disclosure so agents load only the context they need. ZYAL task memory should follow this: advertise a short summary, then let agents load detailed task memory only when needed. ([OpenHands Docs][9])
+
+**MCP** should remain tool/context plumbing, not the orchestration language. MCP defines a base protocol with lifecycle/capability negotiation and server/client features like tools, resources, prompts, roots, and sampling; importantly, the sampling spec calls for human review/denial affordances and forbids standalone server-initiated sampling unrelated to a client request. ZYAL should use MCP profiles/scopes, but the daemon supervisor should own workflow state. ([Model Context Protocol][10])
+
+**Jekko** itself already has the primitives ZYAL should build on: primary agents, subagents, a read-only Explore agent, a General subagent for parallel work, hidden compaction, permissions, custom command templates, and MCP tool configuration. Jekko’s MCP docs also warn that enabling many MCP servers can consume context quickly, so Task Forge should activate narrow MCP profiles per pass rather than “spin up everything.” ([Jekko][11])
+
+---
+
+# 2. The main design correction: do not use raw “confidence”
+
+I would not make the router say:
+
+```yaml
+if agent_confidence < 0.7:
+  send_to_hard_loop
+```
+
+That is too squishy. Model self-confidence can be one signal, but it should never be the control signal.
+
+Use **readiness** and **risk** instead.
+
+```text
+risk = how bad it is if the task is attempted incorrectly
+readiness = how much evidence exists that the task can now be completed safely
+```
+
+A hard task enters Task Forge when risk is high or readiness is low. It leaves Task Forge only when runtime-verifiable evidence reaches a threshold.
+
+### Evidence-based readiness dimensions
+
+```yaml
+readiness:
+  requirements_known: 0.0..1.0
+  scope_bounded: 0.0..1.0
+  affected_files_known: 0.0..1.0
+  tests_identified: 0.0..1.0
+  rollback_known: 0.0..1.0
+  plan_reviewed: 0.0..1.0
+  prototype_validated: 0.0..1.0
+  implementation_confidence: 0.0..1.0
+```
+
+The runtime should compute a weighted score, but also require minimum gates:
+
+```yaml
+promote_when:
+  min_score: 0.78
+  require:
+    requirements_known: ">= 0.7"
+    tests_identified: ">= 0.6"
+    scope_bounded: ">= 0.7"
+    rollback_known: ">= 0.5"
+```
+
+The model may report:
+
+```json
+{
+  "self_confidence": 0.63,
+  "unknowns": ["unclear migration ownership", "test command not identified"]
+}
+```
+
+But host promotion should depend on evidence files, test commands, review outputs, and plan agreement.
+
+---
+
+# 3. New state machine: task lifecycle with hard-task branch
+
+Add this lifecycle on top of the existing daemon task ledger.
+
+```text
+discovered
+  ↓
+assessing
+  ↓
+ready_easy ───────────────→ implementing → verifying → checkpointing → done
+  ↓
+ready_medium ─────────────→ implementing → verifying → checkpointing → done
+  ↓
+needs_forge
+  ↓
+forge_planning
+  ↓
+forge_reviewing
+  ↓
+forge_prototyping
+  ↓
+forge_synthesizing
+  ↓
+readiness_gate
+  ├── promote_to_implementation
+  ├── continue_forge_pass
+  ├── defer_with_handoff
+  └── pause_for_human
+```
+
+This avoids the bad behavior you described:
+
+```text
+all easy tasks get done
+only scary tasks remain
+agent keeps avoiding them or repeatedly fails
+```
+
+Instead, once easy work is exhausted, the daemon switches from “worker loop” to “forge loop”:
+
+```text
+if easy_queue.empty and hard_queue.not_empty:
+  run bounded forge passes
+```
+
+---
+
+# 4. Add a new ZYAL section: `hardening` or `forge`
+
+I strongly prefer the public name **`forge`**. It conveys “mature the task until it is strong enough to implement,” and it is shorter than `hardening_passes`.
+
+## Minimal syntax
+
+```yaml
+forge:
+  enabled: true
+  route_when:
+    any:
+      - task_attempts: ">= 2"
+      - readiness_score: "< 0.65"
+      - risk_score: ">= 0.75"
+      - easy_queue_empty: true
+
+  max_passes_per_task: 5
+  max_total_forge_iterations: 20
+
+  memory:
+    mode: task_scoped
+    retention: summarize_on_done
+    max_bytes_per_task: 200000
+
+  promote_when:
+    readiness_score: ">= 0.78"
+    require_evidence:
+      - implementation_plan
+      - test_strategy
+      - risk_review
+      - rollback_plan
+
+  on_exhausted:
+    action: pause
+    write_handoff: true
+```
+
+This is simple enough to use, but powerful enough to enforce behavior.
+
+---
+
+# 5. Full Task Forge syntax proposal
+
+## 5.1 Routing
+
+```yaml
+forge:
+  enabled: true
+
+  route_when:
+    any:
+      - easy_queue_empty: true
+      - task_attempts: ">= 2"
+      - task_failed_verification: true
+      - readiness_score: "< 0.65"
+      - risk_score: ">= 0.75"
+      - blast_radius:
+          files: ">= 8"
+      - uncertainty:
+          unknown_requirements: ">= 2"
+      - tags_any: ["algorithm", "migration", "architecture", "security", "large-refactor"]
+
+  route_unless:
+    any:
+      - task_priority: "critical_hotfix"
+      - user_forced_route: "implement_now"
+      - has_existing_verified_plan: true
+```
+
+Why this works: not every task enters forge. It only routes when the task is risky, ambiguous, repeatedly failed, tagged as hard, or when easy work is gone.
+
+## 5.2 Readiness scoring
+
+```yaml
+forge:
+  scoring:
+    readiness:
+      weights:
+        requirements_known: 0.15
+        scope_bounded: 0.15
+        affected_files_known: 0.10
+        tests_identified: 0.15
+        rollback_known: 0.10
+        plan_reviewed: 0.15
+        prototype_validated: 0.15
+        self_confidence: 0.05
+
+    risk:
+      weights:
+        blast_radius: 0.20
+        irreversible_change: 0.20
+        migration_or_schema: 0.20
+        security_sensitive: 0.20
+        unclear_tests: 0.10
+        prior_failures: 0.10
+```
+
+The key is that `self_confidence` is tiny. It can influence routing, but it cannot dominate it.
+
+## 5.3 Collaboration modes
+
+```yaml
+forge:
+  collaboration:
+    mode: independent_then_synthesize
+    candidates: 3
+    fresh_context: true
+    read_existing_memory: summary_only
+```
+
+Supported modes:
+
+| Mode                          | Behavior                                                                                | Best use                                          |
+| ----------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `independent_then_synthesize` | Multiple fresh agents make independent plans, then a synthesizer merges the best ideas. | Ambiguous architecture or algorithmic tasks.      |
+| `iterative_refine`            | Each pass reads the existing plan and improves it.                                      | Known direction, needs polishing.                 |
+| `adversarial_review`          | Reviewer attacks the plan and looks for regressions.                                    | Risky refactors, migrations, security changes.    |
+| `tournament`                  | Several plan/prototype candidates compete against explicit tests.                       | Algorithmic work, performance, parser behavior.   |
+| `single_researcher`           | One bounded research loop with memory.                                                  | Smaller hard tasks where parallelism is overkill. |
+
+## 5.4 Pass definitions
+
+```yaml
+forge:
+  passes:
+    - id: fresh_plans
+      type: plan
+      count: 3
+      context: fresh
+      output: plan_candidate
+
+    - id: critique
+      type: review
+      count: 2
+      reads: [plan_candidate]
+      output: risk_review
+
+    - id: prototype
+      type: spike
+      isolation: git_worktree
+      max_changes: 10
+      output: prototype_artifact
+      cleanup: discard_unless_promoted
+
+    - id: synthesize
+      type: synthesize
+      reads: [plan_candidate, risk_review, prototype_artifact]
+      output: implementation_plan
+
+    - id: readiness_gate
+      type: score
+      output: readiness_report
+```
+
+Pass types I would support:
+
+| Pass type     | Function                                                |
+| ------------- | ------------------------------------------------------- |
+| `explore`     | Read-only investigation.                                |
+| `plan`        | Produce candidate implementation plan.                  |
+| `review`      | Critique plan, identify risks.                          |
+| `red_team`    | Try to prove the plan unsafe or incomplete.             |
+| `spike`       | Temporary prototype in isolated worktree/sandbox.       |
+| `test_design` | Identify or create verification strategy.               |
+| `synthesize`  | Merge competing plans into final plan.                  |
+| `score`       | Runtime/model-assisted readiness assessment.            |
+| `handoff`     | Produce human-readable “blocked but understood” packet. |
+| `promote`     | Move task back to implementation queue.                 |
+
+## 5.5 Task-scoped memory
+
+```yaml
+forge:
+  memory:
+    mode: task_scoped
+    source_of_truth: sqlite
+    mirror: ".jekko/daemon/{{run.id}}/tasks/{{task.id}}/"
+    advertise: summary_only
+    load_policy: explicit_tool
+    max_bytes_per_task: 200000
+    max_entries_per_task: 100
+    redact_secrets: true
+
+    files:
+      problem: PROBLEM.md
+      memory: MEMORY.md
+      hypotheses: HYPOTHESES.md
+      plans: plans/
+      reviews: reviews/
+      prototypes: prototypes/
+      evidence: evidence.jsonl
+      decision: DECISION.md
+      handoff: HANDOFF.md
+
+    on_done:
+      summarize_to: FINAL_LESSONS.md
+      archive: true
+      delete_unpromoted_prototypes: true
+```
+
+Important detail: this memory should not be raw hidden chain-of-thought. It should store structured, reviewable artifacts:
+
+```text
+facts
+hypotheses
+failed assumptions
+open questions
+plan candidates
+risk reviews
+test evidence
+prototype results
+decision summaries
+handoff packets
+```
+
+## 5.6 Promotion and cleanup
+
+```yaml
+forge:
+  promote_when:
+    readiness_score: ">= 0.78"
+    risk_score: "<= 0.55"
+    require_evidence:
+      - implementation_plan
+      - test_strategy
+      - risk_review
+      - rollback_plan
+
+  on_promote:
+    queue: implementation
+    inject_context:
+      - task.memory.summary
+      - task.decision
+      - task.test_strategy
+      - task.rollback_plan
+
+  on_done:
+    archive_memory: true
+    compact_memory: true
+    remove_worktrees: true
+    keep:
+      - FINAL_LESSONS.md
+      - DECISION.md
+      - evidence.jsonl
+
+  on_exhausted:
+    action: pause
+    write_handoff: true
+    ask_human: true
+```
+
+This gives you cleanup when complete and a useful handoff when not complete.
+
+---
+
+# 6. Updated ZYAL example for your original JANKURAI loop
+
+This is how I would extend the existing ZYAL daemon example.
+
+```yaml
+<<<ZYAL v1:daemon id=jankurai-clean-worktree>>>
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai dirty worktree hardening"
+  objective: |
+    Investigate all uncommitted work. Fix regressions. Run confidence checks.
+    Commit and push completed verified work. If audit still has findings or caps,
+    update JANKURAI_TASKLIST.md and move completed items to
+    JANKURAI_TASKLIST.md.completed.
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied, checkpoint_failed, no_progress]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+tasks:
+  ledger: sqlite
+  discover:
+    - shell:
+        command: "jankurai audit . --json"
+        items: "$.findings[*]"
+  classify:
+    easy_when:
+      all:
+        - blast_radius.files: "<= 3"
+        - tests_known: true
+        - risk_score: "< 0.45"
+    hard_when:
+      any:
+        - blast_radius.files: ">= 8"
+        - attempts: ">= 2"
+        - risk_score: ">= 0.75"
+        - readiness_score: "< 0.65"
+        - tags_any: ["algorithm", "architecture", "migration", "security"]
+
+forge:
+  enabled: true
+  route_when:
+    any:
+      - easy_queue_empty: true
+      - task.class: hard
+      - task.attempts: ">= 2"
+      - readiness_score: "< 0.65"
+
+  max_passes_per_task: 5
+  max_total_forge_iterations: 25
+
+  collaboration:
+    mode: independent_then_synthesize
+    candidates: 3
+    fresh_context: true
+    read_existing_memory: summary_only
+
+  scoring:
+    readiness:
+      weights:
+        requirements_known: 0.15
+        scope_bounded: 0.15
+        affected_files_known: 0.10
+        tests_identified: 0.15
+        rollback_known: 0.10
+        plan_reviewed: 0.15
+        prototype_validated: 0.15
+        self_confidence: 0.05
+
+  passes:
+    - id: explore
+      type: explore
+      count: 2
+      agent: explore
+      context: fresh
+      output: fact_report
+
+    - id: fresh_plans
+      type: plan
+      count: 3
+      agent: plan
+      context: fresh
+      reads: [fact_report]
+      output: plan_candidate
+
+    - id: red_team
+      type: red_team
+      count: 2
+      agent: plan
+      reads: [plan_candidate]
+      output: risk_review
+
+    - id: spike
+      type: spike
+      count: 1
+      agent: build
+      isolation: git_worktree
+      cleanup: discard_unless_promoted
+      output: prototype_artifact
+
+    - id: synthesize
+      type: synthesize
+      reads: [fact_report, plan_candidate, risk_review, prototype_artifact]
+      output: implementation_plan
+
+    - id: readiness_gate
+      type: score
+      output: readiness_report
+
+  promote_when:
+    readiness_score: ">= 0.78"
+    require_evidence:
+      - implementation_plan
+      - test_strategy
+      - risk_review
+      - rollback_plan
+
+  memory:
+    mode: task_scoped
+    source_of_truth: sqlite
+    mirror: ".jekko/daemon/{{run.id}}/tasks/{{task.id}}/"
+    advertise: summary_only
+    load_policy: explicit_tool
+    max_bytes_per_task: 200000
+    redact_secrets: true
+    on_done:
+      summarize_to: FINAL_LESSONS.md
+      archive: true
+      delete_unpromoted_prototypes: true
+
+  on_exhausted:
+    action: pause
+    write_handoff: true
+
+stop:
+  all:
+    - shell:
+        command: "jankurai audit . --json target/jankurai/daemon-audit.json"
+        timeout: 30s
+        assert:
+          json:
+            "$.findings_count": 0
+            "$.caps_count": 0
+    - git_clean:
+        allow_untracked: false
+
+context:
+  strategy: hybrid
+  compact_every: 1
+  hard_clear_every: 3
+  preserve:
+    - job.objective
+    - stop
+    - permissions
+    - task_ledger_summary
+    - last_checkpoint
+    - forge.active_task_summary
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - shell: "bun --cwd packages/jekko test --timeout 30000 packages/jekko/test/session/daemon-runtime.test.ts"
+  git:
+    add: ["."]
+    commit_message: "jankurai: daemon verified work item"
+    push: ask
+
+agents:
+  supervisor: { agent: build }
+  workers:
+    - id: fixers
+      count: 3
+      agent: build
+      isolation: git_worktree
+    - id: forge-planners
+      count: 3
+      agent: plan
+      isolation: child_session
+
+permissions:
+  shell: ask
+  edit: allow
+  git_commit: ask
+  git_push: ask
+  workers: ask
+  mcp: ask
+
+ui:
+  theme: jekko-gold
+  banner: forever
+  forge_panel: true
+<<<END_ZYAL id=jankurai-clean-worktree>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-clean-worktree
+```
+
+The important difference from the original forever loop is that hard tasks are **not retried blindly**. They are moved into a bounded forge cycle, gather structured memory, and only re-enter the implementation queue after promotion.
+
+---
+
+# 7. Implementation update to the existing plan
+
+I would add this as **Phase 3.5: Task Forge / Hard Task Maturation**, after serial daemon runtime and before full swarms/MCP.
+
+## 7.1 New files
+
+```text
+packages/jekko/src/session/daemon-forge.ts
+packages/jekko/src/session/daemon-routing.ts
+packages/jekko/src/session/daemon-memory.ts
+packages/jekko/src/session/daemon-score.ts
+packages/jekko/src/session/daemon-handoff.ts
+packages/jekko/src/session/daemon-task-artifacts.ts
+packages/jekko/src/tool/daemon.ts
+packages/jekko/src/agent-script/forge-schema.ts
+packages/jekko/test/session/daemon-forge.test.ts
+packages/jekko/test/session/daemon-memory.test.ts
+packages/jekko/test/session/daemon-routing.test.ts
+```
+
+## 7.2 Schema additions
+
+Extend `packages/jekko/src/agent-script/schema.ts` with:
+
+```ts
+OcalForge
+OcalForgeRoute
+OcalForgeScoring
+OcalForgePass
+OcalForgeMemory
+OcalForgePromotion
+OcalForgeCleanup
+OcalForgeCollaboration
+```
+
+Add parser checks:
+
+```text
+forge.max_passes_per_task must be finite
+forge.max_total_forge_iterations must be finite
+forge memory mirror must stay under .jekko/daemon/
+spike passes require isolation != same_worktree
+promotion must require at least one evidence artifact
+```
+
+## 7.3 DB additions
+
+The current daemon tables are enough for a basic loop, but Task Forge needs richer task evolution. Add:
+
+```sql
+daemon_task_assessment
+  id
+  run_id
+  task_id
+  iteration
+  risk_score
+  readiness_score
+  rubric_json
+  assessor
+  time_created
+
+daemon_task_memory
+  id
+  run_id
+  task_id
+  kind
+  title
+  summary
+  payload_json
+  source_ref
+  created_by_worker_id
+  time_created
+  supersedes_memory_id
+
+daemon_forge_pass
+  id
+  run_id
+  task_id
+  pass_id
+  pass_type
+  worker_id
+  session_id
+  status
+  input_json
+  output_json
+  started_at
+  ended_at
+  artifact_ids_json
+
+daemon_plan_candidate
+  id
+  run_id
+  task_id
+  pass_id
+  title
+  plan_markdown
+  risk_json
+  test_strategy_json
+  score_json
+  selected
+  time_created
+
+daemon_task_decision
+  id
+  run_id
+  task_id
+  decision
+  reason
+  readiness_score
+  risk_score
+  evidence_json
+  time_created
+```
+
+Keep SQLite as source of truth. Mirror readable files only after commits to DB.
+
+## 7.4 Runtime controller additions
+
+Add this logic to `daemon.ts` or a delegated `daemon-forge.ts` service:
+
+```text
+after task discovery:
+  assess tasks
+
+before leasing task:
+  prefer ready_easy and ready_medium
+
+if no implementation-ready task exists:
+  pick highest-priority needs_forge task
+  run forge pass plan
+  update task memory and scores
+  if promote_when passes:
+    promote task to implementation queue
+  else if pass budget remains:
+    continue bounded forge
+  else:
+    defer or pause with handoff
+```
+
+Important: Task Forge must never change the global daemon stop condition. It only changes how the daemon chooses and matures work.
+
+## 7.5 Daemon-only tools
+
+Add these tools only inside daemon/forge runs:
+
+```text
+daemon_task_status
+daemon_assess_task
+daemon_read_task_memory
+daemon_write_task_memory
+daemon_create_plan_candidate
+daemon_review_plan_candidate
+daemon_record_prototype_result
+daemon_record_test_strategy
+daemon_update_readiness
+daemon_promote_task
+daemon_defer_task
+daemon_write_handoff
+```
+
+Do **not** give the model a direct `daemon_stop` tool in V1. It may request pause/defer, but the runtime decides.
+
+## 7.6 API additions
+
+```text
+GET  /daemon/:runID/tasks
+GET  /daemon/:runID/tasks/:taskID
+GET  /daemon/:runID/tasks/:taskID/memory
+GET  /daemon/:runID/tasks/:taskID/forge
+POST /daemon/:runID/tasks/:taskID/defer
+POST /daemon/:runID/tasks/:taskID/promote
+POST /daemon/:runID/tasks/:taskID/forge/run-pass
+```
+
+## 7.7 CLI additions
+
+```text
+jekko daemon tasks <runID>
+jekko daemon task <runID> <taskID>
+jekko daemon task-memory <runID> <taskID>
+jekko daemon forge <runID> <taskID>
+jekko daemon promote <runID> <taskID>
+jekko daemon defer <runID> <taskID>
+```
+
+## 7.8 TUI additions
+
+Add a second banner line under the gold forever banner when forge is active:
+
+```text
+∞ FOREVER · Jankurai dirty worktree · iter 41 · evaluating_stop
+⚒ FORGE · task audit-17 · pass 3/5 · readiness 0.61 → target 0.78
+```
+
+Add a forge panel:
+
+```text
+Task: audit-17
+State: forge_synthesizing
+Risk: 0.82
+Readiness: 0.61
+Passes:
+  ✓ explore ×2
+  ✓ fresh_plans ×3
+  ✓ red_team ×2
+  • spike ×1
+  ◦ synthesize
+Memory:
+  PROBLEM.md
+  plans/3 candidates
+  reviews/2 risk reviews
+  evidence.jsonl
+```
+
+---
+
+# 8. Syntax highlighting and preview UX
+
+The existing ZYAL plan already says valid drafts get a gold preview and Enter opens an arming preview.
+
+Task Forge needs additional visual language so users can distinguish:
+
+```text
+FOREVER daemon = gold
+FORGE hard-task maturation = amber/bronze
+MCP/tools = teal
+workers/swarm = purple
+git/push/destructive = red
+stop/satisfied checks = green
+invalid/inert syntax = gray/red
+```
+
+## 8.1 Highlight categories
+
+| Syntax region                       |    Suggested color | Why                                         |
+| ----------------------------------- | -----------------: | ------------------------------------------- |
+| `<<<ZYAL v1:daemon...>>>`           |               Gold | Explicit executable workflow gate.          |
+| `confirm: RUN_FOREVER` / `ZYAL_ARM` | Bright gold + bold | Highest-risk activation marker.             |
+| `loop.policy: forever`              |               Gold | Shows non-terminating behavior.             |
+| `forge:`                            |     Amber / bronze | Hard-task maturation, not normal execution. |
+| `forge.route_when`                  |              Amber | Explains why work will be escalated.        |
+| `promote_when`                      |         Green/teal | Shows exit from forge into implementation.  |
+| `checkpoint.git.push`               |         Red/orange | Potentially irreversible external action.   |
+| `permissions`                       |         Red/orange | Safety/approval settings.                   |
+| `workers`                           |             Purple | Parallel execution.                         |
+| `mcp`                               |               Teal | External tools/context.                     |
+| unknown keys                        |      Red underline | Parser/security issue.                      |
+| fenced ZYAL block                   |         Gray/inert | Documentation, not executable.              |
+
+## 8.2 Preview should show risk summary
+
+Before arming, TUI should show:
+
+```text
+ZYAL DAEMON PREVIEW
+
+Mode: FOREVER
+Name: Jankurai dirty worktree hardening
+Stop checks:
+  ✓ jankurai audit findings_count == 0
+  ✓ jankurai audit caps_count == 0
+  ✓ git clean
+
+Checkpoint:
+  verify: bun --cwd packages/jekko test ...
+  git add: .
+  commit: jankurai: daemon verified work item
+  push: ask
+
+Forge:
+  enabled: yes
+  route hard tasks when easy queue empty, attempts >= 2, risk >= 0.75, readiness < 0.65
+  max passes per task: 5
+  memory: task-scoped SQLite + mirror
+  promotion threshold: readiness >= 0.78
+
+Workers:
+  fixers: 3 build agents, git_worktree isolation
+  forge-planners: 3 plan agents, child_session isolation
+
+Risks:
+  HIGH: forever loop
+  HIGH: git push possible
+  MEDIUM: worker spawning
+  MEDIUM: shell commands
+```
+
+The preview should make it obvious that **Forge is bounded**, while **Daemon is forever**.
+
+---
+
+# 9. How Task Forge prevents bad routing
+
+You specifically said, “we don’t want ALL problems being routed.”
+
+Use a four-part gate:
+
+```text
+1. deterministic prefilter
+2. lightweight risk/readiness assessment
+3. queue condition
+4. route budget
+```
+
+## Deterministic prefilter
+
+Examples:
+
+```yaml
+route_when:
+  any:
+    - attempts: ">= 2"
+    - tags_any: ["algorithm", "architecture", "migration"]
+    - blast_radius.files: ">= 8"
+    - easy_queue_empty: true
+```
+
+## Model-assisted assessment
+
+The model can classify:
+
+```json
+{
+  "risk_score": 0.78,
+  "readiness_score": 0.42,
+  "unknowns": ["no clear tests", "unclear impact on parser"],
+  "recommended_route": "forge"
+}
+```
+
+But it must cite evidence artifacts, files, or failed checks.
+
+## Queue condition
+
+Default should be:
+
+```yaml
+forge:
+  scheduling:
+    policy: after_easy_exhausted
+```
+
+Other options:
+
+```yaml
+policy: opportunistic
+policy: priority_weighted
+policy: only_after_failures
+policy: manual_only
+```
+
+## Budget
+
+```yaml
+forge:
+  max_active_tasks: 1
+  max_passes_per_task: 5
+  max_total_forge_iterations: 25
+  no_progress:
+    window: 2
+    action: defer
+```
+
+This prevents forge from consuming the whole daemon.
+
+---
+
+# 10. Cross-loop collaboration patterns ZYAL should support
+
+## Pattern A: Independent plans, then synthesis
+
+Best for ambiguous hard tasks.
+
+```yaml
+forge:
+  collaboration:
+    mode: independent_then_synthesize
+    candidates: 3
+    fresh_context: true
+    read_existing_memory: none
+```
+
+Flow:
+
+```text
+planner A sees facts only
+planner B sees facts only
+planner C sees facts only
+synthesizer sees all plans
+reviewer critiques synthesized plan
+```
+
+This avoids anchoring bias.
+
+## Pattern B: Iterative refinement
+
+Best when a decent plan already exists.
+
+```yaml
+forge:
+  collaboration:
+    mode: iterative_refine
+    passes: 4
+    read_existing_memory: full
+```
+
+Flow:
+
+```text
+pass 1 writes plan
+pass 2 improves plan
+pass 3 critiques plan
+pass 4 finalizes plan
+```
+
+This is the ZYAL version of Self-Refine, but host-bounded.
+
+## Pattern C: Red-team then repair
+
+Best for risky code changes.
+
+```yaml
+forge:
+  collaboration:
+    mode: adversarial_review
+    reviewers: 2
+    repair_after_review: true
+```
+
+Flow:
+
+```text
+plan candidate
+red team finds regressions
+planner repairs
+readiness gate evaluates
+```
+
+## Pattern D: Tournament
+
+Best for algorithmic tasks.
+
+```yaml
+forge:
+  collaboration:
+    mode: tournament
+    candidates: 4
+    evaluation:
+      - shell: "bun test path/to/algorithm.test.ts"
+      - shell: "bun bench path/to/bench.ts"
+    select: highest_score
+```
+
+Flow:
+
+```text
+candidate solutions in isolated worktrees
+run same tests/benchmarks
+select winner
+promote winner
+```
+
+## Pattern E: Research-only handoff
+
+Best when implementation should not happen yet.
+
+```yaml
+forge:
+  collaboration:
+    mode: research_only
+  on_promote:
+    action: pause_for_human
+```
+
+Flow:
+
+```text
+understand problem deeply
+produce handoff packet
+pause for human approval
+```
+
+---
+
+# 11. Memory design: safe scratchpad without context poisoning
+
+A hard task should get a durable package:
+
+```text
+.jekko/daemon/<runID>/tasks/<taskID>/
+  PROBLEM.md
+  MEMORY.md
+  HYPOTHESES.md
+  plans/
+    plan-a.md
+    plan-b.md
+    plan-c.md
+  reviews/
+    red-team-1.md
+    red-team-2.md
+  prototypes/
+    spike-1/
+  evidence.jsonl
+  DECISION.md
+  HANDOFF.md
+  FINAL_LESSONS.md
+```
+
+But the DB remains source of truth.
+
+Memory entries should be typed:
+
+```yaml
+memory_kinds:
+  - fact
+  - hypothesis
+  - failed_attempt
+  - open_question
+  - plan_candidate
+  - risk_review
+  - test_strategy
+  - prototype_result
+  - decision
+  - handoff
+  - lesson
+```
+
+Agents should not receive the entire scratchpad automatically. They should receive:
+
+```text
+task summary
+latest decision
+open questions
+available memory entries
+tool to load details
+```
+
+This mirrors progressive disclosure from Agent Skills and OpenHands: small advertised context first, deeper resources on demand. ([OpenHands Docs][9])
+
+---
+
+# 12. Cleanup rules
+
+Task Forge must clean up aggressively.
+
+```yaml
+forge:
+  cleanup:
+    on_task_done:
+      summarize_memory: true
+      archive_full_memory: true
+      delete_unpromoted_prototypes: true
+      remove_worker_worktrees: true
+      keep_artifacts:
+        - FINAL_LESSONS.md
+        - DECISION.md
+        - evidence.jsonl
+
+    on_task_deferred:
+      keep_handoff: true
+      keep_open_questions: true
+      remove_temp_files: true
+
+    on_daemon_satisfied:
+      compact_all_task_memory: true
+      write_run_summary: true
+      remove_idle_workers: true
+```
+
+No task should leave random scratch files in the repo root. Temporary prototypes should live in isolated worktrees or `.jekko/daemon/.../prototypes/`, and only promoted code should enter the main worktree.
+
+---
+
+# 13. Add “lessons to skill” as an optional later feature
+
+One powerful addition, but not V1 default:
+
+```yaml
+forge:
+  lessons:
+    promote_to_skill:
+      enabled: ask
+      target: ".agents/skills/{{skill_name}}/SKILL.md"
+      when:
+        repeated_pattern_count: ">= 3"
+```
+
+This would let ZYAL convert repeated hard-task learnings into reusable AgentSkills-style packages. That aligns with the broader skill ecosystem, where `SKILL.md` packages contain instructions, scripts, and resources loaded through progressive disclosure. ([Microsoft Learn][12])
+
+Default should be `ask`, not automatic, because auto-writing long-lived skills could pollute future runs.
+
+---
+
+# 14. Updated implementation order
+
+I would update the prior implementation sequence like this:
+
+```text
+Phase 1: ZYAL parser/schema/examples/spec
+Phase 2: durable daemon store/events
+Phase 3: serial daemon runtime/checks/checkpoint/context
+Phase 3.5: Task Forge routing/memory/scoring/promotion
+Phase 4: API/CLI/TUI gold preview/banner
+Phase 5: worker swarms with worktree isolation
+Phase 6: MCP profiles/tool scopes/health
+Phase 7: lessons-to-skills and advanced tournament modes
+```
+
+Task Forge should land before swarms because it defines how hard tasks are represented. Swarms without hard-task structure will just parallelize confusion.
+
+---
+
+# 15. Test plan additions
+
+Add these tests to the ZYAL plan.
+
+## Parser tests
+
+```text
+accepts forge block with valid finite pass limits
+rejects forge max_passes_per_task: forever
+rejects spike pass with same_worktree isolation
+rejects promote_when without evidence
+rejects memory mirror outside .jekko/daemon
+rejects unknown forge pass type
+```
+
+## Routing tests
+
+```text
+easy task does not enter forge
+hard tagged task enters forge
+task with attempts >= 2 enters forge
+easy_queue_empty triggers forge
+manual_only policy prevents automatic forge
+budget exhausted defers task
+```
+
+## Memory tests
+
+```text
+task memory is append-only
+memory mirror is generated from DB
+agent gets summary only by default
+explicit load returns selected memory
+on done writes FINAL_LESSONS.md
+on done deletes unpromoted prototypes
+```
+
+## Promotion tests
+
+```text
+readiness below threshold does not promote
+high self_confidence alone does not promote
+missing test_strategy blocks promotion
+risk_review plus test_strategy plus plan can promote
+promoted task returns to implementation queue
+```
+
+## Collaboration tests
+
+```text
+independent_then_synthesize hides candidate plans from fresh planners
+iterative_refine passes prior plan to next pass
+red_team output reduces readiness unless repaired
+tournament selects highest verified candidate
+```
+
+---
+
+# 16. The final “best possible” addition to the ZYAL contract
+
+Add this as a first-class contract section:
+
+```yaml
+forge:
+  enabled: boolean
+  route_when: condition
+  route_unless: condition
+  scheduling:
+    policy: after_easy_exhausted | opportunistic | only_after_failures | manual_only
+  scoring:
+    readiness: weighted_rubric
+    risk: weighted_rubric
+  collaboration:
+    mode: independent_then_synthesize | iterative_refine | adversarial_review | tournament | research_only
+  passes: ForgePass[]
+  memory: TaskScopedMemory
+  promote_when: PromotionGate
+  on_promote: PromotionAction
+  on_exhausted: ExhaustionAction
+  cleanup: CleanupPolicy
+```
+
+And add this runtime invariant:
+
+> **Forge loops are bounded. Daemon loops may be forever. A hard task can mature across loops, but it cannot silently consume the daemon forever unless the user explicitly configured that budget.**
+
+That gives you the power you want without turning every ambiguous task into an infinite scratchpad monster.
+
+[1]: https://docs.langchain.com/oss/javascript/langgraph/durable-execution?utm_source=chatgpt.com "Durable execution - Docs by LangChain"
+[2]: https://docs.crewai.com/en/concepts/flows?utm_source=chatgpt.com "Flows - CrewAI"
+[3]: https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/termination.html?utm_source=chatgpt.com "Termination — AutoGen"
+[4]: https://huggingface.co/papers/2303.11366?utm_source=chatgpt.com "Paper page - Reflexion: Language Agents with Verbal Reinforcement Learning"
+[5]: https://proceedings.neurips.cc/paper_files/paper/2023/hash/91edff07232fb1b55a505a9e9f6c0ff3-Abstract-Conference.html?utm_source=chatgpt.com "Self-Refine: Iterative Refinement with Self-Feedback"
+[6]: https://collaborate.princeton.edu/en/publications/tree-of-thoughts-deliberate-problem-solving-with-large-language-m-2/?utm_source=chatgpt.com "Tree of Thoughts: Deliberate Problem Solving with Large Language Models - Princeton University"
+[7]: https://huggingface.co/papers/2305.16291?utm_source=chatgpt.com "Paper page - Voyager: An Open-Ended Embodied Agent with Large Language Models"
+[8]: https://huggingface.co/papers/2405.15793?utm_source=chatgpt.com "Paper page - SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering"
+[9]: https://docs.openhands.dev/sdk/guides/skill?utm_source=chatgpt.com "Agent Skills & Context - OpenHands Docs"
+[10]: https://modelcontextprotocol.io/specification/2025-03-26/basic?utm_source=chatgpt.com "Overview - Model Context Protocol"
+[11]: https://jekko.ai/docs/agents/?utm_source=chatgpt.com "Agents | Jekko"
+[12]: https://learn.microsoft.com/en-us/agent-framework/agents/skills?utm_source=chatgpt.com "Agent Skills | Microsoft Learn"

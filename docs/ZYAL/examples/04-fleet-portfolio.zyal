@@ -1,0 +1,291 @@
+# ZYAL v2.1 — Fleet Portfolio Dispatcher
+#
+# A long-running daemon that watches GitHub issues with `zyal-ready` label,
+# dispatches isolated runs per issue with per-task budgets, leases for zombie
+# detection, and anti-recursion to prevent runaway cron schedules. Triggers fire
+# from cron, GitHub events, CI failures, and Slack commands.
+
+<<<ZYAL v1:daemon id=fleet-portfolio>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Multi-issue fleet dispatcher"
+  objective: |
+    Maintain N parallel runs across the org's repo portfolio, prioritizing
+    security and release-blocker work, eliminating zombie tasks, never creating
+    cascading cron jobs.
+
+triggers:
+  anti_recursion: true
+  list:
+    - id: nightly-sweep
+      kind: cron
+      schedule: "0 4 * * *"
+      allow_create_more_cron: false
+    - id: security-issues
+      kind: github_issue
+      filter:
+        label: "security,zyal-ready"
+        repo: "myorg/*"
+      idempotency_key_template: "issue-{{repo}}-{{number}}-{{sha}}"
+    - id: ci-failures
+      kind: ci_failure
+      filter: { branch: main }
+      max_runs_per_sha: 1
+    - id: pr-fix
+      kind: github_pr_comment
+      filter: { body_contains: "/zyal fix" }
+      idempotency_key_template: "pr-{{repo}}-{{number}}-{{sha}}"
+    - id: slack-bug
+      kind: slack_command
+      filter: { command: "/zyal bug" }
+
+stop:
+  all:
+    - shell:
+        command: "false"
+        timeout: 1s
+
+tasks:
+  ledger: sqlite
+  discover:
+    - command: "gh issue list --label zyal-ready --json number,title,repository,labels"
+      timeout: 30s
+
+models:
+  profiles:
+    plan: { provider: anthropic, model: claude-opus-4-7, reasoning: true }
+    build: { provider: anthropic, model: claude-sonnet-4-6 }
+    critic: { provider: openai, model: gpt-5, reasoning: true }
+    summarizer: { provider: anthropic, model: claude-haiku-4-5-20251001 }
+  routes:
+    plan: plan
+    implement: build
+    review: critic
+    compress: summarizer
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+  fallback:
+    on_rate_limit: summarizer
+    on_context_overflow: summarizer
+    cooldown: 60s
+  confidence_cap: 0.6
+
+budgets:
+  run:
+    wall_clock: 720h
+    cost_usd: 2000.00
+    on_exhaust: renew_with_approval
+  task:
+    iterations: 25
+    cost_usd: 6.00
+    on_exhaust: park
+  iteration:
+    tool_calls: 30
+    diff_lines: 1000
+    on_exhaust: pause
+
+agents:
+  supervisor:
+    agent: plan
+  workers:
+    - id: dispatchers
+      count: 6
+      agent: build
+      isolation: git_worktree
+
+fleet:
+  max_workers: 6
+  isolation: git_worktree
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    metrics_ws: "/v1/jnoccio/metrics/ws"
+    register_workers: true
+    heartbeat_path: "/v1/jnoccio/agents/heartbeat"
+    heartbeat_interval: 30s
+    max_instances: 6
+  telemetry:
+    publish_to: jnoccio
+    headers:
+      x-jekko-run-id: "${run.id}"
+      x-jekko-session: "${session.id}"
+
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_assertion_weakening: true
+    block_silent_catch: true
+    block_ts_ignore: true
+  diff_budget:
+    max_files_changed: 30
+    max_added_lines: 1500
+    on_violation: require_approval
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-anywhere
+      tool: read
+      decision: allow
+    - id: edit-src
+      tool: edit
+      paths: ["src/**", "test/**", "packages/**"]
+      decision: allow
+    - id: github-create-pr
+      tool: github
+      command_regex: "^create_pull_request"
+      decision: allow
+    - id: shell-tests
+      tool: shell
+      command_regex: "^(npm|pnpm|bun|yarn) (test|run lint|run build)"
+      decision: allow
+  command_floor:
+    always_block:
+      - "git push --force"
+      - "rm -rf /"
+      - "sudo "
+      - "DROP DATABASE"
+
+approvals:
+  gates:
+    pr_merge:
+      required_role: code_owner
+      timeout: 48h
+      on_timeout: pause
+      require_evidence: [test_results, rollback_plan]
+      decisions: [approve, reject, edit, escalate]
+    high_risk:
+      required_role: tech_lead
+      timeout: 24h
+      auto_approve_if:
+        risk_score_lt: 0.3
+        all_checks_pass: true
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+    include_model_calls: true
+  metrics:
+    - { name: tasks_started, type: counter, source: daemon }
+    - { name: tasks_promoted, type: counter, source: daemon }
+    - { name: tasks_parked, type: counter, source: daemon }
+    - { name: cost_usd_spent, type: counter, source: budget }
+    - { name: zombie_reclaims, type: counter, source: lease }
+  cost:
+    budget: 2000.00
+    currency: USD
+    alert_at_percent: 75
+    on_budget_exceeded: pause
+  report:
+    format: markdown
+    on_complete: true
+    on_checkpoint: true
+
+memory:
+  stores:
+    issue_context:
+      scope: task
+      retention: until_promotion
+      max_entries: 100
+      write_policy: append_only
+      read_policy: inject_at_start
+    org_lessons:
+      scope: global
+      retention: permanent
+      write_policy: upsert
+      read_policy: search
+      searchable: true
+  redaction:
+    patterns: ["sk-*", "AKIA*", "ghp_*", "github_pat_*"]
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+rollback:
+  required_when:
+    risk_score_gte: 0.5
+  plan_required: true
+  verify_command: "git apply --reverse --check < .jekko/daemon/rollback.patch"
+  on_failure_after_merge: revert_commit
+
+done:
+  require:
+    - stop_conditions_met
+    - requirements_verified
+    - evidence_complete
+    - rollback_plan_recorded
+  forbid:
+    - model_only_claim
+    - tests_not_run
+
+incubator:
+  enabled: true
+  strategy: bounded_passes
+  route_when:
+    any:
+      - repeated_attempts_gte: 2
+      - risk_score_gte: 0.7
+  budget:
+    max_passes_per_task: 6
+    max_rounds_per_task: 1
+    max_active_tasks: 3
+    max_parallel_idea_passes: 2
+  scratch:
+    storage: sqlite
+    mirror: true
+    cleanup: summarize_and_archive
+  cleanup:
+    summarize_to_task_memory: true
+    archive_artifacts: true
+    delete_scratch: true
+    delete_unmerged_worktrees: true
+  passes:
+    - id: scout
+      type: scout
+      context: blind
+      writes: scratch_only
+    - id: ideas
+      type: idea
+      context: blind
+      count: 2
+      writes: scratch_only
+    - id: critic
+      type: critic
+      context: pool
+      writes: scratch_only
+    - id: synth
+      type: synthesize
+      context: pool
+      writes: scratch_only
+    - id: review
+      type: promotion_review
+      context: promotion
+      writes: scratch_only
+  promotion:
+    promote_at: 0.78
+    require: [problem_statement, current_best_plan, verification_strategy, risk_review]
+    block_on:
+      unresolved_critical_objections_gte: 1
+    on_promote: move_to_ready_queue
+    on_exhausted: park_with_summary
+
+ui:
+  theme: jekko-gold
+  banner: forever
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: allow
+  workers: allow
+<<<END_ZYAL id=fleet-portfolio>>>
+ZYAL_ARM RUN_FOREVER id=fleet-portfolio

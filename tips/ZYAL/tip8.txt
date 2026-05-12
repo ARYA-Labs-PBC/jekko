@@ -1,0 +1,374 @@
+I read the ZYAL draft closely. My take: **ZYAL is already unusually strong as a host-enforced runtime contract**: host owns the loop, SQLite is truth, promotion is evidence-gated, capabilities are deny-by-default, arming is separated from preview, and it already names memory, sandboxing, skills, rollback, observability, experiments, budgets, repo intelligence, and anti-vibe gates. That is the right center of gravity.
+
+I interpreted **“LangChane” as LangChain/LangGraph** and **“Hermis” as Hermes Agent**. I also looked across MCP, A2A, ACP, AG-UI, Agent Client Protocol, AGENTS.md, Agent Skills, OpenAI Agents SDK, OpenClaw, Temporal-style durable execution, OpenTelemetry, OPA/Cedar, SLSA/in-toto, and current LLM/agent security guidance.
+
+## The big strategic finding
+
+ZYAL should not try to become “yet another agent framework.” Its highest-value role is:
+
+> **A governance kernel for long-running autonomous work that composes existing protocols instead of replacing them.**
+
+MCP already standardizes agent access to tools/data over JSON-RPC; A2A standardizes agent-to-agent tasks, messages, and artifacts; AG-UI standardizes agent-backend to frontend event streams; Agent Client Protocol standardizes editor/IDE-to-agent communication; Agent Skills and AGENTS.md standardize reusable workflow guidance and repository instructions. ZYAL should sit *above* these as the host-enforced contract that decides what may run, when, with what memory, what capabilities, what evidence, and what approval gates. ([Model Context Protocol][1])
+
+## Key gaps / risks I see
+
+The draft’s biggest risk is **schema sprawl**: 40+ top-level blocks can become powerful, but also hard to standardize, implement, test, and compare across runtimes. The spec should distinguish **normative protocol**, **Jekko implementation**, **optional profiles**, and **experimental extensions**. MCP’s spec explicitly uses normative requirements language and schema authority; ZYAL needs the same style if it wants ecosystem adoption rather than being only a Jekko feature. ([Model Context Protocol][1])
+
+The second major risk is **memory poisoning**. Long loops make memory valuable, but persistent memory becomes an attack surface. OpenClaw’s memory docs show how useful plain-file, searchable, hybrid memory, memory-wiki provenance, and “dreaming” consolidation can be; Hermes similarly emphasizes persistent memory, self-generated skills, scheduled automations, isolated subagents, and cross-platform continuity. But recent security work on OpenClaw argues that poisoning capability, identity, or knowledge state sharply increases attack success, which is directly relevant to any ZYAL-style long-run agent. ([OpenClaw][2])
+
+The third risk is **overtrust in guardrails**. NCSC’s current guidance is blunt: LLMs do not enforce an internal boundary between instructions and data, so prompt injection may not be fully mitigable in the way SQL injection can be. That argues for ZYAL doubling down on deterministic, non-model enforcement: taint-aware capabilities, least-privilege execution, signed evidence, policy-as-code, sandbox boundaries, and privilege dropping based on data source. ([National Cyber Security Centre][3])
+
+## Top 10 best ideas to dramatically upgrade ZYAL
+
+### 1. Add an `interop` layer so ZYAL becomes the governance kernel for MCP, A2A, AG-UI, ACP, Agent Skills, and AGENTS.md
+
+ZYAL should not reimplement tool protocols, agent messaging, UI eventing, editor protocols, or skills. It should declare which external protocols are allowed, how they are sandboxed, how their outputs are tainted, and how their artifacts become evidence.
+
+A possible vNext block:
+
+```yaml
+interop:
+  mcp:
+    allowed_servers:
+      - id: github
+        profile: readonly_until_approved
+        auth: brokered
+        taint: external_tool
+  a2a:
+    allow_external_agents: true
+    require_agent_card_signature: true
+    artifact_policy: evidence_or_quarantine
+  ag_ui:
+    stream_events: true
+    expose: [phase, task_status, tool_calls, evidence_status]
+  agent_client_protocol:
+    expose_to_editors: true
+    diff_review_required: true
+  agent_skills:
+    discovery: [.agents/skills, /etc/zyal/skills]
+    require_signed: true
+  agents_md:
+    import_repo_guidance: true
+    precedence: [ZYAL, AGENTS.override.md, AGENTS.md]
+```
+
+Why it matters: MCP covers tools/data, A2A covers agent-to-agent work, AG-UI covers frontend streams, ACP covers editor-agent communication, Agent Skills covers reusable workflows, and AGENTS.md covers repo guidance. ZYAL can become the thing that safely composes all of them. ([Model Context Protocol][1])
+
+### 2. Define a formal ZYAL state machine, conformance suite, and profile system
+
+The current spec describes many modules and blocks, but adoption will require a **normative spec**: exact states, transitions, event ordering, failure semantics, budget exhaustion behavior, evidence validity rules, and restart behavior.
+
+Add:
+
+```yaml
+profiles:
+  conformance: zyal-core-1.0
+  optional:
+    - zyal-memory-1.0
+    - zyal-a2a-bridge-1.0
+    - zyal-proof-1.0
+compatibility:
+  reject_unknown_required_blocks: true
+  allow_experimental_blocks: false
+```
+
+Recommended profiles:
+
+| Profile       | Purpose                                            |
+| ------------- | -------------------------------------------------- |
+| `zyal-core`   | loop, stop, checkpoint, budget, events, approvals  |
+| `zyal-code`   | repo intelligence, diff gates, rollback, tests     |
+| `zyal-memory` | governed memory, compaction, provenance, retention |
+| `zyal-mesh`   | A2A/ACP multi-agent orchestration                  |
+| `zyal-secure` | sandbox, security, skills, supply chain            |
+| `zyal-proof`  | signed evidence, attestations, replay              |
+
+This prevents the “huge YAML schema” problem. A small agent host could implement `zyal-core`; a serious engineering daemon could implement `zyal-core + zyal-code + zyal-proof`; an enterprise runtime could implement the full stack.
+
+### 3. Upgrade memory into a taint-aware “memory kernel,” not just storage plus compression
+
+ZYAL already has governed memory, task capsules, negative memory, retention, compression, and provenance. The next leap is to make memory **typed, tainted, source-aware, and self-healing**.
+
+Add memory classes:
+
+| Memory type | Example                                            | Policy                       |
+| ----------- | -------------------------------------------------- | ---------------------------- |
+| Episodic    | “Attempted approach X on task Y; failed because Z” | TTL + replayable source      |
+| Semantic    | “Service A owns endpoint B”                        | requires citation/provenance |
+| Procedural  | “How to run migration tests”                       | skill candidate              |
+| Negative    | “Do not retry this approach”                       | expires unless reconfirmed   |
+| Identity    | “User prefers TypeScript”                          | private, revocable           |
+| Capability  | “This tool can write to repo”                      | never model-authored         |
+| Security    | “Known prompt-injection source”                    | quarantine-biased            |
+
+Most important: **untrusted content should never be promoted directly into durable memory.** It should enter as quarantined evidence, pass contradiction checks, and be tagged by source trust. OpenClaw’s memory system has useful ideas: Markdown memory, daily notes, semantic search, hybrid search, provenance-rich wiki, and background “dreaming” promotion; ZYAL should adopt the useful parts but make every promotion evidence- and taint-aware. ([OpenClaw][2])
+
+A stronger block:
+
+```yaml
+memory:
+  kernel: true
+  stores:
+    episodic: { retention: 30d, cite_required: true }
+    semantic: { retention: 180d, contradiction_check: true }
+    procedural: { promotion_target: skills, approval: maintainer }
+    negative: { retention: 90d, decay: true }
+    identity: { private: true, exportable: false }
+  taint:
+    untrusted_web: quarantine
+    external_agent: quarantine
+    tool_output: evidence_only
+    human_approved: trusted
+  promotion:
+    require: [source, timestamp, confidence, contradiction_scan]
+    forbid: [assistant_claim_only, untrusted_direct_promotion]
+```
+
+### 4. Add source-derived privilege dropping: “the agent’s privileges fall to the least-trusted input it is acting on”
+
+This may be the most important security upgrade.
+
+NCSC’s practical advice is essentially: if an LLM processes content from an untrusted party, do not let it use privileges that party should not have. That principle should become a ZYAL invariant. If the agent is reading a random email, GitHub issue, web page, package README, external A2A message, or MCP tool result, any subsequent action should inherit that source’s trust constraints unless a host policy or human approval re-elevates it. ([National Cyber Security Centre][3])
+
+Add:
+
+```yaml
+capabilities:
+  taint_aware: true
+  privilege_derivation:
+    default: least_trusted_source
+    rules:
+      - when: { input_taint: external_email }
+        max_capabilities: [read, summarize, draft_response]
+        forbid: [shell, git_commit, credential_access, send_email]
+      - when: { input_taint: github_issue }
+        max_capabilities: [read_repo, propose_patch]
+        require_approval_for: [write_repo, open_pr]
+      - when: { input_taint: human_approved_plan }
+        allow_elevation: bounded_lease
+```
+
+This is stronger than command deny-lists. It turns ZYAL into a **confused-deputy defense layer**.
+
+### 5. Convert evidence bundles into a proof-carrying evidence graph with SLSA/in-toto-style attestations
+
+ZYAL already has typed proof bundles and SHA-256 signing. The upgrade is to make evidence a graph:
+
+```text
+claim → source/tool call → artifact → verification → policy decision → promotion
+```
+
+Every promotion should be able to answer:
+
+“Which claim caused this code to be committed, what tool produced the evidence, who/what approved it, what changed, what tests ran, what rollback exists, and can we cryptographically verify the chain?”
+
+Use in-toto-style metadata for step integrity and SLSA-style provenance for artifact integrity. in-toto is explicitly designed to show what steps were performed, by whom, and in what order; SLSA is a framework for preventing tampering and improving artifact integrity across software supply chains. ([in-toto][4])
+
+Add:
+
+```yaml
+evidence:
+  graph: true
+  attestations:
+    format: in_toto_statement
+    sign: sigstore_or_local_kms
+  require_before_promote:
+    - type: test_results
+      must_pass: true
+      produced_by: host
+    - type: diff_manifest
+      must_exist: true
+    - type: rollback_plan
+      must_exist: true
+    - type: provenance
+      includes: [model_id, tool_calls, sandbox_id, git_base, git_head]
+  forbid:
+    - model_only_claim
+    - unsigned_external_artifact
+    - stale_memory_without_revalidation
+```
+
+This makes ZYAL useful not just for coding agents, but for regulated autonomous engineering.
+
+### 6. Add a signed skill/plugin supply-chain system
+
+ZYAL has a `skills` block, quarantine, and promotion lifecycle. That is good, but skill ecosystems are becoming a major attack surface. OWASP’s Agentic Skills Top 10 frames skills as the behavior layer that tells agents how to orchestrate real-world workflows, and recommends verified publishers, scanning, permission review, version pinning, isolated execution, inventory, approval workflows, audit logging, and signed skills. ([OWASP Foundation][5])
+
+Agent Skills are now an open format using `SKILL.md` plus optional scripts, references, assets, and experimental `allowed-tools`; Codex’s implementation also uses progressive disclosure so the full skill is loaded only when selected. ZYAL should embrace that standard, but require stronger security metadata. ([Agent Skills][6])
+
+Add required skill metadata:
+
+```yaml
+skills:
+  registry:
+    require_signed: true
+    require_provenance: true
+    require_sbom: true
+    pin_versions: true
+  install_policy:
+    default: quarantine
+    allow_if:
+      - publisher_verified
+      - static_scan_clean
+      - sandbox_test_passed
+      - capability_manifest_approved
+  runtime:
+    skill_capability_floor: least_privilege
+    network_default: deny
+    secrets_default: brokered
+    record_tool_lineage: true
+```
+
+This would make ZYAL a safer runtime for OpenClaw/Hermes-style self-improving skills without inheriting the worst marketplace risks.
+
+### 7. Add Temporal-style “continue-as-new” for truly long loops
+
+ZYAL says “RUN_FOREVER” is lease-bounded, which is correct. But SQLite state plus compaction is not enough for very long loops. Add explicit **run chains**: each daemon segment has a finite event log, sealed evidence, summarized memory capsule, and successor run.
+
+Temporal’s “Continue-As-New” exists because indefinitely long workflows hit event-history limits; it atomically starts a new run with the same workflow identity but fresh history. ZYAL should adopt the same pattern for long-lived agents. ([Temporal][7])
+
+Add:
+
+```yaml
+loop:
+  policy: forever
+  continue_as_new:
+    every_iterations: 100
+    or_event_log_bytes_gte: 50000000
+    seal_previous_run: true
+    carry_forward:
+      - objective
+      - open_tasks
+      - approved_memory_capsule
+      - budgets_remaining
+      - unresolved_risks
+```
+
+This gives you infinite work without infinite context, infinite logs, or unbounded replay cost.
+
+### 8. Add an agent mesh with explicit identity, trust, leases, and conflict management
+
+ZYAL already supports agents, fan-out, workers, and experiments. The next level is a true **agent mesh contract**:
+
+```yaml
+mesh:
+  identity:
+    require_signed_agent_cards: true
+    trust_roots: [org_ca, local_user]
+  delegation:
+    protocol: a2a
+    require_task_contract: true
+    lease:
+      ttl: 30m
+      heartbeat: 30s
+  conflict_control:
+    repo_locks: path_globs
+    merge_strategy: proof_carrying_patch
+    duplicate_task_detection: true
+  external_agents:
+    default_taint: external_agent
+    artifacts: quarantine_until_verified
+```
+
+A2A defines tasks, task status, artifacts, messages, and versioning; it also warns that messages are not reliable delivery for critical information and that results should be artifacts, not just messages. A2A sample guidance says external agent cards, messages, artifacts, and statuses should be treated as untrusted input to avoid prompt injection. ZYAL should encode those lessons directly. ([A2A Protocol][8])
+
+This lets ZYAL safely orchestrate external agents instead of only local Jekko workers.
+
+### 9. Add continuous adversarial evaluation, simulation, and “red-team before arming”
+
+ZYAL’s safety story is strong at runtime, but it should add a preflight and continuous eval layer:
+
+```yaml
+evals:
+  before_arm:
+    run:
+      - prompt_injection_suite
+      - memory_poisoning_suite
+      - malicious_skill_suite
+      - tool_misuse_suite
+      - rollback_drill
+  during_run:
+    sample_rate: 0.10
+    shadow_critic: different_provider
+    adversarial_replay: true
+  fail_closed_on:
+    - privilege_escalation_detected
+    - memory_poisoning_detected
+    - evidence_forgery_detected
+```
+
+OWASP’s LLM Top 10 explicitly includes prompt injection, insecure plugin design, excessive agency, supply-chain vulnerabilities, sensitive information disclosure, and model denial of service. For ZYAL, those are not abstract app-security risks; they map directly to long-loop autonomy. ([OWASP Foundation][9])
+
+This turns ZYAL from “safe by configuration” into “safe by continuous verification.”
+
+### 10. Standardize observability and incident response with OpenTelemetry + AG-UI
+
+ZYAL has observability modules and a gold UI, but it should export standard traces, metrics, logs, events, and incident bundles. OpenTelemetry is vendor-neutral and built for traces, metrics, and logs; AG-UI already defines lifecycle, text, tool call, state, activity, and custom streaming events between agents and frontends. ([OpenTelemetry][10])
+
+Add:
+
+```yaml
+observability:
+  export:
+    opentelemetry: true
+    traces: true
+    metrics: true
+    logs: true
+  incident_response:
+    bundle_on:
+      - guardrail_violation
+      - privilege_escalation_attempt
+      - memory_poisoning_suspected
+      - budget_anomaly
+    include:
+      - event_log
+      - evidence_graph
+      - diff_manifest
+      - tool_calls
+      - memory_writes
+      - capability_decisions
+      - approvals
+ui:
+  protocol: ag_ui
+  expose_state_deltas: true
+  show_taint_labels: true
+  show_evidence_graph: true
+```
+
+This makes ZYAL debuggable by normal production teams, not only by the agent host.
+
+## My strongest recommended direction
+
+The highest-impact ZYAL vNext would be:
+
+1. **ZYAL Core**: formal state machine, conformance tests, run chains, deterministic replay.
+2. **ZYAL Interop**: MCP, A2A, AG-UI, Agent Client Protocol, Agent Skills, AGENTS.md import/export.
+3. **ZYAL Memory Kernel**: taint-aware memory, CIK separation, evidence-backed promotion, contradiction checks.
+4. **ZYAL Policy Engine**: OPA/Cedar-compatible capability decisions, privilege dropping, source-derived trust.
+5. **ZYAL Proof Graph**: signed evidence, provenance, rollback, SLSA/in-toto attestations.
+6. **ZYAL Skill Supply Chain**: signed skills, SBOM, sandbox tests, quarantine, version pinning.
+7. **ZYAL Eval Lab**: adversarial simulation before arming and during long loops.
+
+OPA is especially relevant because it decouples policy decision-making from application logic and evaluates structured inputs; Cedar is also relevant because it models authorization around principal, action, resource, and context with analyzable policies. ZYAL could keep its YAML ergonomics while delegating hard policy decisions to one of these mature policy engines. ([Open Policy Agent][11])
+
+## Bottom line
+
+ZYAL is already pointed at the right moonshot. The dramatic upgrade is to make it **less of a monolithic YAML feature** and more of a **portable autonomous-work governance standard**.
+
+The killer sentence I would put in the spec:
+
+> **ZYAL does not define how agents think, how tools speak, or how UIs render. ZYAL defines the host-enforced contract under which long-running autonomous work is allowed to proceed.**
+
+That framing avoids reinventing the wheel and makes ZYAL the missing safety, memory, evidence, and governance layer across OpenClaw, Hermes, LangGraph, OpenAI Agents, MCP, A2A, AG-UI, Agent Skills, and future long-form agent systems.
+
+[1]: https://modelcontextprotocol.io/specification/2025-06-18 "Specification - Model Context Protocol"
+[2]: https://docs.openclaw.ai/concepts/memory "Memory Overview - OpenClaw"
+[3]: https://www.ncsc.gov.uk/blog-post/prompt-injection-is-not-sql-injection "Prompt injection is not SQL injection (it may be worse) | National Cyber Security Centre"
+[4]: https://in-toto.io/ "in-toto"
+[5]: https://owasp.org/www-project-agentic-skills-top-10/ "OWASP Agentic Skills Top 10 | OWASP Foundation"
+[6]: https://agentskills.io/specification "Specification - Agent Skills"
+[7]: https://temporal.io/blog/very-long-running-workflows "Managing very long-running Workflows with Temporal | Temporal"
+[8]: https://a2a-protocol.org/latest/specification/ "Overview - A2A Protocol"
+[9]: https://owasp.org/www-project-top-10-for-large-language-model-applications/ "OWASP Top 10 for Large Language Model Applications | OWASP Foundation"
+[10]: https://opentelemetry.io/docs/ "Documentation | OpenTelemetry"
+[11]: https://openpolicyagent.org/docs "Open Policy Agent (OPA) | Open Policy Agent"

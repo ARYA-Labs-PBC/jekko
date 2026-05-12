@@ -1,0 +1,451 @@
+My best answer: **do not use raw `/tmp` as the sandbox.** Use a **disposable workspace** for repo hygiene, plus an **OS/container sandbox** for code execution, plus a **logged runner** so the agent gets stdout, stderr, exceptions, exit codes, and diffs.
+
+The setup I would use for OpenCode-like live sandboxing is:
+
+> **Git worktree or scratch clone → isolated command runner → captured logs/diffs → explicit patch handoff back to the real repo.**
+
+`/tmp` is only a temp-storage location. It does not stop the agent from reading `~/.ssh`, modifying files outside the repo, using the network, or dirtying other state if the process has permissions.
+
+## The distinction that matters
+
+There are two different problems:
+
+| Goal                                    | Good tool                                                            | Not enough                 |
+| --------------------------------------- | -------------------------------------------------------------------- | -------------------------- |
+| Keep your main repo clean               | `git worktree`, detached clone, temp copy                            | Raw `/tmp`                 |
+| Prevent host damage or secret access    | Docker/Podman, Bubblewrap, Firejail, nsjail, microVM, hosted sandbox | Git alone                  |
+| Give agent useful runtime feedback      | Wrapper that captures stdout/stderr/exit code/diff                   | Manual shell runs          |
+| Avoid permission prompts but stay safer | OpenCode permissions + sandboxed runner                              | OpenCode permissions alone |
+
+OpenCode’s permission system can allow, ask, or deny tool use, and it has specific controls for Bash, edits, reads, and access to external directories. But those permissions are application-level guardrails, not a kernel-enforced sandbox. OpenCode’s own docs describe permission modes, external-directory checks, and per-agent restrictions; they do not present that as OS-level isolation. ([OpenCode][1])
+
+By contrast, Codex and Claude Code’s sandbox docs explicitly distinguish permissions from OS-enforced filesystem/network restrictions, using technologies such as macOS Seatbelt, Linux Bubblewrap, seccomp, and related mechanisms. ([OpenAI Developers][2])
+
+## My recommended architecture
+
+### 1. Use a disposable workspace, not your main checkout
+
+For normal agent experiments, start with a **detached git worktree**:
+
+```bash
+repo="$(git rev-parse --show-toplevel)"
+root="${XDG_RUNTIME_DIR:-$HOME/.local/state}/agent-sandboxes"
+mkdir -p "$root"
+chmod 700 "$root"
+
+id="$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+wt="$root/$(basename "$repo")-$id"
+
+git -C "$repo" worktree add --detach "$wt" HEAD
+cd "$wt"
+
+mkdir -p .agent/{home,tmp,cache,runs}
+chmod 700 .agent .agent/*
+```
+
+Git worktrees are designed for having multiple working trees attached to the same repository, and `git worktree add -d` is specifically documented as useful for throwaway experiments or testing without disturbing existing development. ([Git][3])
+
+But for untrusted or semi-trusted agents, a worktree is **not enough**, because it still shares repo metadata, refs, config, and filesystem permissions with your user account. For stronger separation, use a **scratch clone** or an `rsync` copy that excludes `.git`:
+
+```bash
+scratch="$root/$(basename "$repo")-$id"
+mkdir -p "$scratch"
+
+rsync -a \
+  --exclude .git \
+  --exclude node_modules \
+  --exclude .venv \
+  --exclude target \
+  --exclude dist \
+  "$repo/" "$scratch/"
+
+cd "$scratch"
+git init
+git add .
+git commit -m "sandbox base"
+```
+
+That gives the agent a fake local repo where it can freely commit, branch, diff, and revert without touching your real `.git`.
+
+### 2. Do not rely on `/tmp`
+
+`/tmp` is fine as a backing location for temporary data, but it is a poor sandbox. On many systems it is world-writable, often shared by local software, may be cleaned automatically, may be size-limited, and should not be used with predictable names. Systemd’s temp-file guidance explicitly recommends private runtime directories or service-specific temporary directories for stronger control. ([systemd.io][4])
+
+At minimum, use a private directory:
+
+```bash
+export AGENT_ROOT="${XDG_RUNTIME_DIR:-$HOME/.local/state}/agent-sandboxes"
+mkdir -p "$AGENT_ROOT"
+chmod 700 "$AGENT_ROOT"
+
+export TMPDIR="$AGENT_ROOT/tmp"
+mkdir -p "$TMPDIR"
+chmod 700 "$TMPDIR"
+```
+
+For scripts, prefer `mktemp -d` or equivalent. Insecure temporary-file handling can create race-condition and data-exposure problems; `mkdtemp` creates a private directory with restrictive permissions on systems that support it. ([OWASP Foundation][5])
+
+### 3. Put all agent execution behind a sandbox runner
+
+This is the most important pattern.
+
+Let OpenCode think it can run commands, but only allow commands through a wrapper like:
+
+```bash
+sandbox-run pytest -q
+sandbox-run npm test
+sandbox-run python scratch.py
+sandbox-run cargo test
+```
+
+The wrapper should:
+
+1. Run in the disposable workspace.
+2. Use a separate `HOME`, `TMPDIR`, and cache directory.
+3. Capture stdout, stderr, exit code, command, timestamp, and cwd.
+4. Optionally block network.
+5. Optionally enforce CPU, memory, process, and time limits.
+6. Return the real exit code so the agent gets useful feedback.
+
+On Linux without full Docker, I would use **Bubblewrap** first. Bubblewrap creates a restricted mount namespace and is the same family of tooling used by several agent sandboxes. Its docs describe using user namespaces, mount namespaces, read-only binds, private `/tmp`, and optional network isolation. ([GitHub][6])
+
+Example `sandbox-run`:
+
+```bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if [[ $# -eq 0 ]]; then
+  echo "usage: sandbox-run <command...>" >&2
+  exit 64
+fi
+
+workdir="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$workdir"
+
+mkdir -p .agent/{runs,home,cache,tmp}
+chmod 700 .agent .agent/runs .agent/home .agent/cache .agent/tmp
+
+run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+stdout=".agent/runs/$run_id.stdout"
+stderr=".agent/runs/$run_id.stderr"
+meta=".agent/runs/$run_id.meta"
+
+{
+  echo "cmd=$*"
+  echo "cwd=$workdir"
+  echo "started=$(date -Is)"
+} > "$meta"
+
+binds=()
+for d in /usr /bin /lib /lib64 /etc; do
+  [[ -e "$d" ]] && binds+=(--ro-bind "$d" "$d")
+done
+
+set +e
+timeout --kill-after=10s "${SANDBOX_TIMEOUT:-180}" \
+  bwrap \
+    --die-with-parent \
+    --new-session \
+    --unshare-pid \
+    --unshare-ipc \
+    --unshare-net \
+    "${binds[@]}" \
+    --proc /proc \
+    --dev /dev \
+    --tmpfs /tmp \
+    --bind "$workdir" "$workdir" \
+    --chdir "$workdir" \
+    /usr/bin/env -i \
+      HOME="$workdir/.agent/home" \
+      XDG_CACHE_HOME="$workdir/.agent/cache" \
+      TMPDIR=/tmp \
+      PATH="/usr/local/bin:/usr/bin:/bin" \
+      bash -lc "$*" \
+  > >(tee "$stdout") \
+  2> >(tee "$stderr" >&2)
+
+status=$?
+set -e
+
+{
+  echo "exit=$status"
+  echo "finished=$(date -Is)"
+  echo "stdout=$stdout"
+  echo "stderr=$stderr"
+} >> "$meta"
+
+printf '\n[sandbox-run exit=%d stdout=%s stderr=%s]\n' "$status" "$stdout" "$stderr" >&2
+exit "$status"
+```
+
+That gives the agent exactly what it needs: exceptions, stack traces, stdout, stderr, and exit status, while keeping each execution logged.
+
+Other Linux options worth knowing: Firejail uses namespaces, seccomp, and Linux capabilities to restrict programs; nsjail uses namespaces, cgroups, resource limits, and seccomp-bpf; Landlock can restrict filesystem and some network rights from unprivileged processes. ([man7.org][7])
+
+## Best OpenCode-specific setup
+
+OpenCode already supports permission rules for Bash, edits, reads, and external-directory access. I would configure OpenCode so arbitrary Bash is denied, but your runner is allowed:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "external_directory": "deny",
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny"
+    },
+    "edit": {
+      "*": "allow"
+    },
+    "bash": {
+      "*": "deny",
+      "sandbox-run *": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git grep*": "allow"
+    }
+  }
+}
+```
+
+This gives OpenCode enough room to inspect and edit the disposable workspace, but forces all meaningful execution through your controlled path. OpenCode’s docs show granular Bash/edit/read permissions, external-directory controls, and per-agent permission overrides, including restricted plan/explore-style agents. ([OpenCode][1])
+
+I would also use different OpenCode modes/agents:
+
+| Agent role         |              Filesystem |                                    Bash |
+| ------------------ | ----------------------: | --------------------------------------: |
+| Explore / research |               read-only |                                  denied |
+| Plan               |        read-only or ask |                                  denied |
+| Build              | workspace edits allowed |                    only `sandbox-run *` |
+| Reviewer           |               read-only | `git diff`, tests through `sandbox-run` |
+
+That model matches OpenCode’s own separation between build, plan, explore, and scout-style agents. ([OpenCode][8])
+
+## If you are willing to use Docker or Podman
+
+For practical local isolation, **rootless Podman** or **rootless Docker** is a very good compromise.
+
+Docker rootless mode runs the Docker daemon and containers as a non-root user to reduce the impact of daemon/container vulnerabilities. Podman is daemonless and can run many commands as a regular user. ([Docker Documentation][9])
+
+A hardened-ish local command runner could look like this:
+
+```bash
+podman run --rm -i \
+  --userns=keep-id \
+  --security-opt=no-new-privileges \
+  --cap-drop=ALL \
+  --pids-limit=256 \
+  --memory=4g \
+  --cpus=2 \
+  --network=none \
+  --read-only \
+  --tmpfs /tmp:rw,size=1g,mode=1777 \
+  --mount type=bind,src="$PWD",dst=/work,rw \
+  --workdir /work \
+  --env HOME=/work/.agent/home \
+  ghcr.io/your-org/agent-runner:latest \
+  bash -lc 'pytest -q'
+```
+
+Docker’s own docs support limiting memory/CPU, using read-only filesystems, tmpfs mounts, STDOUT/STDERR attachment, and `no-new-privileges`. Docker also warns that bind-mounting the Docker socket gives container processes full access to the host Docker daemon, so do **not** mount `/var/run/docker.sock` into agent sandboxes. ([Docker Documentation][10])
+
+For many teams, this is the sweet spot:
+
+```text
+git worktree or scratch clone
+→ rootless Podman/Docker runner
+→ no host HOME
+→ no host secrets
+→ network off by default
+→ logs captured
+→ patch exported
+```
+
+## If you want the best turnkey option for OpenCode
+
+Use **Docker Sandboxes** if it is available to you.
+
+Docker’s sandbox product is designed for coding agents and, according to Docker’s docs, gives each sandbox its own isolated microVM, Docker daemon, filesystem, and network. Docker’s OpenCode-specific page shows running OpenCode with:
+
+```bash
+sbx run opencode ~/my-project
+```
+
+and discusses sandbox secrets, project-level config, and credential injection. It is marked Early Access in the docs I found. ([Docker Documentation][11])
+
+This is probably the closest match to what you described: “let OpenCode do live sandboxing, get feedback, but don’t let it mess with my tree or host.”
+
+My ranking:
+
+1. **Best turnkey:** Docker Sandboxes with OpenCode.
+2. **Best local non-Docker-ish Linux setup:** Git worktree/scratch clone + Bubblewrap `sandbox-run`.
+3. **Best conventional local setup:** rootless Podman or rootless Docker.
+4. **Best remote/ephemeral setup:** E2B or Daytona.
+5. **Repo hygiene only:** git worktree.
+6. **Worst as a “sandbox”:** raw `/tmp`.
+
+E2B and Daytona both have OpenCode-oriented sandbox material. E2B’s guide shows OpenCode running in a secure sandbox with filesystem, terminal, git, stdout streaming, and diff retrieval; Daytona’s guide emphasizes isolated execution, preview links, and cleanup. ([E2B][12])
+
+## A concrete “best practical” workflow
+
+Here is the workflow I would implement.
+
+### Step 1: Create a disposable workspace
+
+Use either a worktree for trusted-ish work:
+
+```bash
+git worktree add --detach "$AGENT_WORKDIR" HEAD
+```
+
+or an `.git`-less copy for less trusted work:
+
+```bash
+rsync -a --exclude .git --exclude node_modules --exclude .venv "$REPO/" "$AGENT_WORKDIR/"
+cd "$AGENT_WORKDIR"
+git init
+git add .
+git commit -m "sandbox base"
+```
+
+### Step 2: Give the agent a fake home
+
+```bash
+mkdir -p .agent/{home,tmp,cache,runs}
+chmod 700 .agent .agent/*
+export HOME="$PWD/.agent/home"
+export TMPDIR="$PWD/.agent/tmp"
+export XDG_CACHE_HOME="$PWD/.agent/cache"
+```
+
+This prevents accidental writes to your real shell history, package caches, npm config, Python config, SSH directory, etc.
+
+### Step 3: Restrict OpenCode commands
+
+Allow:
+
+```text
+sandbox-run *
+git status*
+git diff*
+git log*
+git show*
+git grep*
+```
+
+Deny:
+
+```text
+*
+```
+
+for arbitrary Bash.
+
+### Step 4: Run code through the wrapper
+
+Examples the agent can call:
+
+```bash
+sandbox-run npm test
+sandbox-run pytest -q
+sandbox-run python -m my_package
+sandbox-run cargo test
+sandbox-run go test ./...
+```
+
+### Step 5: Preserve useful artifacts
+
+After each run, save:
+
+```text
+.agent/runs/<id>.stdout
+.agent/runs/<id>.stderr
+.agent/runs/<id>.meta
+```
+
+After the session, export:
+
+```bash
+git status --porcelain=v1 > "$AGENT_ROOT/$id.status"
+git diff > "$AGENT_ROOT/$id.patch"
+git diff --stat > "$AGENT_ROOT/$id.diffstat"
+```
+
+Then either apply the patch manually:
+
+```bash
+cd "$REAL_REPO"
+git apply "$AGENT_ROOT/$id.patch"
+```
+
+or review first:
+
+```bash
+git apply --check "$AGENT_ROOT/$id.patch"
+git apply --stat "$AGENT_ROOT/$id.patch"
+```
+
+## Security rules I would not compromise on
+
+Do **not** give the agent your real `HOME`.
+
+Do **not** expose `~/.ssh`, `~/.aws`, `~/.config`, shell history, git credentials, cloud credentials, production `.env` files, or signing keys.
+
+Do **not** run arbitrary `bash` directly if you can route it through `sandbox-run`.
+
+Do **not** mount the Docker socket into the sandbox.
+
+Do **not** allow network by default when secrets are present. Anthropic’s engineering writeup makes the key point well: filesystem isolation and network isolation work together; a sandbox that can read secrets and use the network can exfiltrate them. ([Anthropic][13])
+
+Do **not** treat git as a security boundary.
+
+Do **not** treat `/tmp` as a sandbox.
+
+## My final recommendation
+
+For your stated goal, I would implement this:
+
+```text
+OpenCode
+  ↓
+disposable worktree or scratch clone
+  ↓
+OpenCode permission config denies arbitrary bash
+  ↓
+only allows sandbox-run *
+  ↓
+sandbox-run uses Bubblewrap locally
+  ↓
+captures stdout/stderr/exit/meta
+  ↓
+exports git diff patch
+  ↓
+human or CI applies patch to real repo
+```
+
+If you are willing to use stronger isolation, replace Bubblewrap with:
+
+```text
+Docker Sandboxes > rootless Podman > rootless Docker
+```
+
+For a serious agent that installs dependencies, runs unknown test code, or touches data, I would use **Docker Sandboxes or rootless Podman/Docker**. For a lightweight local coding copilot where the main concern is not dirtying the tree, I would use **git worktree + Bubblewrap runner**.
+
+[1]: https://opencode.ai/docs/permissions/ "Permissions | OpenCode"
+[2]: https://developers.openai.com/codex/concepts/sandboxing "Sandbox – Codex | OpenAI Developers"
+[3]: https://git-scm.com/docs/git-worktree "Git - git-worktree Documentation"
+[4]: https://systemd.io/TEMPORARY_DIRECTORIES/ "Using /tmp/ and /var/tmp/ Safely"
+[5]: https://owasp.org/www-community/vulnerabilities/Insecure_Temporary_File "Insecure Temporary File | OWASP Foundation"
+[6]: https://github.com/containers/bubblewrap/blob/main/README.md "bubblewrap/README.md at main · containers/bubblewrap · GitHub"
+[7]: https://man7.org/linux/man-pages/man1/firejail.1.html "firejail(1) - Linux manual page"
+[8]: https://opencode.ai/docs/agents/ "Agents | OpenCode"
+[9]: https://docs.docker.com/engine/security/rootless/ "Rootless mode | Docker Docs"
+[10]: https://docs.docker.com/reference/cli/docker/container/run/ "docker container run | Docker Docs"
+[11]: https://docs.docker.com/ai/sandboxes/ "Docker Sandboxes | Docker Docs"
+[12]: https://e2b.dev/docs/agents/opencode "Documentation - E2B"
+[13]: https://www.anthropic.com/engineering/claude-code-sandboxing "Making Claude Code more secure and autonomous with sandboxing \ Anthropic"

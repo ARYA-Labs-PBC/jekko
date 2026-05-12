@@ -1,0 +1,78 @@
+# Provenance: compact appendix excerpt from docs/ZYAL/examples/04-fleet-portfolio.zyal.
+<<<ZYAL v1:daemon id=fleet-portfolio>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+job:
+  name: "Multi-issue fleet dispatcher"
+  objective: "Maintain parallel ZYAL runs across a repository portfolio."
+triggers:
+  anti_recursion: true
+  list:
+    - id: nightly-sweep
+      kind: cron
+      schedule: "0 4 * * *"
+      allow_create_more_cron: false
+    - id: security-issues
+      kind: github_issue
+      filter: { label: "security,zyal-ready", repo: "myorg/*" }
+      idempotency_key_template: "issue-{{repo}}-{{number}}-{{sha}}"
+    - id: ci-failures
+      kind: ci_failure
+      filter: { branch: main }
+      max_runs_per_sha: 1
+stop:
+  all:
+    - shell:
+        command: "false"
+        timeout: 1s
+tasks:
+  ledger: sqlite
+  discover:
+    - command: "gh issue list --label zyal-ready --json number,title,repository"
+      timeout: 30s
+agents:
+  supervisor: { agent: plan }
+  workers:
+    - id: dispatchers
+      count: 6
+      agent: build
+      isolation: git_worktree
+fleet:
+  max_workers: 6
+  isolation: git_worktree
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    register_workers: true
+    heartbeat_interval: 30s
+    max_instances: 6
+budgets:
+  run: { wall_clock: 720h, cost_usd: 2000.00, on_exhaust: renew_with_approval }
+  task: { iterations: 25, cost_usd: 6.00, on_exhaust: park }
+  iteration: { tool_calls: 30, diff_lines: 1000, on_exhaust: pause }
+capabilities:
+  default: deny
+  rules:
+    - { id: read-anywhere, tool: read, decision: allow }
+    - { id: edit-src, tool: edit, paths: ["src/**", "test/**", "packages/**"], decision: allow }
+    - { id: github-create-pr, tool: github, command_regex: "^create_pull_request", decision: allow }
+    - { id: shell-tests, tool: shell, command_regex: "^(npm|pnpm|bun|yarn) (test|run lint|run build)", decision: allow }
+  command_floor:
+    always_block: ["git push --force", "rm -rf /", "sudo ", "DROP DATABASE"]
+observability:
+  spans: { emit: all, include_tool_calls: true, include_model_calls: true }
+  metrics:
+    - { name: tasks_started, type: counter, source: daemon }
+    - { name: tasks_promoted, type: counter, source: daemon }
+    - { name: zombie_reclaims, type: counter, source: lease }
+memory:
+  stores:
+    issue_context: { scope: task, retention: until_promotion, write_policy: append_only }
+    org_lessons: { scope: global, retention: permanent, write_policy: upsert, searchable: true }
+rollback:
+  required_when: { risk_score_gte: 0.5 }
+  plan_required: true
+  on_failure_after_merge: revert_commit
+<<<END_ZYAL id=fleet-portfolio>>>
+ZYAL_ARM RUN_FOREVER id=fleet-portfolio

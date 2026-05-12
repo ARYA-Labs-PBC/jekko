@@ -1,0 +1,1525 @@
+## My recommendation: add **ZYAL Workcells** for hard-task incubation
+
+The current ZYAL daemon plan is strong for “keep looping until host stop checks pass.” I would not replace it. I would add one new concept:
+
+> **Workcell:** a bounded, durable, per-task collaboration chamber where hard or low-confidence tasks can accumulate plans, critiques, experiments, proofs, failed attempts, and accepted decisions across multiple daemon iterations before the runtime allows real implementation or checkpointing.
+
+This is the missing piece for your “all easy work is done, only scary work remains” case. The daemon should not just keep grabbing low-confidence tasks and smashing into them. It should promote them into a structured hard-task lifecycle:
+
+```text
+normal task queue
+   │
+   ├─ easy / medium → implement → verify → checkpoint
+   │
+   └─ hard / low-confidence → Workcell
+                              ├─ independent plan passes
+                              ├─ refinement passes
+                              ├─ red-team / critic passes
+                              ├─ spike / prototype in isolated scratch or worktree
+                              ├─ synthesis into accepted plan
+                              ├─ confidence gate
+                              └─ implementation only after evidence threshold
+```
+
+The previous ZYAL plan already made the right foundational choices: strict activation syntax, host-enforced daemon runtime, SQLite as source of truth, mirrored `.jekko/daemon/<runID>/ledger.jsonl`/`STATE.md`, hard context clearing by epoch/child session rather than deleting history, and a staged rollout from serial loop to checkpoint/context to swarms/MCP. I would extend that plan, not fork it.
+
+---
+
+# 1. What not to do
+
+Do **not** let the model decide, by vibes alone:
+
+```yaml
+if_confidence_low: do_more_research
+if_confidence_high: implement
+```
+
+That will route too many things into the incubator, or too few, depending on model mood.
+
+The robust version is:
+
+```text
+The model may report uncertainty.
+The host computes routing from evidence.
+The host enforces budgets and gates.
+The host owns promotion to implementation.
+```
+
+A model self-rating can be one signal, but it should be low-weight. Better signals include prior failed attempts, number of files/subsystems touched, lack of tests, failed checks, unresolved reviewer blockers, high audit severity, dependency ambiguity, API uncertainty, risky git operations, and whether independent agents converge on the same plan.
+
+---
+
+# 2. Why this aligns with the broader agent ecosystem
+
+There is no single mature standard that already gives Jekko a host-enforced “forever daemon plus hard-task incubation language.” The surrounding ecosystem has pieces of it:
+
+LangGraph is probably the strongest reference for the runtime model: it persists graph state as checkpoints at execution boundaries, supports replay/time travel, and uses persistence to enable fault-tolerant and human-in-the-loop workflows. That maps directly to ZYAL iterations, hard-task passes, and resumable Workcells. ([LangChain Docs][1])
+
+CrewAI Flows has a useful parallel: event-driven workflows with shared state, SQLite-backed persistence, human feedback pauses, and memory methods for storing/recalling facts across runs. The lesson is that hard work needs explicit persisted workflow state, not just prompt continuation. ([CrewAI Documentation][2])
+
+OpenHands has relevant concepts too: microagents/skills for reusable repository context, sub-agent delegation for parallel independent work, and an append-only typed event system that serves as both memory and integration point. That supports the idea that ZYAL should keep an append-only Workcell event/artifact log and use specialist workers for bounded passes. ([OpenHands Docs][3])
+
+Claude Code’s current docs are especially relevant. Claude Code subagents have separate context windows, tool restrictions, model selection, skills, persistent memory, and background execution; agent teams are experimental but explicitly designed for shared tasks, inter-agent messaging, and centralized management; hooks include `Stop`, `SubagentStop`, `PreCompact`, and lifecycle interception. ZYAL should learn from that, but keep the loop host-enforced instead of hook-only. ([Claude][4])
+
+OpenAI’s Agents SDK has sessions for persistent memory, automatic history prepending/persistence, compaction wrappers, and handoffs for delegating to specialized agents. That supports ZYAL’s design direction: persistent session state, filtered handoffs, and specialist agents as runtime primitives. ([OpenAI GitHub][5])
+
+Jekko itself already has the native ingredients: primary agents and subagents, permissions with `allow`/`ask`/`deny`, a `doom_loop` safety guard, MCP integration, and ACP support. But Jekko community issues also show current pain around agent teams, sequential subtask execution, and compaction/run termination, so ZYAL should avoid depending on fragile prompt continuation or current sequential task behavior. ([Jekko][6])
+
+Protocol-wise, AG-UI, A2A, MCP, and ACP occupy adjacent layers: AG-UI for evented agent/frontend state, A2A for agent-to-agent tasks/artifacts, MCP for tools/data, and ACP for editor/agent integration. ZYAL should not try to replace those; it should compile its daemon/workcell events into Jekko-native events that could later be bridged to those protocols. ([AG-UI][7])
+
+Prompt/programming-language projects like POML, LMQL, and DSPy are useful inspiration, but they are not the same product. POML structures prompts, LMQL provides LLM-programming constraints/control flow, and DSPy is “programming, not prompting” for modular AI systems. ZYAL’s niche should be **agent runtime control inside Jekko**, not general prompt formatting. ([GitHub][8])
+
+---
+
+# 3. The addition: ZYAL Workcell Runtime
+
+## 3.1 New top-level ZYAL section
+
+Add this to the ZYAL spec:
+
+```yaml
+hard_tasks:
+  route:
+    enabled: true
+    when: easy_queue_empty
+    score:
+      hard_if_gte: 0.72
+      low_confidence_if_lte: 0.55
+    require_any_signal:
+      - prior_failed_attempt
+      - touches_multiple_subsystems
+      - no_direct_test_oracle
+      - reviewer_blocker
+      - algorithmic_unknown
+      - large_refactor
+    never_route_if:
+      - trivial_diff
+      - docs_only
+      - explicit_user_fast_path
+
+  workcell:
+    max_cycles: 5
+    max_wall_time: 2h
+    max_cost_usd: 8
+    scratch:
+      store: sqlite_and_mirror
+      mirror_path: ".jekko/daemon/${run.id}/workcells/${task.id}/"
+      write_policy: generated_only
+      cleanup: summarize_and_archive
+
+    passes:
+      - id: classify
+        agent: plan
+        purpose: score_risk_and_choose_route
+
+      - id: independent_plans
+        fanout: 3
+        agent: plan
+        isolation: fresh_context
+        share: none
+        output: plan_candidate
+
+      - id: synthesize
+        agent: plan
+        reads: [plan_candidate]
+        output: accepted_plan_draft
+
+      - id: red_team
+        fanout: 2
+        agent: plan
+        reads: [accepted_plan_draft]
+        output: blocker_report
+
+      - id: spike
+        agent: build
+        isolation: git_worktree
+        writes: scratch_only
+        output: spike_result
+
+      - id: promote
+        agent: plan
+        gate:
+          confidence_gte: 0.82
+          no_blockers: true
+          evidence:
+            - accepted_plan
+            - rollback_plan
+            - verification_plan
+            - spike_result
+
+    on_exhausted: pause
+```
+
+This is simple enough to read, but powerful enough to encode cross-loop collaboration.
+
+## 3.2 New lifecycle state
+
+Add task states:
+
+```text
+pending
+claimed
+running
+implemented
+verified
+checkpointed
+done
+
+incubating
+incubated_ready
+incubated_blocked
+incubated_exhausted
+```
+
+Add Workcell states:
+
+```text
+created
+classifying
+planning
+critiquing
+spiking
+synthesizing
+promotion_check
+ready_for_implementation
+blocked
+exhausted
+archived
+```
+
+The important distinction:
+
+```text
+A daemon run can be forever.
+A hard-task workcell must be bounded.
+```
+
+Your forever daemon should not create infinite scratchpad churn. The daemon can run forever across tasks, but each Workcell gets an explicit pass/cost/time/attempt budget.
+
+---
+
+# 4. Hard-task routing: do not route everything
+
+The router should only promote tasks into Workcells when one of these is true:
+
+```yaml
+hard_tasks:
+  route:
+    when: easy_queue_empty
+```
+
+or:
+
+```yaml
+hard_tasks:
+  route:
+    when:
+      any:
+        - prior_attempts_gte: 2
+        - task_score_gte: 0.72
+        - explicit_label: hard
+```
+
+or:
+
+```yaml
+hard_tasks:
+  route:
+    when:
+      all:
+        - model_confidence_lte: 0.55
+        - evidence_missing: true
+        - estimated_blast_radius_gte: medium
+```
+
+I would make `easy_queue_empty` the default because it matches your actual concern: let the daemon chew through high-confidence work first, then route the remaining scary items into a more careful process.
+
+## 4.1 Risk score formula
+
+Do not hide this in the prompt. Make it a host-side function with transparent evidence:
+
+```ts
+riskScore =
+  0.18 * priorFailureScore +
+  0.16 * blastRadiusScore +
+  0.14 * subsystemCountScore +
+  0.12 * testOracleWeaknessScore +
+  0.10 * auditSeverityScore +
+  0.10 * dependencyUncertaintyScore +
+  0.08 * algorithmicNoveltyScore +
+  0.07 * reviewerBlockerScore +
+  0.03 * modelSelfUncertaintyScore +
+  0.02 * userLabelScore
+```
+
+Then persist the explanation:
+
+```json
+{
+  "task_id": "audit-parser-cap-rule",
+  "risk_score": 0.81,
+  "route": "workcell",
+  "signals": {
+    "prior_failures": 2,
+    "touches_subsystems": ["parser", "session", "audit"],
+    "test_oracle": "weak",
+    "model_self_uncertainty": 0.64,
+    "reviewer_blockers": 1
+  }
+}
+```
+
+This keeps the model honest and debuggable.
+
+---
+
+# 5. Confidence gate: evidence, not vibes
+
+Use this pattern:
+
+```yaml
+confidence:
+  source: evidence_weighted
+  promote_if:
+    gte: 0.82
+  components:
+    plan_consensus:
+      weight: 0.20
+      require: true
+    critic_clearance:
+      weight: 0.20
+      require: true
+    spike_success:
+      weight: 0.20
+      require: false
+    verification_plan_quality:
+      weight: 0.15
+      require: true
+    rollback_safety:
+      weight: 0.10
+      require: true
+    test_oracle_strength:
+      weight: 0.10
+      require: false
+    model_self_report:
+      weight: 0.05
+      require: false
+```
+
+The key rule:
+
+```text
+The model can claim confidence.
+Only evidence can promote the task.
+```
+
+A task becomes implementable only if the host can point to:
+
+```text
+- accepted plan
+- known risks
+- critic blockers resolved or waived
+- test/verification plan
+- rollback plan
+- optional spike result
+```
+
+---
+
+# 6. Workcell memory design
+
+## 6.1 Source of truth
+
+Keep the previous plan’s rule:
+
+```text
+SQLite is source of truth.
+Mirrors are human-readable derived artifacts.
+```
+
+Add these records. You can implement them either as new tables or as typed `daemon_artifact` rows. I would start with artifacts for v1.1 to avoid schema explosion, then normalize later if needed.
+
+```ts
+type WorkcellArtifactKind =
+  | "risk_assessment"
+  | "plan_candidate"
+  | "accepted_plan"
+  | "critic_report"
+  | "spike_patch"
+  | "spike_result"
+  | "verification_plan"
+  | "rollback_plan"
+  | "decision_record"
+  | "final_summary"
+```
+
+Suggested table if you do normalize:
+
+```sql
+daemon_workcell (
+  id text primary key,
+  run_id text not null,
+  task_id text not null,
+  status text not null,
+  cycle integer not null default 0,
+  risk_score real,
+  confidence_score real,
+  created_at integer not null,
+  updated_at integer not null,
+  archived_at integer,
+  last_error text
+)
+
+daemon_workcell_artifact (
+  id text primary key,
+  workcell_id text not null,
+  kind text not null,
+  producer_worker_id text,
+  cycle integer not null,
+  title text,
+  payload_json text not null,
+  summary text,
+  sha text,
+  created_at integer not null
+)
+```
+
+## 6.2 Mirror layout
+
+Generated mirror:
+
+```text
+.jekko/daemon/<runID>/workcells/<taskID>/
+  STATE.md
+  artifacts/
+    001-risk-assessment.md
+    002-plan-candidate-a.md
+    003-plan-candidate-b.md
+    004-plan-candidate-c.md
+    005-synthesis.md
+    006-red-team.md
+    007-spike-result.md
+    008-accepted-plan.md
+  scratch/
+    notes.md
+    prototype.patch
+  archive/
+    raw-logs.jsonl.gz
+```
+
+`STATE.md` should be regenerated from DB:
+
+```md
+# Workcell: audit-parser-cap-rule
+
+Status: promotion_check
+Risk: 0.81
+Confidence: 0.76
+Cycle: 3 / 5
+
+## Accepted draft
+...
+
+## Remaining blockers
+- No direct test for parser cap edge case.
+- Spike compiles but audit fixture still fails.
+
+## Next required pass
+red_team or test_design
+```
+
+The mirror is for human inspection and cross-agent context. It should not be the authoritative task state.
+
+## 6.3 Cleanup
+
+Add:
+
+```yaml
+hard_tasks:
+  workcell:
+    scratch:
+      cleanup:
+        on_promoted: keep_summary_and_accepted_plan
+        on_done: archive_raw_logs_after: 7d
+        on_abort: keep_all
+        on_satisfied: summarize_and_gc
+```
+
+Runtime cleanup behavior:
+
+```text
+On task done:
+  keep:
+    STATE.md
+    accepted plan
+    final summary
+    evidence receipts
+    commit SHA
+  archive:
+    raw worker logs
+    stale candidate plans
+    spike scratch files
+  delete:
+    temporary worktrees, unless configured otherwise
+```
+
+This prevents `.jekko/daemon` from becoming an infinite landfill.
+
+---
+
+# 7. Cross-loop collaboration patterns to support
+
+## Pattern A: independent braid
+
+Best for algorithmic or ambiguous tasks where anchoring is dangerous.
+
+```yaml
+- id: independent_plans
+  fanout: 3
+  isolation: fresh_context
+  share: none
+```
+
+Each agent starts fresh, sees the task and minimal repo context, and proposes a solution independently. This avoids forcing everyone to inherit a bad first plan.
+
+## Pattern B: relay refinement
+
+Best when one promising plan exists but needs improvement.
+
+```yaml
+- id: relay_refine
+  rounds: 3
+  pass_previous: true
+  instruction: improve_or_reject_previous_plan
+```
+
+Agent B reads Agent A’s plan and must either improve it or explicitly reject it with reasons. Agent C reads both.
+
+## Pattern C: red-team pass
+
+Best before implementation.
+
+```yaml
+- id: red_team
+  fanout: 2
+  objective: find_failure_modes
+  output: blocker_report
+```
+
+The critic should not propose a giant new plan unless the current one is fundamentally flawed. It should produce blockers, missing tests, rollback issues, and “do not implement until…” items.
+
+## Pattern D: spike/prototype
+
+Best when the model cannot know whether the idea works without touching code.
+
+```yaml
+- id: spike
+  isolation: git_worktree
+  writes: scratch_only
+  max_files: 5
+  max_time: 20m
+```
+
+Spikes must not directly become the final implementation unless promoted. They are evidence producers.
+
+## Pattern E: proof/test-design pass
+
+Best for tasks where implementation looks easy but correctness is hard.
+
+```yaml
+- id: proof
+  agent: plan
+  objective: define invariants_and_tests
+  output: verification_plan
+```
+
+## Pattern F: synthesis and lock
+
+Best after several plans/critiques.
+
+```yaml
+- id: synthesize
+  reads: [plan_candidate, blocker_report, spike_result]
+  output: accepted_plan
+  lock_after: true
+```
+
+After lock, implementation agents should not freestyle a new architecture unless they explicitly request reopening the Workcell.
+
+---
+
+# 8. Updated ZYAL example for your original dirty-worktree loop
+
+```yaml
+<<<ZYAL v1:daemon id=jankurai-clean-worktree>>>
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai dirty worktree hardening"
+  objective: |
+    Investigate all uncommitted work. Fix regressions. Run confidence checks.
+    Commit and push completed verified work. If audit still has findings or caps,
+    update JANKURAI_TASKLIST.md and move completed items to
+    JANKURAI_TASKLIST.md.completed.
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied, checkpoint_failed, no_progress]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+stop:
+  all:
+    - shell:
+        command: "jankurai audit . --json target/jankurai/daemon-audit.json"
+        timeout: 30s
+        assert:
+          json:
+            "$.findings_count": 0
+            "$.caps_count": 0
+    - git_clean:
+        allow_untracked: false
+
+tasks:
+  ledger: sqlite
+  select:
+    strategy: easy_first_then_hard
+    easy_until_empty: true
+  discover:
+    - shell:
+        command: "jankurai audit . --json"
+        items: "$.findings[*]"
+    - git_dirty:
+        include_untracked: false
+
+hard_tasks:
+  route:
+    enabled: true
+    when: easy_queue_empty
+    score:
+      hard_if_gte: 0.72
+      low_confidence_if_lte: 0.55
+    signals:
+      prior_failed_attempt:
+        weight: 0.18
+      touches_multiple_subsystems:
+        weight: 0.16
+      weak_or_missing_tests:
+        weight: 0.12
+      algorithmic_unknown:
+        weight: 0.12
+      reviewer_blocker:
+        weight: 0.10
+      model_self_uncertainty:
+        weight: 0.04
+    never_route_if:
+      - docs_only
+      - trivial_diff
+      - explicit_user_fast_path
+
+  workcell:
+    max_cycles: 5
+    max_wall_time: 2h
+    max_cost_usd: 8
+
+    scratch:
+      store: sqlite_and_mirror
+      mirror_path: ".jekko/daemon/${run.id}/workcells/${task.id}/"
+      write_policy: generated_only
+      allow_repo_stubs: false
+      cleanup:
+        on_promoted: keep_summary_and_accepted_plan
+        on_done: summarize_and_archive
+        archive_raw_logs_after: 7d
+
+    passes:
+      - id: classify
+        agent: plan
+        output: risk_assessment
+
+      - id: independent_plans
+        fanout: 3
+        agent: plan
+        isolation: fresh_context
+        share: none
+        output: plan_candidate
+
+      - id: synthesize
+        agent: plan
+        reads: [risk_assessment, plan_candidate]
+        output: accepted_plan_draft
+
+      - id: red_team
+        fanout: 2
+        agent: plan
+        reads: [accepted_plan_draft]
+        output: blocker_report
+
+      - id: spike
+        agent: build
+        isolation: git_worktree
+        writes: scratch_only
+        max_time: 20m
+        output: spike_result
+        when:
+          any:
+            - algorithmic_unknown
+            - no_test_oracle
+            - red_team_requests_spike
+
+      - id: promote
+        agent: plan
+        gate:
+          confidence_gte: 0.82
+          no_unresolved_blockers: true
+          require_artifacts:
+            - accepted_plan
+            - verification_plan
+            - rollback_plan
+          optional_artifacts:
+            - spike_result
+
+    on_exhausted:
+      action: pause
+      reason: "Hard task incubation budget exhausted without promotion."
+
+context:
+  strategy: hybrid
+  compact_every: 1
+  hard_clear_every: 3
+  preserve:
+    - job.objective
+    - stop
+    - permissions
+    - task_ledger_summary
+    - active_workcell_summary
+    - accepted_plan
+    - last_checkpoint
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - shell: "bun --cwd packages/jekko test --timeout 30000 packages/jekko/test/session/daemon-runtime.test.ts"
+  git:
+    add: ["."]
+    commit_message: "jankurai: daemon verified work item"
+    push: ask
+
+agents:
+  supervisor: { agent: build }
+  workers:
+    - id: easy-fixer
+      count: 1
+      agent: build
+      isolation: main_worktree
+    - id: hard-planner
+      count: 3
+      agent: plan
+      isolation: context_only
+    - id: spike-runner
+      count: 1
+      agent: build
+      isolation: git_worktree
+
+permissions:
+  shell: ask
+  edit: allow
+  git_commit: ask
+  git_push: ask
+  workers: ask
+  mcp: ask
+
+ui:
+  theme: jekko-gold
+  banner: forever
+  panels:
+    - daemon_status
+    - hard_task_workcell
+    - worker_activity
+<<<END_ZYAL id=jankurai-clean-worktree>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-clean-worktree
+```
+
+---
+
+# 9. A smaller syntax for normal users
+
+The full version is powerful, but people need a small version.
+
+```yaml
+hard_tasks:
+  enabled: true
+  only_after_easy_tasks: true
+  max_cycles: 4
+  strategy: plan_critic_spike_promote
+  promote_confidence: 0.82
+  scratch: auto
+```
+
+This should compile to the more explicit default:
+
+```yaml
+hard_tasks:
+  route:
+    enabled: true
+    when: easy_queue_empty
+    score:
+      hard_if_gte: 0.72
+      low_confidence_if_lte: 0.55
+  workcell:
+    max_cycles: 4
+    passes:
+      - classify
+      - independent_plans
+      - synthesize
+      - red_team
+      - optional_spike
+      - promote
+```
+
+So the product can offer both:
+
+```text
+simple user syntax
+        ↓
+compiled explicit ZYAL AST
+        ↓
+host-enforced runtime
+```
+
+---
+
+# 10. Syntax library additions
+
+## `hard_tasks.route`
+
+Controls whether a task enters incubation.
+
+```yaml
+hard_tasks:
+  route:
+    enabled: true
+    when: easy_queue_empty | always | after_failed_attempts | explicit_label
+    score:
+      hard_if_gte: 0.72
+      low_confidence_if_lte: 0.55
+```
+
+## `hard_tasks.route.signals`
+
+Defines scoring inputs.
+
+```yaml
+signals:
+  prior_failed_attempt: { weight: 0.18 }
+  touches_multiple_subsystems: { weight: 0.16 }
+  weak_or_missing_tests: { weight: 0.12 }
+  algorithmic_unknown: { weight: 0.12 }
+  reviewer_blocker: { weight: 0.10 }
+  model_self_uncertainty: { weight: 0.04 }
+```
+
+## `hard_tasks.workcell`
+
+Creates durable task memory.
+
+```yaml
+workcell:
+  max_cycles: 5
+  max_wall_time: 2h
+  max_cost_usd: 8
+```
+
+## `hard_tasks.workcell.scratch`
+
+Controls where plans/prototypes/notes live.
+
+```yaml
+scratch:
+  store: sqlite | sqlite_and_mirror
+  mirror_path: ".jekko/daemon/${run.id}/workcells/${task.id}/"
+  write_policy: generated_only | scratch_worktree | repo_allowed_after_gate
+  cleanup:
+    on_done: summarize_and_archive
+```
+
+## `passes[].isolation`
+
+Controls context sharing.
+
+```yaml
+isolation: fresh_context | read_workcell | read_accepted_plan | full_daemon_context
+```
+
+Meanings:
+
+```text
+fresh_context:
+  Worker sees task + pinned repo rules, but not prior candidate plans.
+
+read_workcell:
+  Worker sees all Workcell artifacts.
+
+read_accepted_plan:
+  Worker sees only the synthesized accepted plan.
+
+full_daemon_context:
+  Worker sees broader daemon context. Use sparingly.
+```
+
+## `passes[].share`
+
+Controls anti-anchoring.
+
+```yaml
+share: none | prior_pass | all_artifacts | accepted_only
+```
+
+## `passes[].output`
+
+Typed artifact contract.
+
+```yaml
+output:
+  kind: plan_candidate
+  schema:
+    required:
+      - summary
+      - assumptions
+      - implementation_steps
+      - risks
+      - tests
+      - rollback
+```
+
+## `gate`
+
+Promotion gate.
+
+```yaml
+gate:
+  confidence_gte: 0.82
+  no_unresolved_blockers: true
+  require_artifacts:
+    - accepted_plan
+    - verification_plan
+    - rollback_plan
+```
+
+## `on_exhausted`
+
+Bounded failure behavior.
+
+```yaml
+on_exhausted:
+  action: pause | create_followup_task | ask_user | downgrade_to_manual
+  reason: "Could not reach confidence gate."
+```
+
+## `reopen`
+
+Lets implementation reopen incubation if reality contradicts the plan.
+
+```yaml
+reopen:
+  if:
+    - verification_plan_invalid
+    - implementation_discovers_new_architecture
+    - red_team_blocker_after_implementation
+  max_reopens: 2
+```
+
+## `cleanup`
+
+Ensures scratchpads do not accumulate forever.
+
+```yaml
+cleanup:
+  worktrees: delete_on_done
+  raw_logs: archive_after_7d
+  candidate_plans: keep_winner_and_summaries
+  mirrors: keep_state_and_receipts
+```
+
+---
+
+# 11. Runtime flow update
+
+Add these phases to the daemon controller:
+
+```text
+created
+armed
+evaluating_stop
+discovering_tasks
+selecting_task
+classifying_task
+
+if easy:
+  running_iteration
+  checkpointing
+  evaluating_stop
+
+if hard:
+  workcell_created
+  workcell_pass_running
+  workcell_synthesizing
+  workcell_criticizing
+  workcell_spiking
+  workcell_promotion_check
+
+if promoted:
+  running_accepted_plan
+  checkpointing
+  verifying
+  cleanup_workcell
+  evaluating_stop
+
+if exhausted:
+  paused_hard_task
+```
+
+The central loop becomes:
+
+```ts
+while (daemon.active) {
+  await evaluateStopChecks()
+
+  const task = await selectNextTask()
+
+  const route = await classifyTask(task)
+
+  if (route === "easy") {
+    await runImplementationIteration(task)
+    await checkpointIfVerified(task)
+    continue
+  }
+
+  const workcell = await getOrCreateWorkcell(task)
+  const result = await runWorkcellCycle(workcell)
+
+  if (result.status === "promoted") {
+    await runAcceptedPlan(task, result.acceptedPlan)
+    await checkpointIfVerified(task)
+    await cleanupWorkcell(task)
+    continue
+  }
+
+  if (result.status === "exhausted") {
+    await pauseDaemon("Hard task incubation exhausted")
+    return
+  }
+}
+```
+
+---
+
+# 12. Implementation additions to the existing plan
+
+## Parser/schema
+
+Add:
+
+```text
+packages/jekko/src/agent-script/schema.ts
+  OcalHardTasks
+  OcalHardTaskRoute
+  OcalWorkcell
+  OcalWorkcellPass
+  OcalConfidenceGate
+  OcalScratchPolicy
+  OcalCleanupPolicy
+```
+
+Parser validation rules:
+
+```text
+- hard_tasks may only appear inside daemon intent.
+- workcell max_cycles is required unless preset strategy is used.
+- scratch.mirror_path must be under .jekko/daemon/** unless explicitly allowed.
+- writes: repo_allowed_after_gate cannot appear before promote pass.
+- fanout requires workers permission.
+- spike with writes requires isolation: git_worktree or scratch_only.
+- model_self_confidence cannot be the only promotion component.
+```
+
+## Durable store
+
+Add either normalized tables or artifact kinds. Minimal v1.1 can reuse `daemon_artifact` with new kinds.
+
+Better schema:
+
+```text
+daemon_workcell
+daemon_workcell_artifact
+daemon_workcell_pass
+daemon_workcell_score
+```
+
+## Runtime
+
+New files:
+
+```text
+packages/jekko/src/session/daemon-hard-task.ts
+packages/jekko/src/session/daemon-workcell.ts
+packages/jekko/src/session/daemon-confidence.ts
+packages/jekko/src/session/daemon-risk.ts
+packages/jekko/src/session/daemon-scratch.ts
+```
+
+## Worker integration
+
+Use existing Jekko subagents initially, but design around future Agent Teams. Jekko issue #12711 already proposes flat teams, named messaging, task claiming, plan approval, and recovery; ZYAL Workcells should be compatible with that direction instead of creating a conflicting team abstraction. ([GitHub][9])
+
+For v1.1:
+
+```text
+- independent_plans uses separate child sessions.
+- red_team uses read-only plan agents.
+- spike uses isolated git worktree.
+- implementation uses one writer.
+```
+
+For v2:
+
+```text
+- compile Workcell passes into Agent Team tasks if Jekko Agent Teams lands.
+- let teammates message within Workcell scope.
+- preserve Workcell artifact/event schema as the common ground.
+```
+
+## TUI
+
+Add a Workcell panel:
+
+```text
+∞ FOREVER · jankurai-clean-worktree · iter 42 · hard task incubating
+
+Hard task: audit-parser-cap-rule
+Risk:       0.81 HIGH
+Confidence: 0.76 below promotion gate 0.82
+Cycle:      3 / 5
+
+Passes:
+  ✓ classify
+  ✓ independent_plans 3/3
+  ✓ synthesize
+  ✕ red_team: 1 blocker
+  … spike running in worktree daemon/audit-parser-cap-rule
+
+Next:
+  resolve blocker or pause after cycle budget
+```
+
+---
+
+# 13. Syntax highlighting and preview UX
+
+ZYAL needs syntax highlighting because this is dangerous, powerful syntax.
+
+## Highlight classes
+
+```text
+Sentinel / arming:
+  bright gold, bold
+  <<<ZYAL v1:daemon ...>>>
+  ZYAL_ARM RUN_FOREVER ...
+
+Forever loop:
+  gold badge
+  loop.policy: forever
+
+Hard task incubation:
+  purple badge
+  hard_tasks
+  workcell
+  pass
+
+Stop checks:
+  green
+  stop
+  assert
+  git_clean
+
+Dangerous actions:
+  red/orange
+  git.push
+  shell
+  permissions: allow
+  writes: repo_allowed_after_gate
+
+Scratch/memory:
+  slate/blue
+  scratch
+  mirror_path
+  cleanup
+
+Workers/MCP:
+  cyan
+  agents
+  workers
+  mcp
+
+Invalid/unknown:
+  red squiggle
+  unknown top-level keys
+  missing arm
+  unsafe scratch path
+```
+
+## Preview cards
+
+Before arming, the TUI preview should show:
+
+```text
+FOREVER daemon
+  name
+  stop checks
+  checkpoint actions
+  git push policy
+  permissions
+
+Hard task routing
+  route condition
+  risk threshold
+  max Workcell cycles
+  max Workcell cost/time
+  scratch path
+  cleanup behavior
+
+Workers
+  fanout counts
+  write isolation
+  MCP/tool permissions
+
+Risks
+  shell commands
+  git commit/push
+  possible long-running loop
+```
+
+This follows the same safety principle as Jekko’s permission model: powerful actions should be visible and explicitly approved, not hidden in prompt text. ([Jekko][10])
+
+---
+
+# 14. Pass library
+
+This is the “God mode” library I would include.
+
+## `classify`
+
+Scores task difficulty and route.
+
+```yaml
+- id: classify
+  kind: risk_assessment
+```
+
+## `independent_plans`
+
+Multiple fresh agents produce non-anchored plans.
+
+```yaml
+- id: independent_plans
+  fanout: 3
+  isolation: fresh_context
+  share: none
+```
+
+## `relay_refine`
+
+Sequential improvement chain.
+
+```yaml
+- id: relay_refine
+  rounds: 3
+  share: prior_pass
+```
+
+## `red_team`
+
+Finds flaws, not solutions.
+
+```yaml
+- id: red_team
+  fanout: 2
+  objective: find_blockers
+```
+
+## `test_design`
+
+Designs verification before implementation.
+
+```yaml
+- id: test_design
+  output: verification_plan
+```
+
+## `invariant_mining`
+
+Extracts invariants and edge cases.
+
+```yaml
+- id: invariant_mining
+  output: invariants
+```
+
+## `spike`
+
+Prototype in isolated scratch.
+
+```yaml
+- id: spike
+  isolation: git_worktree
+  writes: scratch_only
+```
+
+## `synthesize`
+
+Produces canonical accepted plan.
+
+```yaml
+- id: synthesize
+  reads: [plan_candidate, blocker_report, spike_result]
+  output: accepted_plan
+```
+
+## `promote`
+
+Checks evidence threshold.
+
+```yaml
+- id: promote
+  gate:
+    confidence_gte: 0.82
+```
+
+## `implement_accepted_plan`
+
+Disallows freeform wandering.
+
+```yaml
+- id: implement_accepted_plan
+  reads: [accepted_plan]
+  writes: repo_allowed_after_gate
+```
+
+## `review_after_implementation`
+
+Critic pass on actual diff.
+
+```yaml
+- id: review_after_implementation
+  agent: plan
+  reads: [git_diff, accepted_plan]
+```
+
+## `cleanup`
+
+Archives scratch and keeps receipts.
+
+```yaml
+- id: cleanup
+  action: summarize_and_archive
+```
+
+---
+
+# 15. Concrete safety rules
+
+These should be hard-coded defaults:
+
+```text
+1. A Workcell cannot run forever.
+2. A Workcell cannot write to the main worktree before promotion.
+3. A spike cannot be committed directly.
+4. A model self-confidence score cannot promote a task alone.
+5. Independent plan workers must not see each other’s outputs.
+6. Red-team blockers must be resolved, waived by policy, or pause the daemon.
+7. Failed Workcells become paused/blocked tasks, not infinite retries.
+8. Scratch mirrors are generated artifacts; DB is source of truth.
+9. Cleanup never deletes final summaries, accepted plans, evidence, or commit SHAs.
+10. One writer at a time unless using isolated worktrees.
+```
+
+This also responds to the Jekko community concern that parallel task/subagent execution and agent teams need safe coordination, not uncontrolled same-worktree writes. ([GitHub][11])
+
+---
+
+# 16. Test plan additions
+
+## Parser tests
+
+```text
+- accepts hard_tasks block
+- rejects hard_tasks outside daemon intent
+- rejects workcell without max_cycles or preset
+- rejects spike writes without git_worktree/scratch_only
+- rejects model_self_report as sole confidence component
+- rejects scratch mirror outside .jekko/daemon by default
+```
+
+## Risk router tests
+
+```text
+- easy task stays easy
+- easy_queue_empty routes hard task
+- prior failures increase risk score
+- model self uncertainty alone does not route
+- explicit docs_only never routes
+```
+
+## Workcell runtime tests
+
+```text
+- independent plans do not see each other
+- synthesis sees all candidates
+- red-team blocker prevents promotion
+- spike writes only to scratch worktree
+- promotion requires artifacts and score
+- exhausted Workcell pauses daemon
+```
+
+## Cleanup tests
+
+```text
+- done task keeps accepted plan and evidence
+- raw logs archived
+- scratch worktree removed
+- DB history preserved
+- mirror regenerated from DB
+```
+
+## Headless daemon tests
+
+```text
+- daemon continues after easy tasks complete
+- hard remaining task enters Workcell
+- daemon does not stop on assistant_stop during Workcell
+- daemon pauses when Workcell budget exhausted
+```
+
+---
+
+# 17. How I would patch the current ZYAL plan
+
+Add one phase between parser/schema and full swarms:
+
+```text
+Phase 1.5: Hard Task Workcells
+  - schema additions for hard_tasks
+  - risk router
+  - workcell artifact store
+  - bounded pass runner
+  - confidence gate
+  - scratch mirror and cleanup
+```
+
+Then update the staged rollout:
+
+```text
+PR 1: ZYAL parser/schema/examples
+PR 2: daemon DB/store/events
+PR 3: serial daemon runtime
+PR 4: checkpoint/context/hard-clear
+PR 5: hard-task Workcells
+PR 6: gold TUI + Workcell panel
+PR 7: swarms/MCP/team integration
+```
+
+I would not wait for swarms to implement Workcells. You can run the first version serially:
+
+```text
+cycle 1:
+  plan candidate A
+cycle 2:
+  plan candidate B
+cycle 3:
+  synthesize
+cycle 4:
+  red-team
+cycle 5:
+  promote or pause
+```
+
+Then later swap serial pass execution for parallel subagents/teams.
+
+---
+
+# 18. The final conceptual model
+
+ZYAL should have three nested control layers:
+
+```text
+Daemon
+  Runs forever until host stop checks pass.
+
+Task
+  Work item selected from ledger/audit/git/tasklist.
+
+Workcell
+  Bounded hard-task incubator for tasks that are too risky to implement directly.
+```
+
+And three kinds of memory:
+
+```text
+Daemon memory:
+  objective, stop criteria, global ledger, checkpoint history.
+
+Task memory:
+  attempts, evidence, status, verification, commit refs.
+
+Workcell memory:
+  plans, critiques, spikes, blockers, decisions, accepted plan.
+```
+
+That gives you the behavior you want:
+
+```text
+Easy tasks:
+  fast path
+
+Hard tasks:
+  structured collaborative incubation
+
+Impossible / under-specified tasks:
+  bounded pause with evidence, not infinite failure
+
+Forever loop:
+  continues across tasks, compaction, assistant stops, and epochs
+
+Workcell loop:
+  bounded, evidence-gated, cleaned up when complete
+```
+
+The highest-leverage addition is therefore:
+
+```yaml
+hard_tasks:
+  route: ...
+  workcell: ...
+  passes: ...
+  confidence: ...
+  cleanup: ...
+```
+
+That turns ZYAL from “an infinite coding loop” into a real autonomous engineering runtime.
+
+[1]: https://docs.langchain.com/oss/python/langgraph/persistence?utm_source=chatgpt.com "Persistence - Docs by LangChain"
+[2]: https://docs.crewai.com/en/concepts/flows?utm_source=chatgpt.com "Flows - CrewAI"
+[3]: https://docs.openhands.dev/openhands/usage/microagents/microagents-repo?utm_source=chatgpt.com "General Microagents - OpenHands Docs"
+[4]: https://code.claude.com/docs/en/sub-agents?utm_source=chatgpt.com "Create custom subagents - Claude Code Docs"
+[5]: https://openai.github.io/openai-agents-js/guides/sessions/?utm_source=chatgpt.com "Sessions | OpenAI Agents SDK"
+[6]: https://jekko.ai/docs/agents/?utm_source=chatgpt.com "Agents | Jekko"
+[7]: https://docs.ag-ui.com/?utm_source=chatgpt.com "AG-UI Overview - Agent User Interaction Protocol"
+[8]: https://github.com/microsoft/poml?utm_source=chatgpt.com "GitHub - microsoft/poml: Prompt Orchestration Markup Language"
+[9]: https://github.com/anomalyco/jekko/issues/12711 "[DESIGN]: Agent Teams — flat teams with named messaging, multi-model support, and TUI integration · Issue #12711 · anomalyco/jekko · GitHub"
+[10]: https://jekko.ai/docs/permissions/?utm_source=chatgpt.com "Permissions | Jekko"
+[11]: https://github.com/anomalyco/jekko/issues/14195?utm_source=chatgpt.com "Multiple Task tool calls in a single LLM response execute sequentially instead of in parallel · Issue #14195 · anomalyco/jekko · GitHub"

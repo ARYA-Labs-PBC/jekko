@@ -1,0 +1,1505 @@
+## Best addition to the ZYAL plan: task-level “incubation lanes”
+
+The current ZYAL daemon plan solves the first problem: **the agent stops too early**. The next problem is subtler:
+
+> Once easy work is gone, a forever daemon can thrash on the remaining hard work unless it has a structured way to accumulate task-specific knowledge, compare approaches, invite fresh agents, prototype safely, and only promote a solution when evidence crosses a threshold.
+
+I would add a new ZYAL subsystem:
+
+# **ZYAL Task Incubation Runtime**
+
+Public-facing names:
+
+```text
+task_dossier
+confidence
+risk
+lanes
+passes
+promotion
+cleanup
+```
+
+The short idea:
+
+```text
+Easy task → normal daemon fix/checkpoint loop.
+
+Hard/risky/low-confidence task → bounded incubation loop:
+  scout → independent plans → critique → synthesis → prototype → review → promote.
+```
+
+The key is that **the top-level daemon may run forever**, but **hard-task scratchpad/incubation loops should be bounded**. A hard task can be revisited across daemon iterations, but each incubation packet has limits, artifacts, and cleanup rules.
+
+This borrows the right ideas from existing agent communities without blindly copying them. LangGraph emphasizes short-term and long-term memory plus stateful subgraphs; OpenHands uses append-only event history and context condensers; OpenAI’s Agents SDK distinguishes handoffs from “agents as tools” and uses guardrails/human review to decide continue/pause/stop; CrewAI Flows push structured state, conditionals, loops, and branching into workflow code rather than leaving it to vibes. ([LangChain Docs][1])
+
+Jekko’s community is already converging on this need: there are feature requests for a continuous execution loop, a native `/loop`, task-based checkpoints, and better compaction/pinned instruction handling; there are also bug reports showing how dangerous uncontrolled infinite loops, compaction loops, and subagent retry loops can be. That strongly supports making ZYAL host-enforced, stateful, and circuit-broken instead of prompt-only. ([GitHub][2])
+
+Claude Code’s current command system is also instructive: commands are only recognized at the start of a message, `/loop` repeats prompts while the session stays open, `/batch` decomposes large work into 5–30 units with isolated git worktrees, and `/simplify` spawns parallel review agents. ZYAL should learn from those shapes, but go further by making the durable state, exit criteria, risk routing, and scratchpad cleanup first-class. ([Claude][3])
+
+---
+
+# 1. The new concept: a task dossier, not a shared Markdown scratchpad
+
+The big mistake would be giving every agent a loose `THIS_TRACKER.md` and telling them to “update it.” That works until multiple agents edit it, compaction forgets the rules, or one agent overwrites another’s reasoning.
+
+Instead, every difficult task gets a **task dossier**.
+
+Runtime source of truth:
+
+```text
+SQLite tables
+```
+
+Human/model mirror:
+
+```text
+.jekko/daemon/<runID>/tasks/<taskID>/
+  STATE.md
+  task.json
+  ledger.jsonl
+  current-best-plan.md
+  rejected-approaches.md
+  open-questions.md
+  evidence.md
+  scratch/
+    scout-001.md
+    scout-002.md
+    critic-001.md
+    synthesis-001.md
+  prototypes/
+    attempt-001.patch
+    attempt-001.log
+  artifacts/
+    test-output-001.txt
+    audit-output-001.json
+```
+
+The DB is authoritative. The Markdown/files are generated mirrors and model-readable context.
+
+For hard tasks, the daemon does **not** repeatedly ask the same agent to “try harder.” It creates bounded passes that leave structured artifacts in the dossier.
+
+This aligns with research patterns that have worked repeatedly: Reflexion stores verbal feedback in episodic memory for later trials, Self-Refine iterates through feedback and refinement, Tree of Thoughts explores and evaluates multiple reasoning paths, Voyager combines curriculum, executable skill memory, and iterative self-verification, and Agent KB shows the value of storing/retrieving agent experience across attempts and frameworks. ([arXiv][4])
+
+---
+
+# 2. The most important design rule: confidence is not self-confidence
+
+Do **not** let this happen:
+
+```yaml
+if_agent_says_confidence_below: 0.7
+then: incubate
+```
+
+Self-confidence is useful, but it is not reliable enough to drive routing. The host should compute a **readiness score** from evidence.
+
+Use self-confidence as one small input.
+
+## Better confidence model
+
+```text
+readiness =
+  verifier evidence
++ test evidence
++ reviewer agreement
++ plan specificity
++ prior failure learning
++ clean diff quality
++ task scope boundedness
+- risk penalty
+- repeated failure penalty
+- unknown dependency penalty
+- conflicting reviewer penalty
+```
+
+A task should be routed to incubation when there are objective signals, for example:
+
+```text
+- task touches high-risk paths
+- no tests exist
+- previous attempt failed
+- two agents disagree
+- implementation requires algorithmic redesign
+- task spans too many files
+- audit keeps finding the same issue
+- model reports uncertainty and verifier evidence is weak
+- task has been deferred N times
+- easy work is exhausted and only hard work remains
+```
+
+The daemon should never commit because confidence is high. It should commit because **verification gates pass**.
+
+---
+
+# 3. New task state machine
+
+The top-level daemon state machine remains mostly as planned. Add a per-task state machine:
+
+```text
+discovered
+  ↓
+assessed
+  ├─ high readiness → fast_lane
+  │                    ↓
+  │                  implementing
+  │                    ↓
+  │                  verifying
+  │                    ↓
+  │                  checkpointed
+  │
+  └─ low readiness / high risk → incubating
+                                ↓
+                              scouted
+                                ↓
+                              criticized
+                                ↓
+                              synthesized
+                                ↓
+                              prototyped
+                                ↓
+                              reviewed
+                                ↓
+                  ┌────────── promoted ──────────┐
+                  │                               ↓
+                  │                         implementing
+                  │                               ↓
+                  └──── blocked / deferred ← verifying
+```
+
+The key transition is:
+
+```text
+incubating → promoted
+```
+
+Promotion means:
+
+```text
+The task has enough structured knowledge and evidence to attempt implementation.
+```
+
+Not:
+
+```text
+The model feels ready.
+```
+
+---
+
+# 4. Add “lanes” to ZYAL
+
+ZYAL should route tasks into lanes. A lane is a host-managed workflow for a class of work.
+
+Recommended lanes:
+
+| Lane        |                                       Purpose |   Writes source files? |
+| ----------- | --------------------------------------------: | ---------------------: |
+| `fast`      |                    Easy/high-confidence tasks |                    Yes |
+| `incubate`  |          Bounded scratchpad/planning/research |     No, except dossier |
+| `contest`   |                  Multiple fresh plans compete |                     No |
+| `critic`    |                   Review/attack existing plan |                     No |
+| `prototype` |       Try implementation in isolated worktree | Only isolated worktree |
+| `execute`   |   Apply promoted plan in main supervised path |                    Yes |
+| `harden`    | Tests, audit, simplification, security review |        Yes, controlled |
+| `archive`   |       Cleanup scratchpad and preserve lessons |           Dossier only |
+
+The daemon should default to `fast` while easy work exists. It should only route to expensive lanes when predicates trigger.
+
+---
+
+# 5. Syntax addition: simple version
+
+This is the minimal addition I would make to the existing ZYAL plan.
+
+```yaml
+difficulty:
+  enabled: true
+
+  assess_each_task:
+    output_schema: task_assessment_v1
+    max_seconds: 90
+
+  route:
+    default: fast
+
+    to_incubate_when:
+      any:
+        - readiness_below: 0.62
+        - risk_at_least: 0.70
+        - failed_attempts_at_least: 1
+        - no_progress_iterations_at_least: 2
+        - touches_paths:
+            - "packages/jekko/src/session/**"
+            - "packages/jekko/src/server/**"
+            - "packages/jekko/migration/**"
+        - requires_capability:
+            any: ["algorithm_design", "schema_migration", "multi_agent_runtime"]
+
+  incubation:
+    max_rounds_per_task: 4
+    max_total_tasks: 3
+    scratchpad: task_dossier
+    promotion_threshold: 0.78
+    on_exhausted: defer_with_summary
+
+  cleanup:
+    on_task_complete:
+      keep:
+        - current_best_plan
+        - decisions
+        - failed_approach_signatures
+        - verifier_evidence
+      delete:
+        - raw_scout_transcripts
+        - stale_prototypes
+        - abandoned_worktrees
+```
+
+This is deliberately simple. It gives ZYAL the missing hard-task behavior without turning v1 into a full programming language.
+
+---
+
+# 6. Syntax addition: powerful version
+
+For “GOD mode,” add explicit lanes and passes.
+
+```yaml
+task_routing:
+  enabled: true
+  source: daemon_task
+
+  scoring:
+    model_self_confidence_weight: 0.10
+    verifier_weight: 0.30
+    reviewer_consensus_weight: 0.20
+    test_evidence_weight: 0.20
+    scope_boundedness_weight: 0.10
+    novelty_penalty_weight: 0.10
+
+  risk:
+    path_rules:
+      - paths: ["**/migration/**", "**/*.sql", "**/session/**"]
+        add: 0.25
+        reason: "schema/session changes are durable and high-impact"
+      - paths: ["**/auth/**", "**/permission/**", "**/security/**"]
+        add: 0.35
+        reason: "security-sensitive"
+      - paths: ["packages/jekko/src/session/prompt.ts"]
+        add: 0.30
+        reason: "core loop semantics"
+    signals:
+      failed_attempt_add: 0.15
+      no_tests_add: 0.10
+      reviewer_disagreement_add: 0.20
+      unclear_exit_condition_add: 0.20
+
+  lanes:
+    fast:
+      when:
+        all:
+          - readiness_at_least: 0.62
+          - risk_below: 0.70
+      action: execute
+
+    incubate:
+      when:
+        any:
+          - readiness_below: 0.62
+          - risk_at_least: 0.70
+          - failed_attempts_at_least: 1
+          - no_progress_iterations_at_least: 2
+      action: run_passes
+      passes:
+        - scout_fresh
+        - scout_inherit
+        - critic
+        - synthesize
+        - promote_or_defer
+
+    contest:
+      when:
+        any:
+          - algorithmic_uncertainty_at_least: 0.70
+          - reviewer_disagreement_at_least: 0.50
+      action: run_passes
+      passes:
+        - independent_plan:
+            count: 3
+            read_existing_plans: false
+        - judge_plans:
+            count: 2
+            blind: true
+        - synthesize
+
+    prototype:
+      when:
+        all:
+          - promoted: true
+          - implementation_risk_at_least: 0.60
+      isolation: git_worktree
+      action: prototype_then_review
+```
+
+---
+
+# 7. Pass types ZYAL should support
+
+These are the pass functions I would add.
+
+## `assess`
+
+Produces a host-validated task assessment.
+
+```yaml
+- assess:
+    id: first-look
+    agent: explore
+    max_seconds: 90
+    writes: dossier_only
+    output:
+      schema: task_assessment_v1
+```
+
+Output shape:
+
+```json
+{
+  "task_id": "task_123",
+  "summary": "...",
+  "estimated_difficulty": 0.72,
+  "risk": 0.81,
+  "self_confidence": 0.44,
+  "unknowns": ["..."],
+  "likely_files": ["..."],
+  "requires": ["schema_migration", "core_loop_reasoning"],
+  "recommended_lane": "incubate",
+  "evidence": ["..."]
+}
+```
+
+## `scout_fresh`
+
+A fresh agent starts from repo/context, not from the previous plan. This protects against early bad anchoring.
+
+```yaml
+- scout_fresh:
+    count: 2
+    agent: explore
+    read_existing_plans: false
+    read_dossier:
+      only:
+        - task_summary
+        - constraints
+        - failed_approach_signatures
+    writes: dossier_only
+```
+
+## `scout_inherit`
+
+A fresh agent reads the current best plan and improves it.
+
+```yaml
+- scout_inherit:
+    count: 1
+    agent: build
+    read_existing_plans: true
+    instruction: "Improve the best plan. Do not implement."
+    writes: dossier_only
+```
+
+## `critic`
+
+Tries to break the plan.
+
+```yaml
+- critic:
+    count: 2
+    agent: reviewer
+    target: current_best_plan
+    focus:
+      - regressions
+      - tests_missing
+      - migration_risk
+      - security
+      - wrong_assumptions
+    writes: dossier_only
+```
+
+## `synthesize`
+
+Combines plans and critiques into one promoted candidate.
+
+```yaml
+- synthesize:
+    agent: supervisor
+    inputs:
+      - scout_outputs
+      - critic_outputs
+      - failed_approaches
+      - verifier_history
+    output: current_best_plan
+```
+
+## `prototype`
+
+Allows stubs/experiments, but not in the main worktree.
+
+```yaml
+- prototype:
+    isolation: git_worktree
+    max_attempts: 2
+    allow_source_writes: true
+    commit: false
+    output:
+      - patch
+      - test_results
+      - implementation_notes
+```
+
+## `promote_or_defer`
+
+Host decides whether to move the task to execution.
+
+```yaml
+- promote_or_defer:
+    promote_when:
+      all:
+        - readiness_at_least: 0.78
+        - critic_blockers: 0
+        - plan_has_verification: true
+        - prototype_if_required: passed
+    defer_when:
+      any:
+        - incubation_rounds_exhausted: true
+        - requires_human_decision: true
+        - no_viable_plan: true
+```
+
+## `execute_promoted`
+
+Only after promotion.
+
+```yaml
+- execute_promoted:
+    agent: build
+    source: current_best_plan
+    max_steps: 50
+    checkpoint_after: verifier_pass
+```
+
+## `harden`
+
+Runs confidence-building passes after implementation.
+
+```yaml
+- harden:
+    passes:
+      - test
+      - audit
+      - security_review
+      - simplify
+      - regression_review
+```
+
+---
+
+# 8. Full ZYAL example for the hard-task problem
+
+This is how I would extend the Jankurai daemon example.
+
+```yaml
+<<<ZYAL v1:daemon id=jankurai-clean-worktree>>>
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai dirty worktree hardening"
+  objective: |
+    Investigate uncommitted work related to @agent/JANKURAI_STANDARD.md
+    and @JANKURAI_TASKLIST.md. Fix regressions, verify confidence, commit
+    and push completed work. Continue until host stop checks pass.
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied, checkpoint_failed, no_progress, human_required]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+stop:
+  all:
+    - shell:
+        command: "jankurai audit . --json target/jankurai/daemon-audit.json"
+        timeout: 30s
+        assert:
+          json:
+            "$.findings_count": 0
+            "$.caps_count": 0
+    - git_clean:
+        allow_untracked: false
+
+tasks:
+  ledger: sqlite
+  discover:
+    - git_diff: {}
+    - shell:
+        command: "jankurai audit . --json"
+        items: "$.findings[*]"
+
+  claim:
+    strategy: random_unclaimed
+    lease_ttl: 45m
+
+  task_dossier:
+    root: ".jekko/daemon/{{run.id}}/tasks/{{task.id}}"
+    source_of_truth: sqlite
+    mirror:
+      - STATE.md
+      - ledger.jsonl
+      - current-best-plan.md
+      - rejected-approaches.md
+      - evidence.md
+
+task_routing:
+  enabled: true
+  default_lane: fast
+
+  scoring:
+    model_self_confidence_weight: 0.10
+    verifier_weight: 0.30
+    reviewer_consensus_weight: 0.20
+    test_evidence_weight: 0.20
+    scope_boundedness_weight: 0.10
+    novelty_penalty_weight: 0.10
+
+  risk:
+    path_rules:
+      - paths: ["packages/jekko/src/session/**"]
+        add: 0.30
+        reason: "core session semantics"
+      - paths: ["packages/jekko/src/server/**"]
+        add: 0.20
+        reason: "API/runtime behavior"
+      - paths: ["packages/jekko/migration/**"]
+        add: 0.30
+        reason: "durable DB migration"
+      - paths: ["packages/jekko/src/cli/cmd/tui/**"]
+        add: 0.15
+        reason: "interactive UX regression risk"
+    signals:
+      failed_attempt_add: 0.15
+      no_tests_add: 0.10
+      reviewer_disagreement_add: 0.20
+      no_progress_add: 0.20
+
+  lanes:
+    fast:
+      when:
+        all:
+          - readiness_at_least: 0.62
+          - risk_below: 0.70
+      execute:
+        agent: build
+        max_steps: 40
+
+    incubate:
+      when:
+        any:
+          - readiness_below: 0.62
+          - risk_at_least: 0.70
+          - failed_attempts_at_least: 1
+          - no_progress_iterations_at_least: 2
+      limits:
+        max_rounds_per_task: 4
+        max_wall_time_per_task: 2h
+        max_parallel_scouts: 3
+      passes:
+        - assess:
+            agent: explore
+            writes: dossier_only
+
+        - scout_fresh:
+            count: 2
+            agent: explore
+            read_existing_plans: false
+            read_dossier:
+              only: [task_summary, constraints, failed_approach_signatures]
+            writes: dossier_only
+
+        - scout_inherit:
+            count: 1
+            agent: build
+            read_existing_plans: true
+            writes: dossier_only
+
+        - critic:
+            count: 2
+            agent: reviewer
+            target: current_best_plan
+            writes: dossier_only
+
+        - synthesize:
+            agent: supervisor
+            output: current_best_plan
+
+        - promote_or_defer:
+            promote_when:
+              all:
+                - readiness_at_least: 0.78
+                - critic_blockers: 0
+                - plan_has_verification: true
+            defer_when:
+              any:
+                - incubation_rounds_exhausted: true
+                - requires_human_decision: true
+
+    prototype:
+      when:
+        all:
+          - promoted: true
+          - implementation_risk_at_least: 0.60
+      isolation: git_worktree
+      max_attempts: 2
+      output:
+        - patch
+        - tests
+        - evidence
+      merge: supervisor_review_only
+
+context:
+  strategy: hybrid
+  compact_every: 1
+  hard_clear_every: 3
+  preserve:
+    - job.objective
+    - stop
+    - permissions
+    - task_ledger_summary
+    - active_task_dossier_summary
+    - last_checkpoint
+    - failed_approach_signatures
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - shell: "bun --cwd packages/jekko test --timeout 30000 packages/jekko/test/session/daemon-runtime.test.ts"
+    - shell: "jankurai audit . --json target/jankurai/daemon-audit.json"
+  git:
+    add: ["."]
+    commit_message: "jankurai: daemon verified work item"
+    push: ask
+
+cleanup:
+  on_task_complete:
+    dossier:
+      keep:
+        - STATE.md
+        - current-best-plan.md
+        - rejected-approaches.md
+        - evidence.md
+        - ledger.jsonl
+      delete:
+        - scratch/raw-transcripts/**
+        - prototypes/*/worktree
+    worktrees: delete_if_clean
+    branches: delete_if_merged
+
+  on_daemon_satisfied:
+    archive_root: ".jekko/daemon/{{run.id}}/archive"
+    keep_summary: true
+    keep_db_history: true
+    prune_temp_artifacts: true
+
+permissions:
+  shell: ask
+  edit: allow
+  git_commit: ask
+  git_push: ask
+  workers: ask
+  mcp: ask
+
+ui:
+  theme: jekko-gold
+  banner: forever
+  show_task_lane: true
+  show_incubation_round: true
+  show_readiness: true
+  show_risk: true
+
+<<<END_ZYAL id=jankurai-clean-worktree>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-clean-worktree
+```
+
+---
+
+# 9. How this avoids routing everything into expensive hard mode
+
+You specifically called this out, and it matters. The daemon should not treat every task as a grand research project.
+
+Use all five controls:
+
+## 1. Fast lane is default
+
+```yaml
+default_lane: fast
+```
+
+## 2. Incubation requires objective triggers
+
+```yaml
+to_incubate_when:
+  any:
+    - readiness_below: 0.62
+    - risk_at_least: 0.70
+    - failed_attempts_at_least: 1
+```
+
+## 3. Hard lanes have budgets
+
+```yaml
+limits:
+  max_rounds_per_task: 4
+  max_wall_time_per_task: 2h
+  max_parallel_scouts: 3
+```
+
+## 4. Promotion requires evidence
+
+```yaml
+promote_when:
+  all:
+    - readiness_at_least: 0.78
+    - critic_blockers: 0
+    - plan_has_verification: true
+```
+
+## 5. Exhaustion defers, it does not spin forever
+
+```yaml
+defer_when:
+  any:
+    - incubation_rounds_exhausted: true
+    - requires_human_decision: true
+    - no_viable_plan: true
+```
+
+The top daemon can be forever. Individual hard-task thinking loops should be finite.
+
+---
+
+# 10. Fresh-agent vs inherited-agent collaboration
+
+You mentioned two useful possibilities:
+
+1. A fresh agent makes a new plan.
+2. A fresh agent is forced to read and improve the existing plan.
+
+Both are valuable, but they should be separate pass types.
+
+## Fresh pass
+
+Use this when early anchoring might be bad.
+
+```yaml
+- scout_fresh:
+    count: 3
+    read_existing_plans: false
+    read_dossier:
+      only:
+        - task_summary
+        - constraints
+        - failed_approach_signatures
+```
+
+The agent sees:
+
+```text
+Task
+Repo context
+Constraints
+Known failed approaches
+```
+
+It does **not** see the current best plan.
+
+## Inherited pass
+
+Use this when accumulated work is likely useful.
+
+```yaml
+- scout_inherit:
+    count: 1
+    read_existing_plans: true
+    instruction: "Improve the current best plan. Preserve correct constraints."
+```
+
+The agent sees:
+
+```text
+Task
+Current best plan
+Critiques
+Evidence
+Open questions
+```
+
+## Blind critic
+
+Use this to avoid status bias.
+
+```yaml
+- critic:
+    blind: true
+    target: current_best_plan
+```
+
+The critic sees the plan, but not who wrote it, how confident the author was, or whether it is the current favorite.
+
+## Synthesis
+
+Use this to prevent a pile of plans from becoming more noise.
+
+```yaml
+- synthesize:
+    choose:
+      method: weighted_evidence
+    output: current_best_plan
+```
+
+---
+
+# 11. What the task dossier should preserve
+
+For hard tasks, most raw tokens are trash after a while. Preserve only the reusable learning.
+
+Keep:
+
+```text
+- current best plan
+- constraints
+- decisions
+- failed approach signatures
+- why previous attempts failed
+- important code locations
+- verifier outputs
+- open questions
+- reviewer blockers
+- promotion rationale
+```
+
+Delete or summarize:
+
+```text
+- raw transcripts
+- repeated tool logs
+- obsolete branches
+- failed prototype worktrees
+- stale screenshots
+- duplicate plans
+```
+
+This mirrors the direction of modern agent memory work: keep structured, reusable experience rather than unbounded chat history. OpenHands treats events as append-only memory and uses condensers to shrink context while preserving critical reasoning; LangGraph separates thread-level memory from long-term cross-session memory; Agent KB goes further by storing reusable agent experience across frameworks. ([OpenHands Docs][5])
+
+---
+
+# 12. Implementation update to the current workplan
+
+I would add this as **Phase 3.5**, after basic daemon looping and durable store, before full swarms/MCP.
+
+## Phase 3.5A: Schema additions
+
+Modify:
+
+```text
+packages/jekko/src/agent-script/schema.ts
+packages/jekko/src/agent-script/parser.ts
+packages/jekko/src/agent-script/examples.ts
+packages/jekko/specs/daemon-zyal.md
+```
+
+Add schema classes:
+
+```text
+OcalTaskRouting
+OcalTaskDossier
+OcalTaskLane
+OcalTaskRisk
+OcalTaskScoring
+OcalTaskPass
+OcalPromotionPolicy
+OcalCleanupPolicy
+```
+
+Parser must reject:
+
+```text
+- unknown lane types
+- unbounded incubation without explicit max_rounds
+- source-writing passes in dossier_only lanes
+- same-worktree prototype writes
+- promotion based only on model self-confidence
+```
+
+## Phase 3.5B: Store additions
+
+Extend the durable store.
+
+New or extended tables:
+
+```text
+daemon_task
+  readiness_score
+  risk_score
+  lane
+  incubation_round
+  promoted_at
+  deferred_reason
+  current_best_plan_artifact_id
+
+daemon_task_attempt
+  id
+  run_id
+  task_id
+  pass_type
+  agent
+  session_id
+  started_at
+  ended_at
+  result
+  self_confidence
+  readiness_delta
+  risk_delta
+  output_artifact_id
+
+daemon_task_memory
+  id
+  run_id
+  task_id
+  kind
+  title
+  payload_json
+  artifact_path
+  importance
+  expires_at
+
+daemon_task_plan
+  id
+  run_id
+  task_id
+  source_attempt_id
+  status
+  summary
+  plan_markdown
+  critic_blockers_json
+  score_json
+
+daemon_task_prototype
+  id
+  run_id
+  task_id
+  worktree_path
+  branch
+  patch_path
+  test_result_json
+  status
+```
+
+Mirror files under:
+
+```text
+.jekko/daemon/<runID>/tasks/<taskID>/
+```
+
+## Phase 3.5C: Runtime modules
+
+Create:
+
+```text
+packages/jekko/src/session/daemon-router.ts
+packages/jekko/src/session/daemon-confidence.ts
+packages/jekko/src/session/daemon-dossier.ts
+packages/jekko/src/session/daemon-passes.ts
+packages/jekko/src/session/daemon-incubation.ts
+packages/jekko/src/session/daemon-cleanup.ts
+```
+
+Responsibilities:
+
+```text
+daemon-router.ts
+  chooses fast/incubate/contest/prototype/execute lanes
+
+daemon-confidence.ts
+  computes host readiness/risk scores from evidence
+
+daemon-dossier.ts
+  writes DB and mirrors STATE.md/current-best-plan.md/evidence.md
+
+daemon-passes.ts
+  runs bounded assess/scout/critic/synthesize/prototype passes
+
+daemon-incubation.ts
+  manages per-task incubation round lifecycle
+
+daemon-cleanup.ts
+  removes temp artifacts and archives reusable lessons
+```
+
+## Phase 3.5D: Daemon-only tools
+
+Add tools that let agents interact with the dossier safely.
+
+```text
+daemon_task_status
+daemon_task_dossier_read
+daemon_task_dossier_append
+daemon_submit_assessment
+daemon_submit_plan
+daemon_submit_critique
+daemon_submit_evidence
+daemon_mark_failed_approach
+daemon_request_promotion
+daemon_request_human_decision
+```
+
+Do **not** add:
+
+```text
+daemon_force_promote
+daemon_force_complete
+daemon_self_set_confidence
+daemon_delete_history
+```
+
+The model can request. The runtime decides.
+
+## Phase 3.5E: API/CLI/TUI
+
+Add:
+
+```text
+GET  /daemon/:runID/tasks
+GET  /daemon/:runID/tasks/:taskID
+GET  /daemon/:runID/tasks/:taskID/dossier
+POST /daemon/:runID/tasks/:taskID/incubate
+POST /daemon/:runID/tasks/:taskID/promote
+POST /daemon/:runID/tasks/:taskID/defer
+POST /daemon/:runID/tasks/:taskID/cleanup
+```
+
+CLI:
+
+```text
+jekko daemon tasks <runID>
+jekko daemon task <runID> <taskID>
+jekko daemon incubate <runID> <taskID>
+jekko daemon promote <runID> <taskID>
+jekko daemon cleanup <runID> <taskID>
+```
+
+TUI gold banner should add lane/risk/readiness:
+
+```text
+∞ FOREVER · jankurai-clean-worktree · iter 18 · task task_42 · lane incubate · risk .82 · ready .49
+```
+
+For a hard task, the TUI should show:
+
+```text
+INCUBATING task_42
+round 2/4
+passes: scout_fresh ✓ scout_inherit ✓ critic running
+promotion: readiness .61 / .78
+```
+
+---
+
+# 13. Syntax highlighting / UX for ZYAL
+
+The syntax should be highlighted by semantic risk, not just YAML colors.
+
+Recommended TUI highlights:
+
+| Syntax                              | Color behavior                     |
+| ----------------------------------- | ---------------------------------- |
+| `loop.policy: forever`              | Gold, persistent                   |
+| `confirm: RUN_FOREVER`              | Gold + bold                        |
+| `permissions.git_push: ask/allow`   | Red/amber depending on mode        |
+| `checkpoint.git.push`               | Red/amber                          |
+| `stop`                              | Green                              |
+| `pause_on`                          | Amber                              |
+| `task_routing`                      | Purple                             |
+| `incubate`                          | Purple/gold                        |
+| `prototype.isolation: git_worktree` | Teal                               |
+| `cleanup.delete`                    | Red if it touches non-daemon paths |
+| `max_rounds_per_task`               | Amber if missing, green if present |
+| `model_self_confidence_weight`      | Red if too high                    |
+
+Validation warnings should be specific:
+
+```text
+Invalid ZYAL:
+- incubation lane has no max_rounds_per_task
+- prototype lane writes source files without git_worktree isolation
+- promotion uses self_confidence only
+- cleanup.delete includes paths outside .jekko/daemon
+```
+
+This is important because Claude Code’s docs now make a clear distinction between commands recognized at the start of a message and ordinary text, and ZYAL already plans to require sentinels plus arming. That same principle should apply here: powerful syntax must be visually and procedurally unmistakable. ([Claude][3])
+
+---
+
+# 14. Hard-task cleanup policy
+
+When a hard task completes, do not leave a junkyard.
+
+Recommended cleanup state machine:
+
+```text
+task checkpointed
+  ↓
+extract lessons
+  ↓
+archive current best plan
+  ↓
+archive evidence
+  ↓
+record failed approach signatures
+  ↓
+delete raw scratch
+  ↓
+delete clean prototype worktrees
+  ↓
+delete merged temp branches
+  ↓
+mark task dossier archived
+```
+
+Syntax:
+
+```yaml
+cleanup:
+  on_task_complete:
+    extract_lessons:
+      to: daemon_task_memory
+      include:
+        - final_approach
+        - key_files
+        - verifier_commands
+        - failed_approach_signatures
+        - reviewer_warnings
+
+    archive:
+      root: ".jekko/daemon/{{run.id}}/archive/tasks/{{task.id}}"
+      keep:
+        - STATE.md
+        - current-best-plan.md
+        - evidence.md
+        - rejected-approaches.md
+        - ledger.jsonl
+
+    delete:
+      safe_only: true
+      paths:
+        - ".jekko/daemon/{{run.id}}/tasks/{{task.id}}/scratch/raw-transcripts/**"
+        - ".jekko/daemon/{{run.id}}/tasks/{{task.id}}/prototypes/*/worktree"
+
+    git:
+      delete_temp_branches: merged_only
+      delete_worktrees: clean_only
+```
+
+The daemon should refuse cleanup if a prototype worktree is dirty unless the ZYAL file explicitly says how to preserve it.
+
+---
+
+# 15. Updated examples library
+
+Add these examples to `agent-script/examples.ts` and `specs/daemon-zyal.md`.
+
+## `hard-task-incubation`
+
+```yaml
+task_routing:
+  default_lane: fast
+  lanes:
+    incubate:
+      when:
+        any:
+          - readiness_below: 0.60
+          - risk_at_least: 0.75
+      limits:
+        max_rounds_per_task: 3
+      passes:
+        - scout_fresh: { count: 2 }
+        - critic: { count: 1 }
+        - synthesize: {}
+        - promote_or_defer:
+            promote_when:
+              all:
+                - readiness_at_least: 0.78
+                - critic_blockers: 0
+```
+
+## `algorithm-redesign-contest`
+
+```yaml
+task_routing:
+  lanes:
+    contest:
+      when:
+        any:
+          - requires_capability:
+              any: ["algorithm_design", "architecture_redesign"]
+      passes:
+        - independent_plan:
+            count: 5
+            read_existing_plans: false
+        - judge_plans:
+            count: 2
+            blind: true
+        - synthesize:
+            output: current_best_plan
+        - prototype:
+            isolation: git_worktree
+            max_attempts: 2
+```
+
+## `no-progress-escalation`
+
+```yaml
+task_routing:
+  lanes:
+    incubate:
+      when:
+        any:
+          - no_progress_iterations_at_least: 2
+          - same_failure_signature_count_at_least: 2
+      passes:
+        - mark_failed_approach: {}
+        - scout_fresh:
+            count: 2
+            read_existing_plans: false
+        - critic:
+            target: previous_attempt
+        - synthesize: {}
+```
+
+## `review-quorum-before-commit`
+
+```yaml
+checkpoint:
+  verify:
+    - shell: "bun test"
+    - review_quorum:
+        agents: [reviewer, security]
+        required_passes: 2
+        fail_on_blocker: true
+```
+
+---
+
+# 16. How this fits with swarms and MCP
+
+Do **not** start with free-form swarms.
+
+Start with task passes.
+
+A swarm is just a lane whose pass runner can launch multiple workers. The safe version is:
+
+```yaml
+workers:
+  default_isolation: git_worktree
+  same_worktree_writes: forbid
+  lease:
+    ttl: 45m
+    heartbeat: 60s
+  recursion:
+    max_depth: 1
+```
+
+For MCP:
+
+```yaml
+mcp:
+  profiles:
+    audit:
+      required: true
+      servers:
+        - jankurai
+      tools:
+        allow:
+          - audit
+          - list_findings
+
+    research:
+      required: false
+      servers:
+        - docs
+        - github
+      tools:
+        ask:
+          - search
+          - fetch
+```
+
+Then lanes can opt into MCP profiles:
+
+```yaml
+- scout_fresh:
+    count: 2
+    mcp_profile: research
+
+- verify:
+    mcp_profile: audit
+```
+
+That keeps MCP use explicit, permissioned, and lane-specific.
+
+---
+
+# 17. Why this is better than “loop until confidence improves”
+
+A naive version would be:
+
+```text
+Try task.
+If confidence low, write notes.
+Try again.
+Repeat until confidence high.
+```
+
+That fails because it amplifies the same agent’s blind spots.
+
+The better version is:
+
+```text
+Assess with evidence.
+Route only if objective risk triggers.
+Use fresh independent plans to avoid anchoring.
+Use inherited passes to compound good knowledge.
+Use critics to attack weak assumptions.
+Use synthesis to reduce noise.
+Use prototypes only in isolation.
+Promote only when host evidence crosses threshold.
+Execute only after promotion.
+Clean up aggressively.
+```
+
+This is the same broad lesson visible across modern agent systems: reliable autonomy comes from explicit state, bounded orchestration, memory, guardrails, and specialist delegation, not from hoping one unbounded conversation keeps getting smarter forever. ([LangChain Docs][1])
+
+---
+
+# 18. Concrete plan update
+
+I would amend the previous ZYAL plan with this new section:
+
+```text
+### 6. Task Incubation, Confidence Routing, and Cross-Loop Collaboration
+
+Create/modify:
+- packages/jekko/src/session/daemon-router.ts
+- packages/jekko/src/session/daemon-confidence.ts
+- packages/jekko/src/session/daemon-dossier.ts
+- packages/jekko/src/session/daemon-passes.ts
+- packages/jekko/src/session/daemon-incubation.ts
+- packages/jekko/src/session/daemon-cleanup.ts
+- packages/jekko/src/tool/daemon.ts
+- packages/jekko/src/agent-script/schema.ts
+- packages/jekko/src/agent-script/parser.ts
+- packages/jekko/src/agent-script/examples.ts
+- packages/jekko/specs/daemon-zyal.md
+
+Add store support:
+- daemon_task readiness/risk/lane fields
+- daemon_task_attempt
+- daemon_task_memory
+- daemon_task_plan
+- daemon_task_prototype
+
+Add ZYAL blocks:
+- task_routing
+- task_dossier
+- lanes
+- scoring
+- risk
+- passes
+- promotion
+- cleanup
+
+Rules:
+- Fast lane is default.
+- Incubation is bounded.
+- Promotion cannot rely solely on model self-confidence.
+- Dossier DB is source of truth.
+- Prototype writes require isolation.
+- Scratchpad artifacts are cleaned or archived on completion.
+- Top-level daemon may be forever; task incubation loops may not be unbounded unless explicitly armed separately.
+```
+
+---
+
+# 19. Final recommendation
+
+Add **ZYAL Task Incubation Runtime** now, but keep v1 sane:
+
+```text
+Phase 1: daemon forever loop
+Phase 2: durable store/checkpoint/context
+Phase 3: ZYAL parser/API/TUI gold mode
+Phase 3.5: task dossiers + confidence routing + bounded incubation
+Phase 4: swarms/MCP/worktree workers
+```
+
+The minimum syntax worth shipping is:
+
+```yaml
+task_routing:
+  default_lane: fast
+  lanes:
+    incubate:
+      when:
+        any:
+          - readiness_below: 0.62
+          - risk_at_least: 0.70
+          - failed_attempts_at_least: 1
+      limits:
+        max_rounds_per_task: 4
+      passes:
+        - scout_fresh: { count: 2 }
+        - scout_inherit: { count: 1 }
+        - critic: { count: 2 }
+        - synthesize: {}
+        - promote_or_defer:
+            promote_when:
+              all:
+                - readiness_at_least: 0.78
+                - critic_blockers: 0
+                - plan_has_verification: true
+```
+
+That gives you the thing you are reaching for:
+
+```text
+Forever daemon for the whole job.
+Bounded deep-thinking loops for hard tasks.
+Fresh agents when anchoring is dangerous.
+Inherited agents when accumulated knowledge is useful.
+Safe scratchpad memory per task.
+Promotion only after evidence.
+Cleanup when complete.
+```
+
+That is the difference between “an agent keeps going” and “an agent system gets smarter across loops without be
+
+coming an unbounded mess.”
+
+[1]: https://docs.langchain.com/oss/python/langgraph/add-memory "Memory - Docs by LangChain"
+[2]: https://github.com/anomalyco/jekko/issues/18636?utm_source=chatgpt.com "Config option for continuous execution loop until task ..."
+[3]: https://code.claude.com/docs/en/commands "Commands - Claude Code Docs"
+[4]: https://arxiv.org/abs/2303.11366?utm_source=chatgpt.com "Reflexion: Language Agents with Verbal Reinforcement Learning"
+[5]: https://docs.openhands.dev/sdk/arch/events "Events - OpenHands Docs"

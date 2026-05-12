@@ -1,0 +1,2737 @@
+I studied the uploaded `jnoccio-fusion` archive. The web dashboard is a React/Vite app that pulls an initial snapshot from `/v1/jnoccio/metrics`, then stays live through `/v1/jnoccio/metrics/ws`. The websocket message contract is exactly what we want for a TUI: `snapshot`, `model_updated`, `request_event`, and `heartbeat`. I kept the same conceptual panes as the React app: Board, Speed, Vault, Limits, and Feed, but redesigned them for fast keyboard-driven terminal control.
+
+The implementation below is a full standalone Rust TUI client. It does **not** require changing the gateway. It uses Ratatui for the terminal UI, Crossterm for terminal input/rendering, Reqwest for the initial snapshot, and Tokio Tungstenite for realtime websocket updates. Ratatui `0.30.0`, Tokio Tungstenite `0.29.0`, Crossterm `0.29.0`, and Color Eyre `0.6.5` are current crate versions from crates.io/docs at the time I checked. ([Crates.io][1])
+
+Create a new crate, paste these two files, then run:
+
+```bash
+cargo run -- --base http://127.0.0.1:4317
+```
+
+You can also set:
+
+```bash
+JNOCCIO_BASE_URL=http://127.0.0.1:4317 cargo run
+```
+
+## `Cargo.toml`
+
+```toml
+[package]
+name = "jnoccio-fusion-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { version = "0.4", features = ["clock"] }
+color-eyre = "0.6.5"
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+futures-util = "0.3"
+ratatui = { version = "0.30.0", features = ["crossterm_0_29"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
+```
+
+## `src/main.rs`
+
+```rust
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet, VecDeque},
+    io::{self, Stdout},
+    time::{Duration, Instant},
+};
+
+use chrono::{Local, TimeZone};
+use color_eyre::eyre::{Result, WrapErr};
+use crossterm::{
+    event::{
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
+        KeyModifiers, MouseEventKind,
+    },
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use futures_util::{SinkExt, StreamExt};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    Frame, Terminal,
+};
+use serde::Deserialize;
+use tokio::{
+    sync::mpsc,
+    time::{interval, sleep},
+};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+fn main() -> Result<()> {
+    color_eyre::install()?;
+    let args = Args::parse();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .build()?;
+    runtime.block_on(async_main(args))
+}
+
+async fn async_main(args: Args) -> Result<()> {
+    let mut tui = Tui::enter()?;
+
+    let (ui_tx, ui_rx) = mpsc::unbounded_channel::<AppEvent>();
+    let (net_tx, net_rx) = mpsc::unbounded_channel::<NetCommand>();
+
+    tokio::spawn(network_loop(args.base_url.clone(), ui_tx, net_rx));
+
+    let mut app = App::new(args.base_url, net_tx);
+    run_app(&mut tui.terminal, &mut app, ui_rx).await
+}
+
+#[derive(Clone, Debug)]
+struct Args {
+    base_url: String,
+}
+
+impl Args {
+    fn parse() -> Self {
+        let mut base_url = std::env::var("JNOCCIO_BASE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string());
+
+        let mut iter = std::env::args().skip(1);
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--base" | "--url" | "-u" => {
+                    if let Some(value) = iter.next() {
+                        base_url = value;
+                    }
+                }
+                "--help" | "-h" => {
+                    println!(
+                        "jnoccio-fusion-tui\n\nUSAGE:\n  jnoccio-fusion-tui [--base http://127.0.0.1:4317]\n\nENV:\n  JNOCCIO_BASE_URL=http://127.0.0.1:4317"
+                    );
+                    std::process::exit(0);
+                }
+                value if value.starts_with("http://") || value.starts_with("https://") => {
+                    base_url = value.to_string();
+                }
+                value if value.contains(':') && !value.starts_with('-') => {
+                    base_url = format!("http://{value}");
+                }
+                _ => {}
+            }
+        }
+
+        Self {
+            base_url: normalize_base_url(&base_url),
+        }
+    }
+}
+
+struct Tui {
+    terminal: Terminal<CrosstermBackend<Stdout>>,
+}
+
+impl Tui {
+    fn enter() -> Result<Self> {
+        enable_raw_mode().wrap_err("enable terminal raw mode")?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
+            .wrap_err("enter alternate screen")?;
+
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend).wrap_err("create ratatui terminal")?;
+        terminal.clear().wrap_err("clear terminal")?;
+
+        Ok(Self { terminal })
+    }
+}
+
+impl Drop for Tui {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
+        let _ = self.terminal.show_cursor();
+    }
+}
+
+async fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut App,
+    mut ui_rx: mpsc::UnboundedReceiver<AppEvent>,
+) -> Result<()> {
+    let mut ticker = interval(Duration::from_millis(180));
+    let mut input = EventStream::new();
+
+    loop {
+        terminal.draw(|frame| render(frame, app))?;
+
+        tokio::select! {
+            _ = ticker.tick() => app.tick(),
+
+            Some(event) = ui_rx.recv() => app.apply_event(event),
+
+            maybe_terminal_event = input.next() => {
+                match maybe_terminal_event {
+                    Some(Ok(Event::Key(key))) => handle_key(app, key),
+                    Some(Ok(Event::Mouse(mouse))) => handle_mouse(app, mouse.kind),
+                    Some(Ok(Event::Resize(_, _))) => {}
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => app.notice(format!("terminal event error: {err}")),
+                    None => app.quit = true,
+                }
+            }
+
+            _ = tokio::signal::ctrl_c() => app.quit = true,
+        }
+
+        if app.quit {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+enum AppEvent {
+    Socket(SocketMessage),
+    Connection(ConnectionState),
+    Notice(String),
+}
+
+#[derive(Clone, Debug)]
+enum NetCommand {
+    Refresh,
+    Reconnect,
+}
+
+async fn network_loop(
+    base_url: String,
+    ui_tx: mpsc::UnboundedSender<AppEvent>,
+    mut command_rx: mpsc::UnboundedReceiver<NetCommand>,
+) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            let _ = ui_tx.send(AppEvent::Notice(format!("HTTP client init failed: {err}")));
+            return;
+        }
+    };
+
+    let mut attempt: u32 = 0;
+
+    loop {
+        attempt += 1;
+
+        let _ = ui_tx.send(AppEvent::Connection(if attempt == 1 {
+            ConnectionState::Connecting
+        } else {
+            ConnectionState::Reconnecting(attempt)
+        }));
+
+        if let Err(err) = push_snapshot(&client, &base_url, &ui_tx).await {
+            let _ = ui_tx.send(AppEvent::Notice(format!("snapshot fetch failed: {err}")));
+        }
+
+        let ws_url = metrics_ws_url(&base_url);
+
+        match connect_async(&ws_url).await {
+            Ok((mut websocket, _response)) => {
+                attempt = 0;
+                let _ = ui_tx.send(AppEvent::Connection(ConnectionState::Live));
+
+                loop {
+                    tokio::select! {
+                        command = command_rx.recv() => {
+                            match command {
+                                Some(NetCommand::Refresh) => {
+                                    if let Err(err) = push_snapshot(&client, &base_url, &ui_tx).await {
+                                        let _ = ui_tx.send(AppEvent::Notice(format!("manual refresh failed: {err}")));
+                                    }
+                                }
+                                Some(NetCommand::Reconnect) => break,
+                                None => break,
+                            }
+                        }
+
+                        item = websocket.next() => {
+                            match item {
+                                Some(Ok(Message::Text(text))) => parse_socket_text(text.to_string(), &ui_tx),
+
+                                Some(Ok(Message::Binary(bytes))) => {
+                                    if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                                        parse_socket_text(text, &ui_tx);
+                                    }
+                                }
+
+                                Some(Ok(Message::Ping(payload))) => {
+                                    let _ = websocket.send(Message::Pong(payload)).await;
+                                }
+
+                                Some(Ok(Message::Pong(_))) => {}
+                                Some(Ok(Message::Frame(_))) => {}
+                                Some(Ok(Message::Close(_))) => break,
+
+                                Some(Err(err)) => {
+                                    let _ = ui_tx.send(AppEvent::Notice(format!("websocket error: {err}")));
+                                    break;
+                                }
+
+                                None => break,
+                            }
+                        }
+                    }
+                }
+            }
+
+            Err(err) => {
+                let _ = ui_tx.send(AppEvent::Connection(ConnectionState::Error(format!(
+                    "connect failed: {err}"
+                ))));
+            }
+        }
+
+        let backoff =
+            Duration::from_millis((700_u64 * 2_u64.saturating_pow(attempt.min(4))).min(10_000));
+
+        tokio::select! {
+            _ = sleep(backoff) => {}
+
+            command = command_rx.recv() => {
+                if matches!(command, Some(NetCommand::Refresh)) {
+                    let _ = push_snapshot(&client, &base_url, &ui_tx).await;
+                }
+            }
+        }
+    }
+}
+
+async fn push_snapshot(
+    client: &reqwest::Client,
+    base_url: &str,
+    tx: &mpsc::UnboundedSender<AppEvent>,
+) -> Result<()> {
+    let url = format!("{}/v1/jnoccio/metrics", base_url.trim_end_matches('/'));
+
+    let mut snapshot = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<DashboardSnapshot>()
+        .await?;
+
+    snapshot.normalize();
+
+    let _ = tx.send(AppEvent::Socket(SocketMessage::Snapshot { snapshot }));
+    Ok(())
+}
+
+fn parse_socket_text(text: String, tx: &mpsc::UnboundedSender<AppEvent>) {
+    match serde_json::from_str::<SocketMessage>(&text) {
+        Ok(SocketMessage::Snapshot { mut snapshot }) => {
+            snapshot.normalize();
+            let _ = tx.send(AppEvent::Socket(SocketMessage::Snapshot { snapshot }));
+        }
+
+        Ok(message) => {
+            let _ = tx.send(AppEvent::Socket(message));
+        }
+
+        Err(err) => {
+            let _ = tx.send(AppEvent::Notice(format!("bad websocket message: {err}")));
+        }
+    }
+}
+
+fn normalize_base_url(value: &str) -> String {
+    let trimmed = value.trim().trim_end_matches('/');
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    }
+}
+
+fn metrics_ws_url(base: &str) -> String {
+    let stripped = base.trim_end_matches('/');
+
+    let ws_base = if let Some(rest) = stripped.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = stripped.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        format!("ws://{stripped}")
+    };
+
+    format!("{ws_base}/v1/jnoccio/metrics/ws")
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Tab {
+    Board,
+    Speed,
+    Vault,
+    Limits,
+    Feed,
+}
+
+impl Tab {
+    const ALL: [Tab; 5] = [Tab::Board, Tab::Speed, Tab::Vault, Tab::Limits, Tab::Feed];
+
+    fn label(self) -> &'static str {
+        match self {
+            Tab::Board => "🏆 Board",
+            Tab::Speed => "⚡ Speed",
+            Tab::Vault => "💰 Vault",
+            Tab::Limits => "🔒 Limits",
+            Tab::Feed => "📡 Feed",
+        }
+    }
+
+    fn next(self) -> Tab {
+        let idx = Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
+        Self::ALL[(idx + 1) % Self::ALL.len()]
+    }
+
+    fn prev(self) -> Tab {
+        let idx = Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
+        Self::ALL[(idx + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SortMode {
+    Latest,
+    Wins,
+    WinRate,
+    SuccessRate,
+}
+
+impl SortMode {
+    fn cycle(self) -> Self {
+        match self {
+            SortMode::Latest => SortMode::Wins,
+            SortMode::Wins => SortMode::WinRate,
+            SortMode::WinRate => SortMode::SuccessRate,
+            SortMode::SuccessRate => SortMode::Latest,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            SortMode::Latest => "latest activity",
+            SortMode::Wins => "wins",
+            SortMode::WinRate => "win rate",
+            SortMode::SuccessRate => "success rate",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ConnectionState {
+    Loading,
+    Connecting,
+    Reconnecting(u32),
+    Live,
+    Error(String),
+}
+
+impl ConnectionState {
+    fn label(&self, last_heartbeat: Option<i64>) -> String {
+        match self {
+            ConnectionState::Loading => "loading".to_string(),
+            ConnectionState::Connecting => "connecting".to_string(),
+            ConnectionState::Reconnecting(attempt) => format!("reconnecting #{attempt}"),
+            ConnectionState::Live => {
+                if let Some(ts) = last_heartbeat {
+                    format!("live · hb {}", fmt_time(ts))
+                } else {
+                    "live".to_string()
+                }
+            }
+            ConnectionState::Error(message) => format!("error · {message}"),
+        }
+    }
+
+    fn style(&self) -> Style {
+        match self {
+            ConnectionState::Live => Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            ConnectionState::Error(_) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ConnectionState::Reconnecting(_) => Style::default().fg(Color::Yellow),
+            _ => Style::default().fg(Color::Blue),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Notice {
+    text: String,
+    created: Instant,
+}
+
+struct App {
+    base_url: String,
+    snapshot: DashboardSnapshot,
+    connection: ConnectionState,
+    tab: Tab,
+    sort: SortMode,
+    selected_model: usize,
+    selected_event: usize,
+    detail_open: bool,
+    search_open: bool,
+    filter: String,
+    show_help: bool,
+    paused: bool,
+    pending: VecDeque<SocketMessage>,
+    pending_dropped: u64,
+    flashes: HashMap<String, Instant>,
+    notices: VecDeque<Notice>,
+    call_history: VecDeque<u64>,
+    last_total_calls: Option<u64>,
+    last_heartbeat: Option<i64>,
+    last_event_at: Option<Instant>,
+    quit: bool,
+    net_tx: mpsc::UnboundedSender<NetCommand>,
+}
+
+impl App {
+    fn new(base_url: String, net_tx: mpsc::UnboundedSender<NetCommand>) -> Self {
+        Self {
+            base_url,
+            snapshot: DashboardSnapshot::default(),
+            connection: ConnectionState::Loading,
+            tab: Tab::Board,
+            sort: SortMode::Latest,
+            selected_model: 0,
+            selected_event: 0,
+            detail_open: false,
+            search_open: false,
+            filter: String::new(),
+            show_help: false,
+            paused: false,
+            pending: VecDeque::new(),
+            pending_dropped: 0,
+            flashes: HashMap::new(),
+            notices: VecDeque::new(),
+            call_history: VecDeque::from(vec![0; 30]),
+            last_total_calls: None,
+            last_heartbeat: None,
+            last_event_at: None,
+            quit: false,
+            net_tx,
+        }
+    }
+
+    fn tick(&mut self) {
+        let now = Instant::now();
+
+        self.flashes
+            .retain(|_, created| now.duration_since(*created) < Duration::from_secs(3));
+
+        self.notices
+            .retain(|notice| now.duration_since(notice.created) < Duration::from_secs(7));
+
+        while self.call_history.len() > 80 {
+            self.call_history.pop_front();
+        }
+    }
+
+    fn notice(&mut self, text: impl Into<String>) {
+        self.notices.push_front(Notice {
+            text: text.into(),
+            created: Instant::now(),
+        });
+
+        while self.notices.len() > 5 {
+            self.notices.pop_back();
+        }
+    }
+
+    fn apply_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Connection(connection) => self.connection = connection,
+            AppEvent::Notice(text) => self.notice(text),
+            AppEvent::Socket(message) => self.apply_socket(message),
+        }
+    }
+
+    fn apply_socket(&mut self, message: SocketMessage) {
+        if self.paused && !matches!(message, SocketMessage::Heartbeat { .. }) {
+            if self.pending.len() >= 500 {
+                self.pending.pop_front();
+                self.pending_dropped += 1;
+            }
+
+            self.pending.push_back(message);
+            return;
+        }
+
+        self.apply_socket_now(message);
+    }
+
+    fn apply_socket_now(&mut self, message: SocketMessage) {
+        match message {
+            SocketMessage::Snapshot { mut snapshot } => {
+                snapshot.normalize();
+                self.snapshot = snapshot;
+                self.record_total_calls();
+                self.clamp_selection();
+            }
+
+            SocketMessage::ModelUpdated { model } => {
+                self.flash_model(&model.id, "model");
+
+                if let Some(existing) = self.snapshot.models.iter_mut().find(|m| m.id == model.id) {
+                    *existing = model;
+                } else {
+                    self.snapshot.models.push(model);
+                }
+
+                self.snapshot.totals = totals_from_models(&self.snapshot.models);
+                self.record_total_calls();
+                self.clamp_selection();
+            }
+
+            SocketMessage::RequestEvent { event } => {
+                self.flash_model(
+                    &event.model_id,
+                    event.agent_id.as_deref().unwrap_or(&event.request_id),
+                );
+
+                self.last_event_at = Some(Instant::now());
+
+                let mut seen = HashSet::new();
+                let mut events = Vec::with_capacity(self.snapshot.recent_events.len() + 1);
+                events.push(event);
+                events.extend(self.snapshot.recent_events.iter().cloned());
+
+                self.snapshot.recent_events = events
+                    .into_iter()
+                    .filter(|event| seen.insert(event.id))
+                    .take(300)
+                    .collect();
+
+                self.clamp_selection();
+            }
+
+            SocketMessage::Heartbeat { timestamp } => self.last_heartbeat = Some(timestamp),
+        }
+    }
+
+    fn toggle_pause(&mut self) {
+        self.paused = !self.paused;
+
+        if self.paused {
+            self.notice("live updates paused; press p to resume");
+        } else {
+            let mut drained = 0usize;
+
+            while let Some(message) = self.pending.pop_front() {
+                self.apply_socket_now(message);
+                drained += 1;
+            }
+
+            let dropped = self.pending_dropped;
+            self.pending_dropped = 0;
+
+            if dropped > 0 {
+                self.notice(format!(
+                    "resumed; applied {drained}, dropped {dropped} old updates"
+                ));
+            } else {
+                self.notice(format!("resumed; applied {drained} queued updates"));
+            }
+        }
+    }
+
+    fn record_total_calls(&mut self) {
+        let calls = self.snapshot.totals.calls;
+
+        if let Some(last) = self.last_total_calls {
+            self.call_history.push_back(calls.saturating_sub(last));
+        }
+
+        self.last_total_calls = Some(calls);
+    }
+
+    fn flash_model(&mut self, model_id: &str, agent_id: &str) {
+        self.flashes
+            .insert(format!("{model_id}|{agent_id}"), Instant::now());
+    }
+
+    fn model_flashes(&self, model_id: &str) -> Vec<&str> {
+        let now = Instant::now();
+
+        self.flashes
+            .iter()
+            .filter(|(key, ts)| {
+                key.starts_with(&format!("{model_id}|"))
+                    && now.duration_since(**ts) < Duration::from_secs(3)
+            })
+            .map(|(key, _)| key.split_once('|').map(|(_, agent)| agent).unwrap_or("agent"))
+            .collect()
+    }
+
+    fn is_flashing(&self, model_id: &str) -> bool {
+        !self.model_flashes(model_id).is_empty()
+    }
+
+    fn current_models(&self) -> Vec<&DashboardModel> {
+        let query = self.filter.to_lowercase();
+
+        let mut models: Vec<&DashboardModel> = self
+            .snapshot
+            .models
+            .iter()
+            .filter(|model| match self.tab {
+                Tab::Board => model.call_count > 0 || !query.is_empty(),
+                Tab::Speed => model.avg_latency_ms.is_some(),
+                Tab::Vault => model.total_tokens > 0,
+                Tab::Limits => true,
+                Tab::Feed => true,
+            })
+            .filter(|model| {
+                query.is_empty()
+                    || [
+                        model.id.as_str(),
+                        model.display_name.as_str(),
+                        model.provider.as_str(),
+                        model.upstream_model.as_str(),
+                        model.status.as_str(),
+                    ]
+                    .join(" ")
+                    .to_lowercase()
+                    .contains(&query)
+            })
+            .collect();
+
+        match self.tab {
+            Tab::Board => match self.sort {
+                SortMode::Latest => models.sort_by(|a, b| {
+                    let af = self.latest_flash(a.id.as_str());
+                    let bf = self.latest_flash(b.id.as_str());
+                    (b.updated_at.max(bf)).cmp(&a.updated_at.max(af))
+                }),
+                SortMode::Wins => models.sort_by(|a, b| b.win_count.cmp(&a.win_count)),
+                SortMode::WinRate => models.sort_by(|a, b| cmp_f64_desc(a.win_rate, b.win_rate)),
+                SortMode::SuccessRate => {
+                    models.sort_by(|a, b| cmp_f64_desc(success_rate(a), success_rate(b)))
+                }
+            },
+            Tab::Speed => models.sort_by(|a, b| cmp_opt_f64_asc(a.avg_latency_ms, b.avg_latency_ms)),
+            Tab::Vault => models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens)),
+            Tab::Limits => models.sort_by(|a, b| {
+                b.context_overrun_count
+                    .cmp(&a.context_overrun_count)
+                    .then_with(|| b.failure_count.cmp(&a.failure_count))
+                    .then_with(|| a.display_name.cmp(&b.display_name))
+            }),
+            Tab::Feed => models.sort_by(|a, b| a.display_name.cmp(&b.display_name)),
+        }
+
+        models
+    }
+
+    fn filtered_events(&self) -> Vec<&MetricEvent> {
+        let query = self.filter.to_lowercase();
+
+        self.snapshot
+            .recent_events
+            .iter()
+            .filter(|event| {
+                query.is_empty()
+                    || [
+                        event.model_id.as_str(),
+                        event.provider.as_str(),
+                        event.phase.as_str(),
+                        event.status.as_str(),
+                        event.error_kind.as_deref().unwrap_or(""),
+                        event.route_mode.as_deref().unwrap_or(""),
+                        event.agent_id.as_deref().unwrap_or(""),
+                    ]
+                    .join(" ")
+                    .to_lowercase()
+                    .contains(&query)
+            })
+            .collect()
+    }
+
+    fn selected_model(&self) -> Option<&DashboardModel> {
+        let models = self.current_models();
+        models.get(self.selected_model).copied()
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        match self.tab {
+            Tab::Feed => {
+                let len = self.filtered_events().len();
+                self.selected_event = move_index(self.selected_event, delta, len);
+            }
+            _ => {
+                let len = self.current_models().len();
+                self.selected_model = move_index(self.selected_model, delta, len);
+            }
+        }
+    }
+
+    fn jump_top(&mut self) {
+        if self.tab == Tab::Feed {
+            self.selected_event = 0;
+        } else {
+            self.selected_model = 0;
+        }
+    }
+
+    fn jump_bottom(&mut self) {
+        if self.tab == Tab::Feed {
+            self.selected_event = self.filtered_events().len().saturating_sub(1);
+        } else {
+            self.selected_model = self.current_models().len().saturating_sub(1);
+        }
+    }
+
+    fn clamp_selection(&mut self) {
+        self.selected_model = self
+            .selected_model
+            .min(self.current_models().len().saturating_sub(1));
+
+        self.selected_event = self
+            .selected_event
+            .min(self.filtered_events().len().saturating_sub(1));
+    }
+
+    fn latest_flash(&self, model_id: &str) -> i64 {
+        let now = Instant::now();
+
+        self.flashes
+            .iter()
+            .filter(|(key, ts)| {
+                key.starts_with(&format!("{model_id}|"))
+                    && now.duration_since(**ts) < Duration::from_secs(3)
+            })
+            .map(|(_, ts)| {
+                let age = now.duration_since(*ts).as_millis() as i64;
+                chrono::Utc::now().timestamp() + (3000 - age).max(0)
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn refresh(&mut self) {
+        let _ = self.net_tx.send(NetCommand::Refresh);
+        self.notice("manual snapshot refresh requested");
+    }
+
+    fn reconnect(&mut self) {
+        let _ = self.net_tx.send(NetCommand::Reconnect);
+        self.notice("websocket reconnect requested");
+    }
+}
+
+fn handle_key(app: &mut App, key: KeyEvent) {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+        app.quit = true;
+        return;
+    }
+
+    if app.search_open {
+        match key.code {
+            KeyCode::Esc => app.search_open = false,
+            KeyCode::Enter => {
+                app.search_open = false;
+                app.clamp_selection();
+            }
+            KeyCode::Backspace => {
+                app.filter.pop();
+                app.clamp_selection();
+            }
+            KeyCode::Char(ch) => {
+                if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                    app.filter.push(ch);
+                    app.clamp_selection();
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char('q') => app.quit = true,
+
+        KeyCode::Char('?') | KeyCode::F(1) => app.show_help = !app.show_help,
+
+        KeyCode::Esc => {
+            if app.show_help {
+                app.show_help = false;
+            } else if app.detail_open {
+                app.detail_open = false;
+            } else if !app.filter.is_empty() {
+                app.filter.clear();
+                app.clamp_selection();
+            }
+        }
+
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.tab = app.tab.prev();
+            app.clamp_selection();
+        }
+
+        KeyCode::Right | KeyCode::Char('l') => {
+            app.tab = app.tab.next();
+            app.clamp_selection();
+        }
+
+        KeyCode::Char('1') => app.tab = Tab::Board,
+        KeyCode::Char('2') => app.tab = Tab::Speed,
+        KeyCode::Char('3') => app.tab = Tab::Vault,
+        KeyCode::Char('4') => app.tab = Tab::Limits,
+        KeyCode::Char('5') => app.tab = Tab::Feed,
+
+        KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
+        KeyCode::PageUp => app.move_selection(-10),
+        KeyCode::PageDown => app.move_selection(10),
+
+        KeyCode::Home | KeyCode::Char('g') => app.jump_top(),
+        KeyCode::End | KeyCode::Char('G') => app.jump_bottom(),
+
+        KeyCode::Enter => {
+            if app.tab != Tab::Feed && app.selected_model().is_some() {
+                app.detail_open = !app.detail_open;
+            }
+        }
+
+        KeyCode::Char('/') => app.search_open = true,
+
+        KeyCode::Char('s') => {
+            app.sort = app.sort.cycle();
+            app.notice(format!("leaderboard sort: {}", app.sort.label()));
+        }
+
+        KeyCode::Char('p') => app.toggle_pause(),
+        KeyCode::Char('r') => app.refresh(),
+        KeyCode::Char('R') => app.reconnect(),
+
+        _ => {}
+    }
+}
+
+fn handle_mouse(app: &mut App, kind: MouseEventKind) {
+    match kind {
+        MouseEventKind::ScrollUp => app.move_selection(-1),
+        MouseEventKind::ScrollDown => app.move_selection(1),
+        _ => {}
+    }
+}
+
+fn render(frame: &mut Frame<'_>, app: &App) {
+    let area = frame.area();
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(5),
+            Constraint::Min(12),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    draw_header(frame, rows[0], app);
+    draw_kpis(frame, rows[1], app);
+    draw_workspace(frame, rows[2], app);
+    draw_footer(frame, rows[3], app);
+
+    if app.show_help {
+        draw_help(frame, area);
+    }
+}
+
+fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(
+            " Jnoccio Fusion Terminal Control Room ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let connection = app.connection.label(app.last_heartbeat);
+
+    let active = if app.paused {
+        Span::styled(
+            format!(" PAUSED · {} queued ", app.pending.len()),
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        )
+    } else {
+        Span::styled(
+            " LIVE ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        )
+    };
+
+    let line1 = Line::from(vec![
+        Span::styled(
+            "JNOCCIO FUSION",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(app.base_url.clone(), Style::default().fg(Color::Gray)),
+        Span::raw("  "),
+        active,
+        Span::raw("  "),
+        Span::styled(connection, app.connection.style()),
+    ]);
+
+    let line2 = Line::from(vec![
+        Span::styled("agents ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{}/{}", app.snapshot.agent_count, app.snapshot.max_agents),
+            Style::default().fg(if app.snapshot.agent_count > 1 {
+                Color::Yellow
+            } else {
+                Color::Cyan
+            }),
+        ),
+        Span::raw("  "),
+        Span::styled("gateways ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("x{}", app.snapshot.instance_count),
+            Style::default().fg(if app.snapshot.instance_count > 1 {
+                Color::Yellow
+            } else {
+                Color::Cyan
+            }),
+        ),
+        Span::raw("  "),
+        Span::styled("role ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            app.snapshot.instance_role.clone(),
+            Style::default().fg(Color::Magenta),
+        ),
+        Span::raw("  "),
+        Span::styled("workers ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            app.snapshot.worker_threads.to_string(),
+            Style::default().fg(Color::Blue),
+        ),
+        Span::raw("  "),
+        Span::styled("search ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            if app.filter.is_empty() {
+                "—".to_string()
+            } else {
+                app.filter.clone()
+            },
+            Style::default().fg(Color::Green),
+        ),
+    ]);
+
+    frame.render_widget(Paragraph::new(vec![line1, line2]).block(block), area);
+}
+
+fn draw_kpis(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(14),
+            Constraint::Percentage(12),
+            Constraint::Percentage(12),
+            Constraint::Percentage(16),
+            Constraint::Percentage(18),
+            Constraint::Percentage(14),
+            Constraint::Percentage(14),
+        ])
+        .split(area);
+
+    let totals = &app.snapshot.totals;
+
+    let kpis = [
+        ("Total Calls", fmt_n(totals.calls), Color::White, None),
+        ("Wins", fmt_n(totals.wins), Color::Yellow, None),
+        ("Failures", fmt_n(totals.failures), Color::Red, None),
+        ("Tokens", fmt_n(totals.total_tokens), Color::Magenta, None),
+        (
+            "Tokens / 24h",
+            format!("{}M", fmt_m(app.snapshot.token_rate.median_m_tokens_per_24h)),
+            Color::Cyan,
+            Some(format!(
+                "10m max {}M",
+                fmt_m(app.snapshot.token_rate.max_m_tokens_per_24h)
+            )),
+        ),
+        (
+            "Avg Latency",
+            fmt_ms_opt(totals.average_latency_ms),
+            Color::Blue,
+            None,
+        ),
+        (
+            "Routes",
+            format!("{}/{}", totals.enabled_models, totals.total_models),
+            Color::Green,
+            None,
+        ),
+    ];
+
+    for (idx, (label, value, color, detail)) in kpis.into_iter().enumerate() {
+        let mut lines = vec![
+            Line::from(Span::styled(label, Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                value,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )),
+        ];
+
+        if let Some(detail) = detail {
+            lines.push(Line::from(Span::styled(
+                detail,
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        let block = Block::default().borders(Borders::ALL).border_style(
+            Style::default().fg(if idx == 1 {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            }),
+        );
+
+        frame.render_widget(
+            Paragraph::new(lines).block(block).alignment(Alignment::Center),
+            chunks[idx],
+        );
+    }
+}
+
+fn draw_workspace(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(18), Constraint::Min(20)])
+        .split(area);
+
+    draw_nav(frame, columns[0], app);
+
+    if app.detail_open && app.selected_model().is_some() && columns[1].width >= 85 {
+        let main = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+            .split(columns[1]);
+
+        draw_tab(frame, main[0], app);
+        draw_detail(frame, main[1], app);
+    } else {
+        draw_tab(frame, columns[1], app);
+    }
+}
+
+fn draw_nav(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let items = Tab::ALL
+        .iter()
+        .enumerate()
+        .map(|(idx, tab)| {
+            let active = *tab == app.tab;
+            let style = if active {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{} ", idx + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(tab.label(), style),
+            ]))
+        })
+        .collect::<Vec<_>>();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(" panes ");
+
+    frame.render_widget(List::new(items).block(block), area);
+}
+
+fn draw_tab(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    match app.tab {
+        Tab::Board => draw_board(frame, area, app),
+        Tab::Speed => draw_speed(frame, area, app),
+        Tab::Vault => draw_vault(frame, area, app),
+        Tab::Limits => draw_limits(frame, area, app),
+        Tab::Feed => draw_feed(frame, area, app),
+    }
+}
+
+fn draw_board(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Min(6)])
+        .split(area);
+
+    draw_activity(frame, rows[0], app);
+
+    let models = app.current_models();
+    let max_wins = models.iter().map(|m| m.win_count).max().unwrap_or(1).max(1);
+    let title = format!(
+        " leaderboard · sort {} · enter opens drawer ",
+        app.sort.label()
+    );
+
+    let lines = if models.is_empty() {
+        vec![empty_line(
+            "No models with calls yet. Send traffic through /v1/chat/completions.",
+        )]
+    } else {
+        visible_model_lines(app, &models, rows[1], |idx, model, selected, flashing| {
+            let wins_ratio = model.win_count as f64 / max_wins as f64;
+            let flashes = app.model_flashes(&model.id);
+
+            let mut spans = row_prefix(idx, selected);
+            spans.push(status_dot(&model.status));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                fit(&model.display_name, 28),
+                Style::default()
+                    .fg(if flashing { Color::Yellow } else { Color::White })
+                    .add_modifier(if flashing {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ));
+            spans.push(Span::styled(
+                format!(" {:<12}", fit(&model.provider, 12)),
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.push(Span::styled(
+                format!(" calls {:>7} ", fmt_n(model.call_count)),
+                Style::default().fg(Color::Cyan),
+            ));
+            spans.push(Span::styled(
+                format!("wins {:>5} ", fmt_n(model.win_count)),
+                Style::default().fg(Color::Yellow),
+            ));
+            spans.push(Span::styled(
+                format!("win {:>4} ", fmt_pct(model.win_rate)),
+                Style::default().fg(Color::Green),
+            ));
+            spans.extend(bar_spans(18, wins_ratio, Color::Yellow, Color::DarkGray));
+
+            if !flashes.is_empty() {
+                spans.push(Span::raw(" "));
+                for agent in flashes.iter().take(4) {
+                    spans.push(Span::styled("●", Style::default().fg(agent_color(agent))));
+                }
+            }
+
+            Line::from(spans).style(if selected {
+                selected_style()
+            } else {
+                Style::default()
+            })
+        })
+    };
+
+    draw_lines(frame, rows[1], title, lines);
+}
+
+fn draw_activity(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let mut top = app
+        .snapshot
+        .models
+        .iter()
+        .filter(|m| m.call_count > 0)
+        .collect::<Vec<_>>();
+
+    top.sort_by(|a, b| b.call_count.cmp(&a.call_count));
+    top.truncate(10);
+
+    let max_calls = top.iter().map(|m| m.call_count).max().unwrap_or(1).max(1);
+
+    let mut lines = Vec::new();
+    let spark = app.call_history.iter().copied().collect::<Vec<_>>();
+
+    lines.push(Line::from(vec![
+        Span::styled("activity pulses ", Style::default().fg(Color::DarkGray)),
+        Span::styled(sparkline(&spark, 32), Style::default().fg(Color::Cyan)),
+        Span::raw("  "),
+        Span::styled(
+            "blue=calls gold=wins live dots=agents",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+
+    for model in top {
+        let ratio = model.call_count as f64 / max_calls as f64;
+
+        let mut spans = vec![
+            status_dot(&model.status),
+            Span::raw(" "),
+            Span::styled(
+                format!("{:<24}", fit(&model.display_name, 24)),
+                Style::default().fg(Color::White),
+            ),
+            Span::raw(" "),
+        ];
+
+        spans.extend(bar_spans(28, ratio, Color::Blue, Color::DarkGray));
+        spans.push(Span::styled(
+            format!(
+                " {:>6} calls {:>5} wins",
+                fmt_n(model.call_count),
+                fmt_n(model.win_count)
+            ),
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        if app.is_flashing(&model.id) {
+            spans.push(Span::styled(
+                "  LIVE",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        lines.push(Line::from(spans));
+    }
+
+    if lines.len() == 1 {
+        lines.push(empty_line("Waiting for request telemetry…"));
+    }
+
+    draw_lines(frame, area, " realtime activity histogram ", lines);
+}
+
+fn draw_speed(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let models = app.current_models();
+
+    let max = models
+        .iter()
+        .filter_map(|m| m.avg_latency_ms)
+        .fold(1.0_f64, f64::max);
+
+    let lines = if models.is_empty() {
+        vec![empty_line("No latency data yet.")]
+    } else {
+        visible_model_lines(app, &models, area, |idx, model, selected, flashing| {
+            let lat = model.avg_latency_ms.unwrap_or(0.0);
+            let speed_ratio = if max <= 0.0 {
+                0.0
+            } else {
+                1.0 - (lat / max).min(1.0)
+            };
+
+            let color = latency_color(lat);
+            let tier = if lat < 1_000.0 {
+                "⚡"
+            } else if lat < 5_000.0 {
+                "●"
+            } else if lat < 15_000.0 {
+                "▲"
+            } else {
+                "■"
+            };
+
+            let mut spans = row_prefix(idx, selected);
+            spans.push(Span::styled(tier, Style::default().fg(color)));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                fit(&model.display_name, 30),
+                Style::default().fg(if flashing {
+                    Color::Yellow
+                } else {
+                    Color::White
+                }),
+            ));
+            spans.push(Span::styled(
+                format!(" {:<12}", fit(&model.provider, 12)),
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.push(Span::styled(
+                format!(" avg {:>9} ", fmt_ms_opt(model.avg_latency_ms)),
+                Style::default().fg(color),
+            ));
+            spans.push(Span::styled(
+                format!(
+                    "min {:>8} max {:>8} ",
+                    fmt_ms_u(model.min_latency_ms),
+                    fmt_ms_u(model.max_latency_ms)
+                ),
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.extend(bar_spans(20, speed_ratio, color, Color::DarkGray));
+
+            Line::from(spans).style(if selected {
+                selected_style()
+            } else {
+                Style::default()
+            })
+        })
+    };
+
+    draw_lines(frame, area, " latency arena · fastest routes first ", lines);
+}
+
+fn draw_vault(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let models = app.current_models();
+    let max_tokens = models.iter().map(|m| m.total_tokens).max().unwrap_or(1).max(1);
+    let total = models.iter().map(|m| m.total_tokens).sum::<u64>();
+    let title = format!(" token vault · {} total tokens routed ", fmt_n(total));
+
+    let lines = if models.is_empty() {
+        vec![empty_line("No token usage recorded yet.")]
+    } else {
+        visible_model_lines(app, &models, area, |idx, model, selected, flashing| {
+            let total_ratio = model.total_tokens as f64 / max_tokens as f64;
+            let prompt_share = if model.total_tokens == 0 {
+                0.0
+            } else {
+                model.prompt_tokens as f64 / model.total_tokens as f64
+            };
+
+            let efficiency = if model.success_count == 0 {
+                0
+            } else {
+                model.total_tokens / model.success_count.max(1)
+            };
+
+            let mut spans = row_prefix(idx, selected);
+            spans.push(Span::styled(
+                fit(&model.display_name, 28),
+                Style::default().fg(if flashing {
+                    Color::Yellow
+                } else {
+                    Color::White
+                }),
+            ));
+            spans.push(Span::styled(
+                format!(" {:<10}", fit(&model.provider, 10)),
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.push(Span::styled(
+                format!("total {:>10} ", fmt_n(model.total_tokens)),
+                Style::default().fg(Color::Magenta),
+            ));
+            spans.push(Span::styled(
+                format!("tok/call {:>7} ", fmt_n(efficiency)),
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.extend(stacked_bar_spans(24, total_ratio, prompt_share));
+            spans.push(Span::styled(
+                format!(
+                    "  p:{} c:{}",
+                    fmt_n(model.prompt_tokens),
+                    fmt_n(model.completion_tokens)
+                ),
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            Line::from(spans).style(if selected {
+                selected_style()
+            } else {
+                Style::default()
+            })
+        })
+    };
+
+    draw_lines(frame, area, title, lines);
+}
+
+fn draw_limits(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(9),
+            Constraint::Length(10),
+            Constraint::Min(8),
+        ])
+        .split(area);
+
+    draw_context(frame, rows[0], app);
+    draw_capacity(frame, rows[1], app);
+    draw_errors(frame, rows[2], app);
+}
+
+fn draw_context(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let buckets = &app.snapshot.context.histogram;
+
+    let max_count = buckets
+        .iter()
+        .map(|b| b.success_count + b.failure_count)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    let mut lines = Vec::new();
+
+    let learned = app
+        .snapshot
+        .context
+        .estimates
+        .iter()
+        .filter(|e| e.learned_context_window.is_some() || e.learned_request_token_limit.is_some())
+        .count();
+
+    let overruns = app
+        .snapshot
+        .context
+        .recent_events
+        .iter()
+        .filter(|event| event.error_kind.as_deref() == Some("ContextOverflow"))
+        .count();
+
+    lines.push(Line::from(vec![
+        Span::styled("learned ", Style::default().fg(Color::DarkGray)),
+        Span::styled(learned.to_string(), Style::default().fg(Color::Cyan)),
+        Span::raw("  "),
+        Span::styled("recent overruns ", Style::default().fg(Color::DarkGray)),
+        Span::styled(overruns.to_string(), Style::default().fg(Color::Red)),
+        Span::raw("  "),
+        Span::styled(
+            "green=success red=failure",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+
+    if buckets.is_empty() {
+        lines.push(empty_line("No context runs recorded yet."));
+    } else {
+        for bucket in buckets.iter().take(6) {
+            let count = bucket.success_count + bucket.failure_count;
+            let ratio = count as f64 / max_count as f64;
+            let fail_share = if count == 0 {
+                0.0
+            } else {
+                bucket.failure_count as f64 / count as f64
+            };
+
+            let mut spans = vec![Span::styled(
+                format!(
+                    "{:>6}-{:>6} ",
+                    compact_n(bucket.bucket_start),
+                    compact_n(bucket.bucket_end)
+                ),
+                Style::default().fg(Color::DarkGray),
+            )];
+
+            spans.extend(success_fail_bar(34, ratio, fail_share));
+            spans.push(Span::styled(
+                format!(
+                    " ok {} fail {} over {}",
+                    bucket.success_count, bucket.failure_count, bucket.overrun_count
+                ),
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            lines.push(Line::from(spans));
+        }
+    }
+
+    draw_lines(
+        frame,
+        area,
+        " context runs · learned safe-window observatory ",
+        lines,
+    );
+}
+
+fn draw_capacity(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let capacity = &app.snapshot.capacity;
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled("known remaining ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!(
+                "{} / {} per hour",
+                fmt_n(capacity.known_remaining),
+                fmt_n(capacity.known_limit_per_hour)
+            ),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled("used ", Style::default().fg(Color::DarkGray)),
+        Span::styled(fmt_pct(capacity.percent_used), capacity_color(capacity.percent_used)),
+    ])];
+
+    let mut known = capacity.models.iter().collect::<Vec<_>>();
+    known.sort_by(|a, b| {
+        b.percent_used
+            .partial_cmp(&a.percent_used)
+            .unwrap_or(Ordering::Equal)
+    });
+
+    for model in known.into_iter().take(6) {
+        let mut spans = vec![
+            status_dot(&model.status),
+            Span::raw(" "),
+            Span::styled(
+                format!("{:<25}", fit(&model.display_name, 25)),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(
+                format!(" {:<10}", fit(&model.provider, 10)),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ];
+
+        spans.extend(bar_spans(
+            24,
+            model.percent_used,
+            capacity_color_only(model.percent_used),
+            Color::DarkGray,
+        ));
+
+        spans.push(Span::styled(
+            format!(
+                " {:>5}/{:<5} {}",
+                fmt_n(model.used),
+                fmt_n(model.limit_per_hour),
+                model.limit_kind
+            ),
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        lines.push(Line::from(spans));
+    }
+
+    if capacity.models.is_empty() {
+        lines.push(empty_line(
+            "No published hourly limits found in the model registry.",
+        ));
+    }
+
+    draw_lines(frame, area, " known hourly capacity ", lines);
+}
+
+fn draw_errors(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    let mut unknown = app
+        .snapshot
+        .capacity
+        .unknown_models
+        .iter()
+        .filter(|m| m.used > 0)
+        .collect::<Vec<_>>();
+
+    unknown.sort_by(|a, b| b.successes.cmp(&a.successes));
+
+    let max_success = unknown.iter().map(|m| m.successes).max().unwrap_or(1).max(1);
+
+    let unknown_lines = if unknown.is_empty() {
+        vec![empty_line("No active unknown-limit models.")]
+    } else {
+        unknown
+            .into_iter()
+            .take(columns[0].height.saturating_sub(2) as usize)
+            .map(|m| {
+                let ratio = m.successes as f64 / max_success as f64;
+                let fail_rate = if m.used == 0 {
+                    0.0
+                } else {
+                    m.failures as f64 / m.used as f64
+                };
+
+                let mut spans = vec![
+                    Span::styled(
+                        format!("{:<23}", fit(&m.display_name, 23)),
+                        Style::default().fg(Color::White),
+                    ),
+                    Span::styled(
+                        format!(" ~{:>5}/hr ", fmt_n(m.successes)),
+                        Style::default().fg(Color::Green),
+                    ),
+                ];
+
+                spans.extend(bar_spans(14, ratio, Color::Green, Color::DarkGray));
+                spans.push(Span::styled(
+                    format!(" fail {}", fmt_pct(fail_rate)),
+                    Style::default().fg(if fail_rate > 0.1 {
+                        Color::Red
+                    } else {
+                        Color::DarkGray
+                    }),
+                ));
+
+                Line::from(spans)
+            })
+            .collect()
+    };
+
+    draw_lines(frame, columns[0], " inferred limits ", unknown_lines);
+
+    let mut errored = app
+        .snapshot
+        .models
+        .iter()
+        .filter(|m| m.last_error_kind.is_some())
+        .collect::<Vec<_>>();
+
+    errored.sort_by(|a, b| b.failure_count.cmp(&a.failure_count));
+
+    let max_fail = errored.iter().map(|m| m.failure_count).max().unwrap_or(1).max(1);
+
+    let error_lines = if errored.is_empty() {
+        vec![empty_line("No current error pattern.")]
+    } else {
+        errored
+            .into_iter()
+            .take(columns[1].height.saturating_sub(2) as usize)
+            .map(|m| {
+                let ratio = m.failure_count as f64 / max_fail as f64;
+
+                let mut spans = vec![
+                    Span::styled(
+                        format!("{:<22}", fit(&m.display_name, 22)),
+                        Style::default().fg(Color::White),
+                    ),
+                    Span::styled(
+                        format!(" {:>5} ", fmt_n(m.failure_count)),
+                        Style::default().fg(Color::Red),
+                    ),
+                ];
+
+                spans.extend(bar_spans(12, ratio, Color::Red, Color::DarkGray));
+                spans.push(Span::styled(
+                    format!(
+                        " {}",
+                        fit(m.last_error_kind.as_deref().unwrap_or(""), 18)
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ));
+
+                Line::from(spans)
+            })
+            .collect()
+    };
+
+    draw_lines(frame, columns[1], " error patterns ", error_lines);
+}
+
+fn draw_feed(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let events = app.filtered_events();
+    let title = format!(" live heist feed · {} events · / filters ", events.len());
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let range = window_range(app.selected_event, events.len(), inner_height);
+
+    let mut lines = Vec::new();
+
+    if events.is_empty() {
+        lines.push(empty_line("No events match the current filter."));
+    } else {
+        for (visible_idx, event) in events[range.clone()].iter().enumerate() {
+            let idx = range.start + visible_idx;
+            let selected = idx == app.selected_event;
+            let status_color = event_status_color(&event.status, event.error_kind.as_deref());
+
+            let mut spans = row_prefix(idx, selected);
+            spans.push(Span::styled(
+                fmt_time(event.created_at),
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("{:<10}", fit(&event.phase, 10)),
+                phase_style(&event.phase),
+            ));
+            spans.push(Span::raw(" "));
+
+            if let Some(agent) = &event.agent_id {
+                spans.push(Span::styled("●", Style::default().fg(agent_color(agent))));
+                spans.push(Span::raw(" "));
+            }
+
+            spans.push(Span::styled(
+                format!("{:<32}", fit(&event.model_id, 32)),
+                Style::default().fg(Color::White),
+            ));
+            spans.push(Span::styled(
+                format!("{:<9}", event.status),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!(
+                    "{:>9}",
+                    event
+                        .error_kind
+                        .clone()
+                        .unwrap_or_else(|| fmt_ms_u(event.latency_ms))
+                ),
+                Style::default().fg(if event.error_kind.is_some() {
+                    Color::Red
+                } else {
+                    Color::Blue
+                }),
+            ));
+            spans.push(Span::styled(
+                format!(" tok {:>7}", fmt_n(event.total_tokens)),
+                Style::default().fg(Color::Magenta),
+            ));
+
+            if let Some(route) = &event.route_mode {
+                spans.push(Span::styled(
+                    format!(" {route}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            lines.push(Line::from(spans).style(if selected {
+                selected_style()
+            } else {
+                Style::default()
+            }));
+        }
+    }
+
+    draw_lines(frame, area, title, lines);
+}
+
+fn draw_detail(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let Some(model) = app.selected_model() else {
+        return;
+    };
+
+    let mut lines = vec![
+        Line::from(vec![
+            status_dot(&model.status),
+            Span::raw(" "),
+            Span::styled(
+                model.display_name.as_str(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled(
+            format!("{} · {}", model.provider, model.upstream_model),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::raw(""),
+        detail_line("status", &model.status, status_color(&model.status)),
+        detail_line("roles", &model.roles.join(", "), Color::Cyan),
+        detail_line("calls", &fmt_n(model.call_count), Color::White),
+        detail_line("success", &fmt_n(model.success_count), Color::Green),
+        detail_line("failures", &fmt_n(model.failure_count), Color::Red),
+        detail_line("wins", &fmt_n(model.win_count), Color::Yellow),
+        detail_line("win rate", &fmt_pct(model.win_rate), Color::Yellow),
+        detail_line(
+            "avg latency",
+            &fmt_ms_opt(model.avg_latency_ms),
+            latency_color(model.avg_latency_ms.unwrap_or(0.0)),
+        ),
+        detail_line(
+            "min / max",
+            &format!(
+                "{} / {}",
+                fmt_ms_u(model.min_latency_ms),
+                fmt_ms_u(model.max_latency_ms)
+            ),
+            Color::Blue,
+        ),
+        detail_line("tokens", &fmt_n(model.total_tokens), Color::Magenta),
+        detail_line("prompt", &fmt_n(model.prompt_tokens), Color::Cyan),
+        detail_line(
+            "completion",
+            &fmt_n(model.completion_tokens),
+            Color::Magenta,
+        ),
+        detail_line(
+            "context",
+            &format!(
+                "safe {} / configured {}",
+                fmt_n(model.safe_context_window),
+                fmt_n(model.configured_context_window)
+            ),
+            Color::Green,
+        ),
+        detail_line(
+            "overruns",
+            &fmt_n(model.context_overrun_count),
+            if model.context_overrun_count > 0 {
+                Color::Red
+            } else {
+                Color::Green
+            },
+        ),
+    ];
+
+    if let Some(cap) = model.hourly_capacity {
+        let ratio = if cap == 0 {
+            0.0
+        } else {
+            model.hourly_used as f64 / cap as f64
+        };
+
+        let mut spans = vec![Span::styled(
+            "capacity    ",
+            Style::default().fg(Color::DarkGray),
+        )];
+
+        spans.extend(bar_spans(
+            20,
+            ratio,
+            capacity_color_only(ratio),
+            Color::DarkGray,
+        ));
+        spans.push(Span::styled(
+            format!(" {}/{}", fmt_n(model.hourly_used), fmt_n(cap)),
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        lines.push(Line::from(spans));
+    }
+
+    if let Some(kind) = &model.last_error_kind {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            kind.as_str(),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            fit(
+                model.last_error_message.as_deref().unwrap_or(""),
+                area.width.saturating_sub(4) as usize,
+            ),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    let mut model_events = app
+        .snapshot
+        .recent_events
+        .iter()
+        .filter(|event| event.model_id == model.id)
+        .take(8)
+        .collect::<Vec<_>>();
+
+    if !model_events.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "recent events",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        for event in model_events.drain(..) {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    fmt_time(event.created_at),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(" "),
+                Span::styled(format!("{:<9}", event.phase), phase_style(&event.phase)),
+                Span::raw(" "),
+                Span::styled(
+                    event.status.as_str(),
+                    Style::default().fg(event_status_color(
+                        &event.status,
+                        event.error_kind.as_deref(),
+                    )),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    event
+                        .error_kind
+                        .clone()
+                        .unwrap_or_else(|| fmt_ms_u(event.latency_ms)),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(" model drawer · Esc closes ");
+
+    frame.render_widget(
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let mut spans = vec![
+        Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+        Span::raw("quit "),
+        Span::styled(
+            " ←/→ ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ),
+        Span::raw("tabs "),
+        Span::styled(
+            " j/k ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ),
+        Span::raw("select "),
+        Span::styled(
+            " enter ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ),
+        Span::raw("drawer "),
+        Span::styled(" / ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+        Span::raw("filter "),
+        Span::styled(" s ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+        Span::raw("sort "),
+        Span::styled(" p ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+        Span::raw("pause "),
+        Span::styled(
+            " r/R ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ),
+        Span::raw("refresh/reconnect "),
+        Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+        Span::raw("help"),
+    ];
+
+    if app.search_open {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("FILTER: {}_", app.filter),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    if let Some(notice) = app.notices.front() {
+        spans.push(Span::raw("  │  "));
+        spans.push(Span::styled(
+            notice.text.as_str(),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_help(frame: &mut Frame<'_>, area: Rect) {
+    let popup = centered_rect(72, 70, area);
+
+    frame.render_widget(Clear, popup);
+
+    let text = vec![
+        Line::from(Span::styled(
+            "Jnoccio Fusion TUI Controls",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        Line::raw("1-5 / ← → / h l     switch panes"),
+        Line::raw("j k / ↑ ↓             move selection; PgUp/PgDn jump faster"),
+        Line::raw("g / G / Home / End    jump to top / bottom"),
+        Line::raw("Enter                  open/close model drawer"),
+        Line::raw("/                      live filter over models/events; Enter accepts; Esc clears/closes"),
+        Line::raw("s                      cycle leaderboard sort: latest, wins, win-rate, success-rate"),
+        Line::raw("p                      pause/resume websocket-applied updates without disconnecting"),
+        Line::raw("r                      fetch fresh /v1/jnoccio/metrics snapshot"),
+        Line::raw("R                      force websocket reconnect"),
+        Line::raw("mouse wheel            scroll current list"),
+        Line::raw("q / Ctrl-C             quit"),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Realtime model flashes are keyed by request agent/session so concurrent users show as colored dots.",
+            Style::default().fg(Color::Cyan),
+        )),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(" help ");
+
+    frame.render_widget(
+        Paragraph::new(text).block(block).wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn draw_lines(frame: &mut Frame<'_>, area: Rect, title: impl Into<String>, lines: Vec<Line<'static>>) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(title.into());
+
+    frame.render_widget(
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn visible_model_lines<F>(
+    app: &App,
+    models: &[&DashboardModel],
+    area: Rect,
+    mut build: F,
+) -> Vec<Line<'static>>
+where
+    F: FnMut(usize, &DashboardModel, bool, bool) -> Line<'static>,
+{
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let range = window_range(app.selected_model, models.len(), inner_height);
+
+    models[range.clone()]
+        .iter()
+        .enumerate()
+        .map(|(visible, model)| {
+            let idx = range.start + visible;
+            build(idx, model, idx == app.selected_model, app.is_flashing(&model.id))
+        })
+        .collect()
+}
+
+fn row_prefix(idx: usize, selected: bool) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            if selected { "▶" } else { " " },
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::styled(
+            format!("{:>2} ", idx + 1),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]
+}
+
+fn detail_line(label: &str, value: &str, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<11}"),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(value.to_string(), Style::default().fg(color)),
+    ])
+}
+
+fn empty_line(text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(Color::DarkGray),
+    ))
+}
+
+fn selected_style() -> Style {
+    Style::default()
+        .bg(Color::Rgb(36, 40, 52))
+        .add_modifier(Modifier::BOLD)
+}
+
+fn status_dot(status: &str) -> Span<'static> {
+    Span::styled("●", Style::default().fg(status_color(status)))
+}
+
+fn status_color(status: &str) -> Color {
+    match status {
+        "ready" | "healthy" | "success" => Color::Green,
+        "cooldown" | "rate_limited" | "warning" => Color::Yellow,
+        "missing_key" | "incomplete_env" | "failure" | "failed" => Color::Red,
+        _ => Color::Blue,
+    }
+}
+
+fn event_status_color(status: &str, error: Option<&str>) -> Color {
+    if error.is_some() {
+        Color::Red
+    } else {
+        match status {
+            "success" | "winner" => Color::Green,
+            "failure" | "error" => Color::Red,
+            _ => Color::Blue,
+        }
+    }
+}
+
+fn phase_style(phase: &str) -> Style {
+    let color = match phase {
+        "winner" | "fusion" => Color::Yellow,
+        "draft" => Color::Cyan,
+        "backup" => Color::Magenta,
+        _ => Color::Blue,
+    };
+
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+fn latency_color(ms: f64) -> Color {
+    if ms < 1_000.0 {
+        Color::Cyan
+    } else if ms < 5_000.0 {
+        Color::Blue
+    } else if ms < 15_000.0 {
+        Color::Yellow
+    } else {
+        Color::Red
+    }
+}
+
+fn capacity_color(ratio: f64) -> Style {
+    Style::default()
+        .fg(capacity_color_only(ratio))
+        .add_modifier(Modifier::BOLD)
+}
+
+fn capacity_color_only(ratio: f64) -> Color {
+    if ratio < 0.50 {
+        Color::Green
+    } else if ratio < 0.80 {
+        Color::Yellow
+    } else {
+        Color::Red
+    }
+}
+
+fn agent_color(agent: &str) -> Color {
+    let palette = [
+        Color::Cyan,
+        Color::Yellow,
+        Color::Magenta,
+        Color::Green,
+        Color::Blue,
+        Color::LightCyan,
+        Color::LightMagenta,
+        Color::LightGreen,
+        Color::LightYellow,
+    ];
+
+    let hash = agent
+        .bytes()
+        .fold(0usize, |acc, b| acc.wrapping_mul(31).wrapping_add(b as usize));
+
+    palette[hash % palette.len()]
+}
+
+fn bar_spans(width: usize, ratio: f64, fill: Color, empty: Color) -> Vec<Span<'static>> {
+    let width = width.max(1);
+    let clamped = ratio.clamp(0.0, 1.0);
+    let filled = ((clamped * width as f64).round() as usize).min(width);
+
+    vec![
+        Span::styled("█".repeat(filled), Style::default().fg(fill)),
+        Span::styled("░".repeat(width - filled), Style::default().fg(empty)),
+    ]
+}
+
+fn stacked_bar_spans(width: usize, total_ratio: f64, prompt_share: f64) -> Vec<Span<'static>> {
+    let width = width.max(1);
+    let filled = ((total_ratio.clamp(0.0, 1.0) * width as f64).round() as usize).min(width);
+    let prompt = ((prompt_share.clamp(0.0, 1.0) * filled as f64).round() as usize).min(filled);
+    let completion = filled.saturating_sub(prompt);
+
+    vec![
+        Span::styled("█".repeat(prompt), Style::default().fg(Color::Cyan)),
+        Span::styled("█".repeat(completion), Style::default().fg(Color::Magenta)),
+        Span::styled("░".repeat(width - filled), Style::default().fg(Color::DarkGray)),
+    ]
+}
+
+fn success_fail_bar(width: usize, total_ratio: f64, fail_share: f64) -> Vec<Span<'static>> {
+    let width = width.max(1);
+    let filled = ((total_ratio.clamp(0.0, 1.0) * width as f64).round() as usize).min(width);
+    let failures = ((fail_share.clamp(0.0, 1.0) * filled as f64).round() as usize).min(filled);
+    let successes = filled.saturating_sub(failures);
+
+    vec![
+        Span::styled("█".repeat(successes), Style::default().fg(Color::Green)),
+        Span::styled("█".repeat(failures), Style::default().fg(Color::Red)),
+        Span::styled("░".repeat(width - filled), Style::default().fg(Color::DarkGray)),
+    ]
+}
+
+fn sparkline(values: &[u64], width: usize) -> String {
+    const TICKS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+    if values.is_empty() || width == 0 {
+        return String::new();
+    }
+
+    let start = values.len().saturating_sub(width);
+    let slice = &values[start..];
+    let max = slice.iter().copied().max().unwrap_or(1).max(1);
+
+    slice
+        .iter()
+        .map(|value| {
+            let idx = ((*value as f64 / max as f64) * (TICKS.len() - 1) as f64).round() as usize;
+            TICKS[idx.min(TICKS.len() - 1)]
+        })
+        .collect()
+}
+
+fn fit(value: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+
+    let count = value.chars().count();
+
+    if count <= max {
+        return value.to_string();
+    }
+
+    if max <= 1 {
+        return "…".to_string();
+    }
+
+    value.chars().take(max - 1).collect::<String>() + "…"
+}
+
+fn fmt_n(value: u64) -> String {
+    let s = value.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+
+    out.chars().rev().collect()
+}
+
+fn compact_n(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{}M", value / 1_000_000)
+    } else if value >= 1_000 {
+        format!("{}k", value / 1_000)
+    } else {
+        value.to_string()
+    }
+}
+
+fn fmt_m(value: f64) -> String {
+    if !value.is_finite() || value <= 0.0 {
+        "0.0".to_string()
+    } else if value < 10.0 {
+        format!("{value:.2}")
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+fn fmt_pct(value: f64) -> String {
+    format!("{}%", (value * 100.0).round() as i64)
+}
+
+fn fmt_ms_opt(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{} ms", v.round() as i64))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn fmt_ms_u(value: Option<u64>) -> String {
+    value
+        .map(|v| format!("{v} ms"))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn fmt_time(epoch: i64) -> String {
+    Local
+        .timestamp_opt(epoch, 0)
+        .single()
+        .map(|dt| dt.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn cmp_f64_desc(a: f64, b: f64) -> Ordering {
+    b.partial_cmp(&a).unwrap_or(Ordering::Equal)
+}
+
+fn cmp_opt_f64_asc(a: Option<f64>, b: Option<f64>) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(Ordering::Equal),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn success_rate(model: &DashboardModel) -> f64 {
+    if model.call_count == 0 {
+        0.0
+    } else {
+        model.success_count as f64 / model.call_count as f64
+    }
+}
+
+fn move_index(current: usize, delta: isize, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+
+    let next = if delta.is_negative() {
+        current.saturating_sub(delta.unsigned_abs())
+    } else {
+        current.saturating_add(delta as usize)
+    };
+
+    next.min(len - 1)
+}
+
+fn window_range(selected: usize, len: usize, height: usize) -> std::ops::Range<usize> {
+    if len == 0 || height == 0 {
+        return 0..0;
+    }
+
+    let height = height.min(len);
+    let mut start = selected.saturating_sub(height / 2);
+    start = start.min(len.saturating_sub(height));
+
+    start..(start + height)
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
+}
+
+fn totals_from_models(models: &[DashboardModel]) -> DashboardTotals {
+    let mut latency_total = 0.0;
+    let mut latency_count = 0u64;
+
+    for model in models {
+        if let Some(avg) = model.avg_latency_ms {
+            let weight = model.call_count.max(1);
+            latency_total += avg * weight as f64;
+            latency_count += weight;
+        }
+    }
+
+    DashboardTotals {
+        total_models: models.len() as u64,
+        enabled_models: models.iter().filter(|model| model.enabled).count() as u64,
+        calls: models.iter().map(|m| m.call_count).sum(),
+        successes: models.iter().map(|m| m.success_count).sum(),
+        failures: models.iter().map(|m| m.failure_count).sum(),
+        wins: models.iter().map(|m| m.win_count).sum(),
+        prompt_tokens: models.iter().map(|m| m.prompt_tokens).sum(),
+        completion_tokens: models.iter().map(|m| m.completion_tokens).sum(),
+        total_tokens: models.iter().map(|m| m.total_tokens).sum(),
+        average_latency_ms: if latency_count == 0 {
+            None
+        } else {
+            Some(latency_total / latency_count as f64)
+        },
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SocketMessage {
+    Snapshot { snapshot: DashboardSnapshot },
+    ModelUpdated { model: DashboardModel },
+    RequestEvent { event: MetricEvent },
+    Heartbeat { timestamp: i64 },
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct DashboardSnapshot {
+    totals: DashboardTotals,
+    token_rate: TokenRateEstimate,
+    capacity: CapacitySummary,
+    context: ContextDashboard,
+    models: Vec<DashboardModel>,
+    recent_events: Vec<MetricEvent>,
+    agent_count: usize,
+    max_agents: usize,
+    active_agents: Vec<AgentActivity>,
+    instance_count: usize,
+    max_instances: usize,
+    available_instance_slots: usize,
+    instance_role: String,
+    worker_threads: usize,
+}
+
+impl DashboardSnapshot {
+    fn normalize(&mut self) {
+        if self.max_agents == 0 {
+            self.max_agents = 20;
+        }
+
+        if self.max_instances == 0 {
+            self.max_instances = 20;
+        }
+
+        if self.instance_count == 0 {
+            self.instance_count = 1;
+        }
+
+        if self.available_instance_slots == 0 && self.max_instances > self.instance_count {
+            self.available_instance_slots = self.max_instances - self.instance_count;
+        }
+
+        if self.instance_role.is_empty() {
+            self.instance_role = "main".to_string();
+        }
+
+        for model in &mut self.models {
+            if model.safe_context_window == 0 {
+                model.safe_context_window = model.configured_context_window;
+            }
+        }
+
+        let mut seen = HashSet::new();
+        self.recent_events.retain(|event| seen.insert(event.id));
+
+        if self.totals.total_models == 0 && !self.models.is_empty() {
+            self.totals = totals_from_models(&self.models);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct DashboardTotals {
+    total_models: u64,
+    enabled_models: u64,
+    calls: u64,
+    successes: u64,
+    failures: u64,
+    wins: u64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    average_latency_ms: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct TokenRateEstimate {
+    median_m_tokens_per_24h: f64,
+    max_m_tokens_per_24h: f64,
+    sample_minutes: u64,
+    window_minutes: u64,
+    smoothing_minutes: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct ContextDashboard {
+    estimates: Vec<ModelLimitEstimate>,
+    histogram: Vec<ContextHistogramBucket>,
+    recent_events: Vec<ModelContextEvent>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct ModelLimitEstimate {
+    model_id: String,
+    provider: String,
+    configured_context_window: u64,
+    learned_context_window: Option<u64>,
+    learned_request_token_limit: Option<u64>,
+    learned_tpm_limit: Option<u64>,
+    safe_context_window: u64,
+    largest_success_prompt_tokens: u64,
+    largest_success_total_tokens: u64,
+    smallest_overrun_requested_tokens: Option<u64>,
+    context_overrun_count: u64,
+    rate_limit_count: u64,
+    last_limit_error_kind: Option<String>,
+    last_limit_error_message: Option<String>,
+    last_limit_error_at: Option<i64>,
+    updated_at: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct ContextHistogramBucket {
+    bucket_start: u64,
+    bucket_end: u64,
+    success_count: u64,
+    failure_count: u64,
+    overrun_count: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct ModelContextEvent {
+    request_id: String,
+    phase: String,
+    model_id: String,
+    provider: String,
+    status: String,
+    approx_prompt_tokens: u64,
+    requested_output_tokens: u64,
+    estimated_total_tokens: u64,
+    observed_prompt_tokens: Option<u64>,
+    observed_total_tokens: Option<u64>,
+    learned_limit: Option<u64>,
+    overrun_requested_tokens: Option<u64>,
+    error_kind: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct AgentActivity {
+    agent_id: String,
+    agent_client: Option<String>,
+    agent_session_id: Option<String>,
+    process_role: Option<String>,
+    pid: Option<i64>,
+    version: Option<String>,
+    user_agent: Option<String>,
+    first_seen: i64,
+    last_seen: i64,
+    request_count: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct DashboardModel {
+    id: String,
+    provider: String,
+    display_name: String,
+    upstream_model: String,
+    roles: Vec<String>,
+    enabled: bool,
+    status: String,
+    cooldown_until: Option<i64>,
+    capacity_known: bool,
+    hourly_capacity: Option<u64>,
+    hourly_used: u64,
+    configured_context_window: u64,
+    safe_context_window: u64,
+    learned_context_window: Option<u64>,
+    learned_request_token_limit: Option<u64>,
+    context_overrun_count: u64,
+    smallest_overrun_requested_tokens: Option<u64>,
+    call_count: u64,
+    success_count: u64,
+    failure_count: u64,
+    win_count: u64,
+    win_rate: f64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    avg_latency_ms: Option<f64>,
+    last_latency_ms: Option<u64>,
+    min_latency_ms: Option<u64>,
+    max_latency_ms: Option<u64>,
+    last_error_kind: Option<String>,
+    last_error_message: Option<String>,
+    updated_at: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct MetricEvent {
+    id: i64,
+    request_id: String,
+    phase: String,
+    model_id: String,
+    provider: String,
+    status: String,
+    error_kind: Option<String>,
+    latency_ms: Option<u64>,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    route_mode: Option<String>,
+    backup_rank: Option<u64>,
+    complexity_tier: Option<String>,
+    sampled: Option<bool>,
+    winner_model_id: Option<String>,
+    capacity_known: Option<bool>,
+    agent_id: Option<String>,
+    agent_client: Option<String>,
+    agent_session_id: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct CapacitySummary {
+    known_limit_per_hour: u64,
+    known_used: u64,
+    known_remaining: u64,
+    percent_used: f64,
+    models: Vec<ModelCapacity>,
+    unknown_models: Vec<UnknownCapacity>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct ModelCapacity {
+    model_id: String,
+    provider: String,
+    display_name: String,
+    status: String,
+    limit_per_hour: u64,
+    used: u64,
+    remaining: u64,
+    percent_used: f64,
+    limit_kind: String,
+    credit_tier: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct UnknownCapacity {
+    model_id: String,
+    provider: String,
+    display_name: String,
+    status: String,
+    used: u64,
+    successes: u64,
+    failures: u64,
+    wins: u64,
+    average_latency_ms: Option<f64>,
+}
+```
+
+This is intentionally built as a client-only companion to the existing gateway: it uses the already-present HTTP snapshot and websocket stream, gives you live model flashes, agent-colored dots, pause/resume, reconnect, refresh, filter, model drawer, capacity observatory, error pattern view, and fast keyboard navigation.
+
+[1]: https://crates.io/crates/ratatui/?utm_source=chatgpt.com "ratatui - crates.io: Rust Package Registry"

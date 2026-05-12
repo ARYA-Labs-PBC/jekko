@@ -1,0 +1,1345 @@
+# Recommendation: build **host-enforced Daemon Jobs**, not prompt-only `<FOREVER>` tags
+
+The winning design is: **let the prompt describe the work, but make Jekko enforce the loop.** A model can be instructed to continue forever, but it cannot be the only thing responsible for continuing forever. The “forever” behavior must live in the Jekko runtime as a durable state machine that re-enters the session after normal model termination, clears/compacts context, evaluates stop criteria, checkpoints git state, supervises workers, and keeps going until a typed predicate is satisfied or the process is killed.
+
+I would implement this as a first-class **Daemon Job** system plus a deliberately gated in-prompt DSL called something like **ZYAL v1 — Jekko Agent Control Language**.
+
+The core principle:
+
+> **Natural language is advisory. ZYAL is parsed. The daemon controller is authoritative.**
+
+That gives you the “GOD mode” syntax you want, without relying on the LLM to perfectly obey pasted XML.
+
+---
+
+# 1. What I found: current ecosystem and Jekko-specific signal
+
+## Jekko already has many of the primitives, but not the daemon controller
+
+Jekko already supports specialized agents, primary agents, subagents, a hidden compaction agent, custom commands, permissions, plugins, skills, built-in tools, custom tools, and MCP servers. Its docs describe primary agents and subagents, including a `general` subagent for multi-step work and parallel units, an `explore` subagent for read-only exploration, and a hidden compaction agent that automatically compresses long context. ([Jekko][1])
+
+Jekko commands can specify an agent, can force a subagent invocation with `subtask`, and can override the model, which means daemon commands can cleanly become first-class command entries rather than ad-hoc prompt text. ([Jekko][2]) Jekko tools already include bash, edit, write, read, grep, glob, LSP, apply_patch, skill, todowrite, webfetch, websearch, question, custom tools, and MCP servers, with permission rules controlling allow/ask/deny behavior. ([Jekko][3]) Skills are also on-demand reusable instructions loaded through the native skill tool, which is useful for daemon playbooks that should not bloat every iteration’s context. ([Jekko][4])
+
+The missing piece is not “can Jekko use tools?” It can. The missing piece is a **durable, intentional, supervised outer loop** that survives the model saying “I’m done.”
+
+## The Jekko community is already asking for this
+
+There is an Jekko feature request for a `session.stopping` plugin hook that says plugins currently cannot prevent the agent loop from stopping; the issue explains that `session.idle` fires too late, can race with `jekko run` teardown, and makes injected continuation prompts appear as visible user messages. ([GitHub][5]) That is almost exactly the lifecycle gap your daemon mode needs to close.
+
+There is also an Jekko feature request for a native `/loop` command. The request says repetitive or time-based Jekko workflows currently require long natural-language prompts or external scripting, and proposes `/loop 60m 'check MCP kanban, code task, commit, and push'` as a bridge between one-off execution and an autonomous background agent. ([GitHub][6])
+
+At the same time, there are multiple Jekko bug reports where unintended loops are harmful: plan-mode infinite loops, sessions continuing after `finish=stop`, repeated assistant messages, and loop behavior that wastes tokens. ([GitHub][7]) This is important: Jekko should not just “make loops easier.” It needs to distinguish **intentional daemon loops** from **buggy runaway loops**.
+
+## The prior proposal is directionally right, but misses current Jekko reality
+
+The previous plan correctly identifies that agents stop because the model or runtime reaches a stop path. But one specific claim is stale: the current public `SessionPrompt` interface already exposes `prompt`, `loop`, `shell`, `command`, and `resolvePromptParts`; so the right change is not simply “add a loop method.” ([GitHub][8])
+
+The source also shows Jekko already has session status plumbing and compaction machinery. Current session status is centered around `idle`, `retry`, and `busy`, so daemon state needs to extend that visible state model. ([GitHub][9]) The compaction code already has a structured summary template with sections like Goal, Constraints, Progress, Key Decisions, Next Steps, Critical Context, and Relevant Files, which is exactly the kind of durable continuity a daemon needs. ([GitHub][10])
+
+So the best implementation is not a wholesale rewrite. It is a **daemon supervisor layered over Jekko’s existing session loop, compaction, commands, permissions, tools, plugins, and subagents.**
+
+---
+
+# 2. What the broader agent ecosystem is doing
+
+## There is no universal “in-prompt infinite agent scripting” standard yet
+
+I did not find a broadly adopted standard that says, “put this exact prompt DSL inside any coding agent and it will loop forever with context clearing, MCP fanout, git checkpointing, and stop predicates.” The closest emerging pieces are split across several categories:
+
+| Category                     | Emerging pattern                                  | Why it matters                                                  |
+| ---------------------------- | ------------------------------------------------- | --------------------------------------------------------------- |
+| Project instructions         | `AGENTS.md`, `CLAUDE.md`, skills                  | Persistent guidance, not execution control                      |
+| In-session commands          | slash commands like `/loop`, `/compact`, `/batch` | Deliberate, host-recognized control syntax                      |
+| Agent orchestration          | LangGraph, CrewAI Flows, AutoGen                  | Host-level loops, state, branching, termination                 |
+| Tool protocols               | MCP                                               | Standard tool/resource/prompt connection                        |
+| Agent-to-agent protocols     | A2A, ACP                                          | Cross-agent collaboration and delegation                        |
+| UI/event protocols           | AG-UI, A2UI                                       | Human approval, real-time event surface                         |
+| Prompt programming languages | PDL, LMQL, Guidance                               | Structured prompts/control flow, but not coding daemon runtimes |
+
+The big conclusion: **the serious systems do not rely on arbitrary XML tags buried in natural language.** They use either host-recognized slash commands, external workflow graphs, typed YAML/JSON specs, lifecycle hooks, or explicit protocols.
+
+## Claude Code is the closest product reference
+
+Claude Code’s current command system is very relevant. Its docs say commands control the session, can switch models, manage permissions, clear context, run workflows, and are only recognized at the start of a message. That start-of-message recognition is a huge safety design choice for avoiding accidental execution. ([Claude][11])
+
+Claude Code now exposes `/loop [interval] [prompt]`, described as running a prompt repeatedly while the session stays open, with optional self-pacing and `.claude/loop.md` support. It also has `/compact`, `/clear`, `/batch`, `/simplify`, and `/autofix-pr`; `/batch` is especially relevant because it decomposes large work into many independent units, spawns one background agent per unit in isolated git worktrees, runs tests, and opens PRs. ([Claude][11])
+
+Claude Code hooks are also a strong model. Hooks run deterministic shell commands at lifecycle points and can format after edits, block commands before execution, send notifications, inject context, and enforce project rules. The docs explicitly say hooks give deterministic control rather than relying on the LLM to choose actions. ([Claude][12]) The hooks reference includes lifecycle events such as `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PermissionDenied`, `PostToolBatch`, `SubagentStart`, and `Stop`, which is almost the event vocabulary Jekko daemon mode should emulate. ([Claude][13])
+
+Claude Code subagents are defined in Markdown files with YAML frontmatter, with configurable tools, model, permissions, hooks, skills, initial prompt, memory, background behavior, isolation, and color. ([Claude][14]) That strongly supports using **YAML frontmatter/manifests** rather than fragile XML tags.
+
+## LangGraph, CrewAI, and AutoGen point to host-level state machines
+
+LangGraph’s docs emphasize durable execution, persistence, resuming after failures, human-in-the-loop review, and long-running agents. ([LangChain Docs][15]) CrewAI Flows are structured, event-driven workflows that connect tasks, manage state, and control execution; their production docs describe persistence for resuming if a process crashes or waits for human input. ([CrewAI Documentation][16]) AutoGen’s docs focus on event-driven multi-agent systems and explicit termination conditions, where a termination condition decides whether a conversation should stop. ([Microsoft GitHub][17])
+
+The common pattern is clear: **reliable loops are workflow runtime behavior, not prompt obedience.**
+
+## Prompt programming languages are useful, but not sufficient alone
+
+IBM’s Prompt Declaration Language is YAML-based and intended to specify prompt structure, enforce validation, compose LLMs with rule-based systems, support model chaining/tool use, and type-check model inputs/outputs. ([IBM][18]) LMQL is a programming language for LLMs with types, templates, constraints, and an optimizing runtime. ([LMQL][19]) Guidance supports constrained generation and can interleave control flow, loops, tool use, and generation. ([GitHub][20])
+
+These are useful design inspirations for syntax, validation, and structured outputs. But for Jekko, they should not be the runtime. Jekko needs a daemon controller that drives sessions, tools, git, MCPs, and workers.
+
+## Protocols: MCP for tools, A2A for agents, AG-UI for human control
+
+MCP is now the main open standard for connecting AI applications to external tools, data sources, and workflows; its docs describe MCP as an open-source standard and a “USB-C port” for AI applications. ([Model Context Protocol][21]) MCP has a living specification process with SEPs, including work on tool naming, tasks, interactive UIs, sessionless state handles, and multi round-trip requests. ([Model Context Protocol][22]) Anthropic’s MCP course frames MCP around three primitives: tools, resources, and prompts, with tools model-controlled, resources app-controlled, and prompts user-controlled. ([Anthropic][23])
+
+A2A is the right conceptual layer for cross-agent communication. Its spec says it is an open standard for communication and interoperability between independent AI agent systems, including capability discovery, modality negotiation, collaborative task management, and asynchronous push notifications for long-running tasks. ([A2A Protocol][24]) Google’s codelab frames A2A as complementary to MCP: MCP connects agents to tools/data, while A2A enables agents to collaborate in their natural modalities. ([Google Codelabs][25])
+
+AG-UI is useful for human-in-the-loop daemon UX. Its docs describe frontend-defined tools that agents can call for human input, confirmation, UI control, and specialized capabilities. ([AG-UI][26]) Google’s 2026 guide summarizes the clean boundary: MCP connects agents to tools/data, A2A connects agents to agents, AG-UI streams tool calls and text responses, and A2UI defines what to render. ([Google Developers Blog][27])
+
+## Community discussions validate the pain
+
+Indexed public Reddit/X/LinkedIn results show the same themes: users hit Jekko subagent loops that waste usage limits, ask about long-running Jekko versus Claude Code, discuss bash-loop wrappers around Claude Code/Jekko, and talk about agent loops with checkpoint/resume/auto-compaction. ([Reddit][28]) I would treat these as directional community signal rather than authoritative technical guidance, but the signal is strong: users want intentional loops, and they also fear runaway loops.
+
+---
+
+# 3. Critical review of the proposed plan
+
+## What the proposed plan gets right
+
+The proposed plan correctly identifies the main product need: the LLM says “stop,” the runtime accepts that, and the user wants a mode where Jekko does not treat model stop as job stop. It also correctly points at compaction/context clearing, status visibility, CLI/headless support, and obvious TUI indication.
+
+The proposed “gold forever” visual state is also right. A forever daemon should be impossible to miss. This is not a normal chat session.
+
+## What I would change
+
+### 1. Do **not** override normal stop inside the inner agent loop
+
+The inner loop should still end cleanly when the model returns `finish=stop` with no tool calls. Jekko already has bug reports around failing to stop after `finish=stop`, including provider-specific failures when the next call begins after an assistant message. ([GitHub][29])
+
+The correct design is:
+
+```text
+Normal SessionPrompt loop:
+  run until model/tool loop naturally ends
+
+Daemon Controller:
+  observe that the session loop ended
+  evaluate predicates/checkpoints/context policy
+  decide whether to re-enter with a synthetic continuation packet
+```
+
+That avoids turning a bug into a feature. “Forever” belongs to the **outer controller**, not to a hacked inner loop condition.
+
+### 2. Do **not** rely on shell exit conditions only
+
+Shell predicates are useful, but raw shell strings are brittle and risky. The daemon should support typed predicates:
+
+```yaml
+until:
+  all:
+    - git.clean: true
+    - command:
+        run: "jankurai audit --json"
+        jsonpath: "$.findings == 0 && $.caps == 0"
+```
+
+Shell should be one predicate type, not the whole stop system.
+
+### 3. Do **not** “continue on permission denied” blindly
+
+Permission denial is not a speed bump. It is a safety signal. If the daemon loops after every denial, it can waste tokens forever. Permission policy should be explicit:
+
+```yaml
+on_permission_denied:
+  behavior: pause     # pause | ask | skip | retry_with_readonly | abort
+```
+
+For daemon mode, the safest default should be `pause`, with gold UI showing “blocked.”
+
+### 4. Persist daemon jobs durably
+
+Do not keep daemon config only in ephemeral session metadata. A real forever job needs crash recovery, replay, audit, and resumability. It should live in a persistent job store with job state, iteration state, worker leases, blackboard events, artifacts, and stop history.
+
+### 5. Multi-agent must be coordinated by the host, not just prompt injection
+
+“Tell the model to spawn MCPs” is not robust enough. Multi-agent work needs leases, worktree isolation, central state, merge arbitration, worker summaries, conflict detection, and bounded parallelism.
+
+### 6. The syntax must be deliberate and non-accidental
+
+Your instinct is exactly right: accidental paste must never trigger a forever job. XML tags like `<FOREVER>` are too easy to quote, paste, or hallucinate. The DSL must require a command/sentinel at the start of the message, a version, an acknowledgement string, schema validation, and optionally a nonce generated by the TUI.
+
+---
+
+# 4. Best Jekko architecture: **Daemon Jobs**
+
+## High-level architecture
+
+```text
+User / CLI / TUI
+    |
+    |  /daemon start OR jekko run --daemon-file
+    v
+ZYAL Parser + Validator
+    |
+    |  produces typed DaemonSpec
+    v
+Daemon Job Store  <---------------------------+
+    |                                         |
+    v                                         |
+Daemon Controller / Supervisor                |
+    |                                         |
+    +--> Precheck stop predicates             |
+    +--> Work item scheduler / blackboard     |
+    +--> SessionPrompt.loop for one turn      |
+    +--> Worker/subagent/MCP orchestration    |
+    +--> Verification commands                |
+    +--> Git checkpoint / push policy         |
+    +--> Context compact/clear policy         |
+    +--> Stop/pause/continue decision --------+
+```
+
+The daemon controller is the source of truth. The LLM receives an **iteration packet** each cycle, not the full raw spec every time.
+
+## Proposed new modules
+
+I would add a new daemon package under Jekko core:
+
+```text
+packages/jekko/src/daemon/
+  schema.ts          # Effect Schema / JSON Schema for ZYAL and runtime state
+  parser.ts          # Parses gated ZYAL blocks and daemon files
+  controller.ts      # Main durable loop supervisor
+  store.ts           # Durable job/run/iteration/worker/blackboard storage
+  evaluator.ts       # Stop predicates, assertions, shell/jsonpath checks
+  checkpoint.ts      # Git checkpoint, commit, push, rollback policies
+  context.ts         # Compact/clear/new-session/hybrid context strategies
+  blackboard.ts      # Work items, leases, findings, decisions, artifacts
+  workers.ts         # Subagent/MCP worker pool orchestration
+  hooks.ts           # Daemon lifecycle plugin hook definitions
+  ui.ts              # Status formatting payloads for TUI/web/headless
+```
+
+Then modify existing areas:
+
+```text
+packages/jekko/src/session/prompt.ts
+  - expose clean loop completion reason to daemon controller
+  - avoid embedding daemon restart logic inside low-level stop handling
+  - optionally add a pre-stop hook, but daemon controller should be primary
+
+packages/jekko/src/session/status.ts
+  - add daemon/job status variant or structured metadata on busy
+  - include iteration, job id, forever flag, blocked state, worker counts
+
+packages/jekko/src/session/compaction.ts
+  - add explicit force-compact API usable by daemon context policy
+  - preserve daemon goal, stop criteria, current queue, and latest verified state
+
+packages/jekko/src/cli/cmd/run.ts
+  - add --daemon, --daemon-file, --daemon-param, --daemon-allow-forever
+  - keep headless process alive while daemon status is active
+
+packages/jekko/src/command/
+  - add /daemon built-in command
+  - allow custom commands to invoke daemon specs safely
+
+packages/jekko/src/plugin/
+  - add daemon lifecycle hooks
+
+TUI/web session UI
+  - render gold forever header from session.status
+  - live worker table, stop/pause/resume controls, blackboard/queue view
+```
+
+The exact UI file names should be confirmed in the repo before editing, but the key is: **do not mutate global theme state. Render daemon-specific status surfaces from daemon status.**
+
+---
+
+# 5. Daemon runtime flow
+
+## Iteration lifecycle
+
+```text
+1. Acquire daemon job lease
+2. Load durable job state
+3. Publish status: daemon/forever/iteration=N
+4. Evaluate immediate stop predicates
+5. Select work item(s)
+6. Prepare iteration packet
+7. Start or resume Jekko session
+8. Run SessionPrompt.loop once
+9. Collect tool events, worker events, file changes
+10. Run verification/audit predicates
+11. Update blackboard/task state
+12. Checkpoint git if policy allows
+13. Compact/clear/summarize context
+14. Evaluate final stop predicates
+15. Continue, sleep, pause, or stop
+```
+
+## The iteration packet
+
+Each continuation should be synthetic and visually distinct from normal user messages. It should not appear as “the user typed this,” unless Jekko intentionally renders it as a daemon event.
+
+Example packet sent to the model:
+
+```text
+<jekko-daemon-iteration>
+Job: jankurai-cleanup
+Iteration: 17
+Mode: forever
+Goal: Clean dirty worktree according to JANKURAI_STANDARD.md and JANKURAI_TASKLIST.md.
+Current work item: randomly selected dirty diff item in packages/foo/bar.ts
+Verified state:
+- Last successful commit: abc1234
+- Last audit: 4 findings, 1 cap
+- Tests last run: bun test passed except package x snapshot
+Stop criteria:
+- jankurai audit reports 0 findings and 0 caps
+- git worktree is clean after checkpoint
+Required behavior:
+- Do one bounded unit of work.
+- Verify it.
+- Commit and push only if verified.
+- Update tasklist/completed tasklist.
+</jekko-daemon-iteration>
+```
+
+The model sees enough to work, but the daemon controller owns truth.
+
+## Stop criteria
+
+Daemon stop criteria should support:
+
+```yaml
+until:
+  all:
+    - command:
+        run: "jankurai audit --json"
+        jsonpath: "$.findings == 0 && $.caps == 0"
+    - git:
+        clean: true
+    - queue:
+        empty: "jankurai-findings"
+```
+
+Also support:
+
+```yaml
+abort_when:
+  any:
+    - no_progress_iterations: 5
+    - cost_usd_greater_than: 100
+    - command_fails:
+        run: "git status"
+        consecutive: 3
+
+pause_when:
+  any:
+    - permission_denied: true
+    - protected_path_touched: true
+    - merge_conflict: true
+```
+
+Important distinction:
+
+| Predicate type    | Meaning                                                  |
+| ----------------- | -------------------------------------------------------- |
+| `until`           | Success; daemon exits cleanly                            |
+| `pause_when`      | Needs human or external intervention; keep job resumable |
+| `abort_when`      | Unsafe or broken; stop with failure                      |
+| `continue_when`   | Optional guard before next iteration                     |
+| `checkpoint_when` | Controls commit/push                                     |
+
+---
+
+# 6. Context clearing strategy
+
+Jekko already has compaction, and Claude Code’s docs reinforce the distinction between `/compact` and `/clear`: compact frees context while continuing, clear starts a new conversation. ([Claude][11]) Daemon mode should support both.
+
+I would implement three strategies:
+
+## Strategy A — same session + forced compaction
+
+Best for short/medium loops where continuity matters.
+
+```yaml
+context:
+  strategy: same_session
+  compact:
+    every_iterations: 2
+    when_tokens_above_pct: 70
+    preserve:
+      - daemon.goal
+      - daemon.stop_criteria
+      - blackboard.open_items
+      - git.last_commit
+      - verifier.last_failures
+```
+
+## Strategy B — fresh session per iteration
+
+Best for true forever jobs where token drift and instruction decay are dangerous.
+
+```yaml
+context:
+  strategy: fresh_session_each_iteration
+  carry_forward:
+    - daemon.summary
+    - blackboard.open_items
+    - last_verified_state
+```
+
+This is actually the most robust for “forever” because it makes the LLM context disposable. The daemon database is memory.
+
+## Strategy C — hybrid
+
+Best default.
+
+```yaml
+context:
+  strategy: hybrid
+  compact_every: 2
+  new_session_every: 10
+  summarize_before_new_session: true
+```
+
+The controller stores durable summaries, not just chat summaries. A daemon summary should include:
+
+```text
+- Goal
+- Hard constraints
+- Stop predicates
+- Current queue
+- Completed work
+- Verified commits
+- Open findings
+- Blockers
+- Last failed commands
+- Protected files
+- Worker outputs
+```
+
+---
+
+# 7. Git checkpointing and dirty worktree safety
+
+Your use case is inherently git-sensitive. The daemon should treat git as a first-class subsystem, not just a shell command.
+
+## Git policy
+
+```yaml
+git:
+  mode: checkpoint_verified_work
+  dirty_start: allowed
+  branch_policy:
+    type: same_branch
+  checkpoint:
+    when:
+      all:
+        - verifier.passed: true
+        - diff.nonempty: true
+    add: "."
+    commit:
+      message_template: "daemon({job.id}): {work_item.title}"
+    push:
+      enabled: true
+      remote: origin
+      after_commit: true
+  protect:
+    paths:
+      - ".env"
+      - "secrets/**"
+      - "node_modules/**"
+  rollback:
+    on_verifier_failure: false
+    on_abort: keep_dirty
+```
+
+## Better multi-agent git policy
+
+For parallel work, never let multiple workers write to the same checkout. Use isolated worktrees or branches:
+
+```yaml
+workers:
+  isolation: git_worktree
+  branch_template: "daemon/{job.id}/worker-{worker.id}"
+  merge:
+    strategy: arbiter
+    require_review: true
+    require_tests: true
+```
+
+This mirrors the pattern seen in Claude Code’s `/batch`, which spawns background agents in isolated git worktrees for independent units. ([Claude][11])
+
+---
+
+# 8. Multi-agent collaboration: replace `THIS_TRACKER.md` with a blackboard + leases
+
+A markdown tracker is tolerable for humans, but bad as the source of truth for multi-agent concurrency. Agents need a coordination substrate.
+
+## Recommended model: blackboard + leases + arbiter
+
+```text
+Daemon Controller
+    |
+    +--> Blackboard
+    |       - work_items
+    |       - findings
+    |       - decisions
+    |       - blockers
+    |       - artifacts
+    |       - leases
+    |       - file locks
+    |
+    +--> Worker Pool
+    |       - explore workers
+    |       - implement workers
+    |       - review workers
+    |       - verifier workers
+    |
+    +--> Arbiter
+            - merges results
+            - resolves conflicts
+            - promotes verified work
+            - updates git
+```
+
+## Work item lifecycle
+
+```text
+discovered
+  -> queued
+  -> leased(worker_id, ttl)
+  -> in_progress
+  -> needs_review
+  -> verified
+  -> checkpointed
+  -> completed
+
+or
+
+in_progress
+  -> blocked
+  -> requeued
+  -> abandoned
+```
+
+## Why leases matter
+
+A worker should not just “read tracker and choose something.” It should acquire a lease:
+
+```yaml
+blackboard:
+  queues:
+    - id: dirty-worktree
+      item_schema: git_diff_item
+  lease:
+    ttl: "20m"
+    renew_every: "5m"
+    on_expire: requeue
+```
+
+That prevents two agents from fixing the same file or repeatedly doing the same task.
+
+## Communication pattern
+
+Avoid free-form peer chatter. Use typed events:
+
+```yaml
+blackboard.event:
+  type: finding
+  severity: high
+  file: "src/foo.ts"
+  summary: "Possible regression in parser fallback"
+  evidence:
+    - "git diff hunk 3"
+    - "test parser-edge fails"
+```
+
+Workers can still summarize naturally, but the controller should extract or require structured outputs.
+
+---
+
+# 9. TUI UX: obvious gold **FOREVER** mode
+
+The gold UI should come from daemon status, not a global theme rewrite.
+
+## Status payload
+
+```ts
+{
+  type: "daemon",
+  jobID: "dmn_jankurai_cleanup",
+  forever: true,
+  iteration: 17,
+  state: "running", // running | paused | blocked | stopping | completed | failed
+  workers: { running: 3, blocked: 1, completed: 12 },
+  stopSummary: "jankurai audit: 4 findings, 1 cap",
+  nextAction: "fix random dirty diff item"
+}
+```
+
+## TUI header concept
+
+```text
+╭────────────────────────────────────────────────────────────╮
+│  FOREVER                                                   │
+│  ♾ DAEMON  jankurai-cleanup  · iter 17 · 3 workers · GOLD  │
+│  Stop when: jankurai audit => 0 findings, 0 caps           │
+╰────────────────────────────────────────────────────────────╯
+```
+
+Use gold for the border, icon, and daemon pill. Keep the rest of the user’s theme intact. Also show a persistent footer command hint:
+
+```text
+/daemon pause · /daemon stop · /daemon status · /daemon inject
+```
+
+The visual state must remain visible during compaction, worker execution, permission prompts, and headless attach.
+
+---
+
+# 10. Best immediate path in Jekko today
+
+Before native daemon mode lands, the safest workaround is an **external orchestrator** that repeatedly runs `jekko run`, evaluates stop criteria, and starts fresh or continued sessions. This is clunkier, but it avoids relying on the model to continue itself. Current `jekko run` already supports headless execution with messages, files, agent selection, model selection, JSON/default output, attach mode, and `dangerously-skip-permissions`. ([GitHub][30])
+
+However, that should be treated as a temporary bridge, not the final product. It cannot provide the clean TUI gold state, pre-stop re-entry, durable worker leases, first-class blackboard, or safe in-prompt control language.
+
+---
+
+# 11. ZYAL v1: deliberate in-prompt agent control syntax
+
+## Safety gates
+
+The syntax should **not** execute just because text appears in a prompt. A control block should only run when all gates pass.
+
+Required gates:
+
+1. The first non-whitespace token must be `/daemon` or the CLI must use `--daemon-file`.
+2. The block must start with a versioned sentinel.
+3. The block must include an exact forever acknowledgement if `forever: true`.
+4. The block must validate against ZYAL schema.
+5. The block must declare requested capabilities.
+6. Project/user/org permission config must allow those capabilities.
+7. For TUI, optionally require a session nonce generated by Jekko.
+8. Examples and quoted blocks must never execute.
+
+## Canonical envelope
+
+```yaml
+/daemon start
+<<<JEKKO_CONTROL:ZYAL/V1
+nonce: "tui-generated-nonce-or-cli-accepted"
+ack: "JEKKO_DAEMON_CONTROL_V1"
+forever_ack: "I_UNDERSTAND_THIS_CAN_RUN_UNTIL_STOPPED"
+>>>
+kind: daemon
+id: jankurai-cleanup
+version: 1
+
+capabilities:
+  tools:
+    bash: ask
+    edit: allow
+    write: allow
+    read: allow
+    grep: allow
+    glob: allow
+    task: allow
+    skill: allow
+  git:
+    commit: allow
+    push: allow
+  mcp:
+    spawn: ask
+    connect: allow
+
+goal: |
+  Investigate dirty worktree changes from work on @agent/JANKURAI_STANDARD.md
+  and @JANKURAI_TASKLIST.md. Find mistakes, regressions, verify fixes, commit,
+  push, and continue until the audit is clean.
+
+forever: true
+
+until:
+  all:
+    - command:
+        run: "jankurai audit --json"
+        jsonpath: "$.findings == 0 && $.caps == 0"
+    - git:
+        clean: true
+
+loop:
+  mode: forever
+  select_work:
+    source: git.dirty_worktree
+    strategy: random_one
+  iteration:
+    max_work_items: 1
+    require_verification: true
+
+checkpoint:
+  git:
+    add: "."
+    commit:
+      when: verifier.passed && git.diff_nonempty
+      message: "daemon(jankurai): {work_item.summary}"
+    push:
+      enabled: true
+      when: commit.created
+
+context:
+  strategy: hybrid
+  compact_every_iterations: 1
+  new_session_every_iterations: 6
+  preserve:
+    - goal
+    - until
+    - blackboard.open_items
+    - verifier.last_failures
+    - git.last_commit
+
+tasklists:
+  active: "@JANKURAI_TASKLIST.md"
+  completed: "@JANKURAI_TASKLIST.md.completed"
+  on_iteration_end:
+    append_new_findings_from:
+      command: "jankurai audit --json"
+    move_completed: true
+
+workers:
+  max_parallel: 3
+  isolation: git_worktree
+  roles:
+    - id: explorer
+      agent: explore
+      tools: read_only
+    - id: fixer
+      agent: build
+      tools: edit
+    - id: reviewer
+      agent: plan
+      tools: read_only
+
+on_permission_denied:
+  behavior: pause
+
+on_no_progress:
+  after_iterations: 3
+  behavior: spawn_reviewer
+
+ui:
+  forever_badge: true
+  color: gold
+<<<END_JEKKO_CONTROL>>>
+```
+
+This is deliberately noisy. Forever should not be easy to trigger accidentally.
+
+---
+
+# 12. ZYAL v1 syntax library
+
+Below is the syntax library I would support. Internally, this should compile to one typed AST, even if users invoke it via CLI flags, `.jekko/daemons/*.yaml`, or an in-prompt control block.
+
+## A. Job identity and execution
+
+| Function          | Purpose                        |       |       |       |                 |
+| ----------------- | ------------------------------ | ----- | ----- | ----- | --------------- |
+| `kind: daemon`    | Declares daemon job            |       |       |       |                 |
+| `id`              | Stable job id                  |       |       |       |                 |
+| `version`         | ZYAL spec version              |       |       |       |                 |
+| `goal`            | Natural-language mission       |       |       |       |                 |
+| `forever: true`   | Allows infinite loop mode      |       |       |       |                 |
+| `mode: daemon     | scheduled                      | batch | watch | once` | Execution style |
+| `priority`        | Scheduler priority             |       |       |       |                 |
+| `tags`            | Search/filter grouping         |       |       |       |                 |
+| `owner`           | User/team responsible          |       |       |       |                 |
+| `resume: true`    | Resume previous job state      |       |       |       |                 |
+| `idempotency_key` | Prevent duplicate starts       |       |       |       |                 |
+| `description`     | Human-readable TUI description |       |       |       |                 |
+
+## B. Stop, pause, abort, continue
+
+| Function                 | Purpose                            |
+| ------------------------ | ---------------------------------- |
+| `until.all`              | Stop only when all predicates pass |
+| `until.any`              | Stop when any predicate passes     |
+| `unless`                 | Continue unless predicate passes   |
+| `pause_when`             | Pause without failing              |
+| `abort_when`             | Stop as failure                    |
+| `continue_when`          | Gate next iteration                |
+| `success_when`           | Mark job successful                |
+| `failure_when`           | Mark job failed                    |
+| `no_progress_iterations` | Stuck detection                    |
+| `max_iterations`         | Optional finite cap                |
+| `max_runtime`            | Optional runtime cap               |
+| `max_cost`               | Optional spend cap                 |
+| `max_tokens`             | Optional token cap                 |
+| `heartbeat_timeout`      | Detect dead controller             |
+| `manual_stop_allowed`    | Whether UI stop can end job        |
+
+## C. Predicate types
+
+| Predicate                     | Purpose                     |
+| ----------------------------- | --------------------------- |
+| `command.run`                 | Shell command predicate     |
+| `command.exit_code`           | Match exit code             |
+| `command.stdout_contains`     | Match stdout text           |
+| `command.stderr_contains`     | Match stderr text           |
+| `command.regex`               | Regex match                 |
+| `command.jsonpath`            | JSON assertion              |
+| `command.timeout`             | Bound command runtime       |
+| `git.clean`                   | Worktree clean predicate    |
+| `git.diff_empty`              | No diff predicate           |
+| `git.branch_is`               | Branch predicate            |
+| `git.remote_synced`           | Local/remote sync predicate |
+| `file.exists`                 | File existence              |
+| `file.not_exists`             | File absence                |
+| `file.contains`               | File content check          |
+| `file.regex`                  | File regex check            |
+| `queue.empty`                 | Blackboard queue empty      |
+| `blackboard.no_open_findings` | No unresolved findings      |
+| `verifier.passed`             | Last verifier passed        |
+| `worker.all_idle`             | No workers running          |
+| `approval.granted`            | Human approval received     |
+| `metric.less_than`            | Numeric metric check        |
+| `metric.equals`               | Numeric/string metric check |
+
+## D. Loop control
+
+| Function                              | Purpose                                |
+| ------------------------------------- | -------------------------------------- |
+| `loop.mode: forever`                  | Infinite loop                          |
+| `loop.mode: while`                    | Predicate loop                         |
+| `loop.mode: for_each`                 | Iterate over item set                  |
+| `loop.interval`                       | Fixed cadence                          |
+| `loop.self_paced`                     | Continue when model/controller decides |
+| `loop.sleep`                          | Delay between iterations               |
+| `loop.backoff`                        | Exponential backoff after errors       |
+| `loop.jitter`                         | Avoid thundering herd                  |
+| `loop.max_consecutive_errors`         | Fail/pause after repeated errors       |
+| `loop.max_noop_iterations`            | Detect useless looping                 |
+| `loop.progress_signal`                | Define what counts as progress         |
+| `loop.iteration.max_work_items`       | Work chunk size                        |
+| `loop.iteration.require_verification` | Must verify before checkpoint          |
+| `loop.iteration.timeout`              | Bound one iteration                    |
+
+## E. Work selection
+
+| Function                              | Purpose                    |
+| ------------------------------------- | -------------------------- |
+| `select_work.source`                  | Source of work items       |
+| `select_work.strategy: random_one`    | Random dirty item          |
+| `select_work.strategy: priority`      | Highest-priority item      |
+| `select_work.strategy: oldest`        | FIFO                       |
+| `select_work.strategy: smallest_diff` | Safer small item first     |
+| `select_work.strategy: failing_test`  | Test-driven selection      |
+| `select_work.scope.paths`             | Include paths              |
+| `select_work.scope.exclude`           | Exclude paths              |
+| `select_work.limit`                   | Max items                  |
+| `select_work.group_by`                | Group work by file/package |
+| `select_work.dedupe`                  | Prevent repeats            |
+| `select_work.requeue_failed`          | Requeue failures           |
+
+## F. Context and memory
+
+| Function                                         | Purpose                           |
+| ------------------------------------------------ | --------------------------------- |
+| `context.strategy: same_session`                 | Keep same session                 |
+| `context.strategy: fresh_session_each_iteration` | New session each iteration        |
+| `context.strategy: hybrid`                       | Mix compact/new session           |
+| `context.compact_every_iterations`               | Forced compaction cadence         |
+| `context.compact_when_tokens_above_pct`          | Token-triggered compaction        |
+| `context.new_session_every_iterations`           | Hard reset cadence                |
+| `context.preserve`                               | State to carry forward            |
+| `context.drop`                                   | State to discard                  |
+| `context.pin`                                    | Always include files/instructions |
+| `context.load`                                   | Load file/resource each iteration |
+| `context.summary_template`                       | Custom daemon summary shape       |
+| `context.max_summary_tokens`                     | Summary budget                    |
+| `context.include_blackboard`                     | Inject open items                 |
+| `context.include_last_errors`                    | Inject last failures              |
+| `context.include_git_state`                      | Inject git state                  |
+| `context.rehydrate_skills`                       | Reload skills after compaction    |
+
+## G. Tools and permissions
+
+| Function                             | Purpose                         |
+| ------------------------------------ | ------------------------------- |
+| `capabilities.tools`                 | Tool permission request         |
+| `tool.allow`                         | Allow tool                      |
+| `tool.ask`                           | Ask before tool                 |
+| `tool.deny`                          | Deny tool                       |
+| `tool.timeout`                       | Bound tool runtime              |
+| `tool.rate_limit`                    | Limit tool calls                |
+| `tool.max_output_chars`              | Prevent huge context bloat      |
+| `tool.batch`                         | Permit batch calls              |
+| `tool.require`                       | Require tool availability       |
+| `tool.route`                         | Route tool to worker/controller |
+| `tool.redact`                        | Redact outputs                  |
+| `tool.protect_from_prompt_injection` | Treat tool output as data       |
+| `tool.on_failure`                    | retry/skip/pause/abort          |
+
+## H. MCP
+
+| Function                     | Purpose                     |
+| ---------------------------- | --------------------------- |
+| `mcp.servers`                | Declare MCP servers         |
+| `mcp.connect`                | Connect to server           |
+| `mcp.spawn`                  | Start MCP server/process    |
+| `mcp.healthcheck`            | Validate server             |
+| `mcp.restart_on_failure`     | Supervise MCP               |
+| `mcp.tool_allowlist`         | Limit server tools          |
+| `mcp.tool_denylist`          | Block server tools          |
+| `mcp.prompt_allowlist`       | Limit MCP prompts           |
+| `mcp.resource_allowlist`     | Limit resources             |
+| `mcp.discover_tools`         | Search tools on demand      |
+| `mcp.capability_gap_request` | Ask router for needed tools |
+| `mcp.max_servers`            | Bound server count          |
+| `mcp.max_tools_in_context`   | Avoid tool schema bloat     |
+| `mcp.isolate_per_worker`     | Separate worker MCP state   |
+
+This should borrow from MCP-Zero’s insight: stuffing every tool schema into the model context does not scale; agents should be able to request tools on demand and route to relevant servers/tools with a small context footprint. ([arXiv][31])
+
+## I. Agents and workers
+
+| Function               | Purpose                             |
+| ---------------------- | ----------------------------------- |
+| `workers.max_parallel` | Parallelism cap                     |
+| `workers.isolation`    | same_session/git_worktree/container |
+| `workers.roles`        | Worker role definitions             |
+| `agent.spawn`          | Spawn one worker                    |
+| `agent.pool`           | Maintain worker pool                |
+| `agent.map`            | Map task list to workers            |
+| `agent.scatter`        | Fan out subtasks                    |
+| `agent.gather`         | Collect results                     |
+| `agent.quorum`         | Require N reviewers                 |
+| `agent.review`         | Review another worker               |
+| `agent.debate`         | Competing analyses                  |
+| `agent.arbiter`        | Final merge decision                |
+| `agent.handoff`        | Transfer work                       |
+| `agent.kill`           | Stop worker                         |
+| `agent.restart`        | Restart worker                      |
+| `agent.drain`          | Finish current work, no new work    |
+| `agent.model`          | Worker model override               |
+| `agent.tools`          | Worker tool limits                  |
+| `agent.skills`         | Worker skill set                    |
+| `agent.max_turns`      | Bound worker turn count             |
+
+## J. Blackboard and task state
+
+| Function                     | Purpose                     |
+| ---------------------------- | --------------------------- |
+| `blackboard.queue`           | Define queue                |
+| `blackboard.enqueue`         | Add work item               |
+| `blackboard.claim`           | Acquire lease               |
+| `blackboard.release`         | Release lease               |
+| `blackboard.complete`        | Mark complete               |
+| `blackboard.requeue`         | Put back in queue           |
+| `blackboard.lock_file`       | File-level lock             |
+| `blackboard.unlock_file`     | Release lock                |
+| `blackboard.finding`         | Record finding              |
+| `blackboard.decision`        | Record decision             |
+| `blackboard.blocker`         | Record blocker              |
+| `blackboard.artifact`        | Attach output               |
+| `blackboard.comment`         | Add note                    |
+| `blackboard.query`           | Search state                |
+| `blackboard.export_markdown` | Mirror to tracker file      |
+| `blackboard.import_markdown` | Bootstrap from tracker file |
+
+This gives you the “centralized chatter plan” without relying on agents editing a tracker file as the source of truth.
+
+## K. Verification
+
+| Function                    | Purpose                   |
+| --------------------------- | ------------------------- |
+| `verify.shell`              | Run arbitrary verifier    |
+| `verify.test`               | Run test command          |
+| `verify.lint`               | Run lint                  |
+| `verify.typecheck`          | Run typecheck             |
+| `verify.audit`              | Run audit                 |
+| `verify.coverage`           | Check coverage            |
+| `verify.snapshot`           | Snapshot assertion        |
+| `verify.security_scan`      | Security scanner          |
+| `verify.secrets_scan`       | Secret scan               |
+| `verify.no_regression`      | Compare previous status   |
+| `verify.require_clean_exit` | No nonzero exit           |
+| `verify.require_no_stderr`  | Fail on stderr            |
+| `verify.parse_json`         | Parse JSON output         |
+| `verify.jsonpath`           | JSON assertion            |
+| `verify.on_failure`         | retry/pause/requeue/abort |
+
+## L. Git and repository actions
+
+| Function                      | Purpose                |
+| ----------------------------- | ---------------------- |
+| `git.status`                  | Inspect status         |
+| `git.diff`                    | Inspect diff           |
+| `git.diff_stat`               | Summarize changes      |
+| `git.branch`                  | Branch policy          |
+| `git.worktree`                | Worktree policy        |
+| `git.stash`                   | Stash policy           |
+| `git.apply_patch`             | Apply patch            |
+| `git.add`                     | Stage files            |
+| `git.commit`                  | Commit                 |
+| `git.push`                    | Push                   |
+| `git.pull_rebase`             | Sync                   |
+| `git.merge`                   | Merge worker branch    |
+| `git.cherry_pick`             | Apply worker commit    |
+| `git.revert`                  | Revert                 |
+| `git.tag`                     | Tag checkpoint         |
+| `git.pr.create`               | Open PR                |
+| `git.protect.paths`           | Prevent unsafe changes |
+| `git.require_signed_commit`   | Signing policy         |
+| `git.commit_message_template` | Message policy         |
+
+## M. Hooks
+
+| Hook                   | When it fires               |
+| ---------------------- | --------------------------- |
+| `on.start`             | Job starts                  |
+| `on.resume`            | Job resumes                 |
+| `on.iteration_start`   | Before iteration            |
+| `on.iteration_end`     | After iteration             |
+| `on.stop_attempt`      | Model/session wants to stop |
+| `on.before_tool`       | Before tool call            |
+| `on.after_tool`        | After tool call             |
+| `on.tool_failure`      | Tool failed                 |
+| `on.permission_denied` | Permission denied           |
+| `on.worker_spawned`    | Worker starts               |
+| `on.worker_done`       | Worker completes            |
+| `on.worker_blocked`    | Worker blocked              |
+| `on.compact`           | Before/after compaction     |
+| `on.checkpoint`        | Before/after git checkpoint |
+| `on.no_progress`       | Stuck detector fires        |
+| `on.pause`             | Job pauses                  |
+| `on.abort`             | Job aborts                  |
+| `on.success`           | Job succeeds                |
+| `on.exit`              | Job exits                   |
+
+## N. Safety and policy
+
+| Function                     | Purpose                          |
+| ---------------------------- | -------------------------------- |
+| `policy.protected_paths`     | Never edit these                 |
+| `policy.protected_commands`  | Never run these                  |
+| `policy.network`             | Network allow/deny               |
+| `policy.secrets`             | Secret handling                  |
+| `policy.prompt_injection`    | Treat external text as untrusted |
+| `policy.require_human_for`   | Human approval gates             |
+| `policy.destructive_actions` | rm, deploy, prod, db gates       |
+| `policy.cost_limit`          | Spend limit                      |
+| `policy.token_limit`         | Token limit                      |
+| `policy.model_allowlist`     | Model restrictions               |
+| `policy.mcp_allowlist`       | MCP restrictions                 |
+| `policy.sandbox`             | Sandbox mode                     |
+| `policy.dry_run`             | No writes/commits                |
+| `policy.audit_log`           | Event logging                    |
+| `policy.org_managed`         | Cannot be overridden locally     |
+
+## O. Live TUI commands
+
+These are not inside the ZYAL block; they are live controls while a daemon is running.
+
+| Command                      | Purpose                        |
+| ---------------------------- | ------------------------------ |
+| `/daemon status`             | Show job status                |
+| `/daemon pause`              | Pause after current safe point |
+| `/daemon resume`             | Resume paused job              |
+| `/daemon stop`               | Stop job                       |
+| `/daemon abort`              | Hard stop as failure           |
+| `/daemon tail`               | Show latest events             |
+| `/daemon workers`            | Show workers                   |
+| `/daemon blackboard`         | Show queue/findings            |
+| `/daemon inject <note>`      | Add user steering note         |
+| `/daemon set parallel.max=5` | Change setting                 |
+| `/daemon unset <key>`        | Remove override                |
+| `/daemon compact now`        | Force compaction               |
+| `/daemon new-session now`    | Force context reset            |
+| `/daemon checkpoint now`     | Force checkpoint if safe       |
+| `/daemon spawn <role>`       | Spawn worker                   |
+| `/daemon kill <worker>`      | Kill worker                    |
+| `/daemon drain`              | Stop assigning new work        |
+| `/daemon lock <path>`        | Lock path                      |
+| `/daemon unlock <path>`      | Unlock path                    |
+| `/daemon approve <id>`       | Approve human gate             |
+| `/daemon deny <id>`          | Deny human gate                |
+| `/daemon explain`            | Explain why running/stopped    |
+
+---
+
+# 13. Implementation phases
+
+## Phase 1 — Safe loop controller
+
+Deliver:
+
+```text
+- ZYAL parser for /daemon start blocks
+- Daemon job store
+- Outer controller loop
+- Basic until/pause/abort predicates
+- Headless CLI support
+- Gold status variant
+- Context compact policy
+- Git checkpoint policy
+```
+
+Do **not** build multi-agent first. Prove one daemon can run forever safely.
+
+## Phase 2 — Plugin hooks and TUI
+
+Deliver:
+
+```text
+- daemon lifecycle hooks
+- TUI gold forever header
+- pause/resume/stop controls
+- daemon event log
+- visible stop criteria and last predicate result
+- blocked permission state
+```
+
+## Phase 3 — Blackboard and work items
+
+Deliver:
+
+```text
+- durable queues
+- leases
+- findings
+- decisions
+- tasklist import/export
+- markdown mirror for humans
+```
+
+This replaces `THIS_TRACKER.md` as the source of truth while still letting humans read a markdown version.
+
+## Phase 4 — Multi-agent worker pool
+
+Deliver:
+
+```text
+- worker roles
+- subagent spawning
+- isolated git worktrees
+- file locks
+- worker summaries
+- arbiter/reviewer role
+- merge queue
+```
+
+## Phase 5 — MCP routing and dynamic tools
+
+Deliver:
+
+```text
+- MCP server supervision
+- per-worker MCP isolation
+- tool allow/deny lists
+- dynamic tool discovery
+- max tool schema budget
+```
+
+## Phase 6 — Schedules, channels, and remote control
+
+Deliver:
+
+```text
+- recurring daemons
+- external events
+- webhooks
+- A2A bridge for external agents
+- AG-UI-style human confirmation surfaces
+```
+
+---
+
+# 14. Verification plan
+
+Tests I would require before shipping daemon mode:
+
+| Test                                                      | What it proves                |
+| --------------------------------------------------------- | ----------------------------- |
+| Parser rejects accidental ZYAL block not at message start | No accidental paste execution |
+| Parser rejects missing nonce/ack for forever              | Explicit consent required     |
+| Model returns `finish=stop`; daemon continues             | Outer loop works              |
+| Model returns `finish=stop`; non-daemon stops             | Normal behavior preserved     |
+| Predicate success exits daemon                            | Stop criteria enforced        |
+| Permission denial pauses                                  | No unsafe spin                |
+| No-progress detector pauses/spawns reviewer               | Avoid useless loops           |
+| Compaction every iteration preserves daemon state         | Context clearing works        |
+| Fresh-session mode carries blackboard state               | True long-run mode works      |
+| Git checkpoint only after verifier pass                   | No bad commits                |
+| Push failure pauses/retries according to policy           | Safe remote behavior          |
+| Crash/resume continues from job store                     | Durable execution             |
+| Worker lease expiration requeues work                     | Multi-agent robustness        |
+| File lock prevents double edit                            | Conflict prevention           |
+| TUI gold state persists across status changes             | Clear UX                      |
+
+---
+
+# 15. The best version of your original prompt in ZYAL
+
+Here is the shape I would want users to write eventually:
+
+```yaml
+/daemon start
+<<<JEKKO_CONTROL:ZYAL/V1
+ack: "JEKKO_DAEMON_CONTROL_V1"
+forever_ack: "I_UNDERSTAND_THIS_CAN_RUN_UNTIL_STOPPED"
+>>>
+kind: daemon
+id: jankurai-dirty-worktree-cleanup
+version: 1
+forever: true
+
+goal: |
+  We have a dirty worktree from work trying to implement
+  @agent/JANKURAI_STANDARD.md and @JANKURAI_TASKLIST.md.
+  Investigate uncommitted code, run git diff, find mistakes and regressions,
+  fix one bounded item at a time, verify, commit, push, and continue.
+
+source_context:
+  files:
+    - "@agent/JANKURAI_STANDARD.md"
+    - "@JANKURAI_TASKLIST.md"
+
+work:
+  select:
+    source: git.dirty_worktree
+    strategy: random_one
+    max_items_per_iteration: 1
+
+loop:
+  mode: forever
+  self_paced: true
+  progress_signal:
+    any:
+      - git.commit_created: true
+      - blackboard.finding_resolved: true
+      - verifier.failure_changed: true
+
+until:
+  all:
+    - command:
+        run: "jankurai audit --json"
+        jsonpath: "$.findings == 0 && $.caps == 0"
+    - git:
+        clean: true
+
+verify:
+  steps:
+    - command: "git diff --check"
+    - command: "bun test"
+      optional: false
+    - command: "jankurai audit --json"
+      capture_as: audit
+
+tasklists:
+  active: "@JANKURAI_TASKLIST.md"
+  completed: "@JANKURAI_TASKLIST.md.completed"
+  update:
+    append_new_findings_from: audit
+    move_completed_items: true
+
+checkpoint:
+  git:
+    when:
+      all:
+        - verifier.passed: true
+        - git.diff_nonempty: true
+    add: "."
+    commit:
+      message: "jankurai: resolve {work_item.summary}"
+    push:
+      enabled: true
+
+context:
+  strategy: hybrid
+  compact_every_iterations: 1
+  new_session_every_iterations: 6
+  preserve:
+    - goal
+    - until
+    - tasklists
+    - audit.last_result
+    - blackboard.open_items
+    - git.last_commit
+
+workers:
+  max_parallel: 3
+  isolation: git_worktree
+  roles:
+    - id: explorer
+      agent: explore
+      purpose: "Inspect diffs and identify possible regressions"
+    - id: fixer
+      agent: build
+      purpose: "Implement bounded fixes"
+    - id: reviewer
+      agent: plan
+      purpose: "Review fix before checkpoint"
+
+on_permission_denied:
+  behavior: pause
+
+on_no_progress:
+  after_iterations: 3
+  behavior: spawn_reviewer
+
+ui:
+  color: gold
+  forever_badge: true
+<<<END_JEKKO_CONTROL>>>
+```
+
+---
+
+# Bottom line
+
+The best plan is not “teach agents to obey `<FOREVER>`.” The best plan is to add an Jekko **daemon/job runtime** that treats an in-prompt syntax block as a parsed, validated control manifest.
+
+Jekko already has the ingredients: agents/subagents, tools/MCP, commands, permissions, plugins, skills, compaction, and headless run. The community has already opened issues asking for a stopping hook and `/loop`, while bug reports show accidental loops are a real cost. ([GitHub][5])
+
+The robust version is:
+
+```text
+ZYAL syntax → validated DaemonSpec → durable controller → session loop iterations
+→ verification → checkpoint → context reset → stop predicate → repeat forever
+```
+
+That gives you the “PROMISED infinite loop” behavior while making it safe, inspectable, recoverable, gold-highlighted, multi-agent capable, and impossible to trigger by accidentally pasting a random block of text.
+
+[1]: https://jekko.ai/docs/agents/ "Agents | Jekko"
+[2]: https://jekko.ai/docs/commands/ "Commands | Jekko"
+[3]: https://jekko.ai/docs/tools/ "Tools | Jekko"
+[4]: https://jekko.ai/docs/skills/ "Agent Skills | Jekko"
+[5]: https://github.com/anomalyco/jekko/issues/16626 "[FEATURE]: add session.stopping plugin hook to allow re-entering the agent loop · Issue #16626 · anomalyco/jekko · GitHub"
+[6]: https://github.com/anomalyco/jekko/issues/18001 "[FEATURE]:Implement /loop command for automated iterative task execution · Issue #18001 · anomalyco/jekko · GitHub"
+[7]: https://github.com/anomalyco/jekko/issues/12306 "Agent enters infinite loop in plan mode when attempting to write plan · Issue #12306 · anomalyco/jekko · GitHub"
+[8]: https://raw.githubusercontent.com/anomalyco/jekko/refs/heads/dev/packages/jekko/src/session/prompt.ts "raw.githubusercontent.com"
+[9]: https://github.com/anomalyco/jekko/blob/dev/packages/jekko/src/session/status.ts "jekko/packages/jekko/src/session/status.ts at dev · anomalyco/jekko · GitHub"
+[10]: https://raw.githubusercontent.com/anomalyco/jekko/refs/heads/dev/packages/jekko/src/session/compaction.ts "raw.githubusercontent.com"
+[11]: https://code.claude.com/docs/en/commands "Commands - Claude Code Docs"
+[12]: https://code.claude.com/docs/en/hooks-guide "Automate workflows with hooks - Claude Code Docs"
+[13]: https://code.claude.com/docs/en/hooks "Hooks reference - Claude Code Docs"
+[14]: https://code.claude.com/docs/en/sub-agents "Create custom subagents - Claude Code Docs"
+[15]: https://docs.langchain.com/oss/python/langgraph/durable-execution?utm_source=chatgpt.com "Durable execution - Docs by LangChain"
+[16]: https://docs.crewai.com/en/concepts/flows?utm_source=chatgpt.com "Flows"
+[17]: https://microsoft.github.io/autogen/stable//index.html?utm_source=chatgpt.com "AutoGen"
+[18]: https://ibm.github.io/prompt-declaration-language/?utm_source=chatgpt.com "Prompt Declaration Language"
+[19]: https://lmql.ai/?utm_source=chatgpt.com "LMQL is a programming language for LLM interaction. | LMQL"
+[20]: https://github.com/guidance-ai/guidance?utm_source=chatgpt.com "A guidance language for controlling large ..."
+[21]: https://modelcontextprotocol.io/docs/getting-started/intro "What is the Model Context Protocol (MCP)? - Model Context Protocol"
+[22]: https://modelcontextprotocol.io/seps "Specification Enhancement Proposals (SEPs) - Model Context Protocol"
+[23]: https://anthropic.skilljar.com/introduction-to-model-context-protocol "Introduction to Model Context Protocol"
+[24]: https://a2a-protocol.org/latest/specification/ "Overview - A2A Protocol"
+[25]: https://codelabs.developers.google.com/intro-a2a-purchasing-concierge "Getting Started with Agent2Agent (A2A) Protocol: A Purchasing Concierge and Remote Seller Agent Interactions on Cloud Run and Agent Engine  |  Google Codelabs"
+[26]: https://docs.ag-ui.com/concepts/tools "Tools - Agent User Interaction Protocol"
+[27]: https://developers.googleblog.com/developers-guide-to-ai-agent-protocols/ "
+
+            Developer’s Guide to AI Agent Protocols
+
+
+            \- Google Developers Blog
+
+        "
+[28]: https://www.reddit.com/r/jekkoCLI/comments/1t5q8mo/dont_leave_jekko_unattended_a_subagent_loop/?utm_source=chatgpt.com "Don't leave Opencode unattended! A sub-agent loop just ..."
+[29]: https://github.com/anomalyco/jekko/issues/17982 "Bug: Jekko prompt loop continues after `finish=stop`, triggering prefill error on claude-opus-4-6 · Issue #17982 · anomalyco/jekko · GitHub"
+[30]: https://raw.githubusercontent.com/anomalyco/jekko/refs/heads/dev/packages/jekko/src/cli/cmd/run.ts "raw.githubusercontent.com"
+[31]: https://arxiv.org/abs/2506.01056 "[2506.01056] MCP-Zero: Active Tool Discovery for Autonomous LLM Agents"

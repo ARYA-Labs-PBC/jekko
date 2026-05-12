@@ -1,0 +1,1509 @@
+# Plan update: add an **ZYAL Crucible Lane** for hard tasks
+
+The current ZYAL plan is already pointed in the right direction: host-enforced daemon runtime, strict gated syntax, SQLite as source of truth, hard context clearing through new epochs, no prompt-only continuation, and no assistant-generated ZYAL execution. That gives us the foundation for “FOREVER means forever unless host stop checks pass.”
+
+The missing layer is exactly what you are describing now:
+
+> When the easy/high-confidence tasks are gone, the daemon should not just keep randomly poking at the remaining hard tasks. It should route hard tasks into a deliberate, bounded, collaborative scratchpad/research/hardening process until there is enough evidence to implement safely.
+
+I would add this as a new first-class ZYAL subsystem:
+
+```yaml
+crucible:
+  enabled: true
+```
+
+The **Crucible Lane** is not another infinite loop. It is a bounded, evidence-driven hard-task process inside the larger daemon loop.
+
+```text
+Daemon loop = may run forever
+Crucible loop = bounded per hard task
+Scratch memory = durable per task
+Promotion = host-gated by evidence
+Cleanup = automatic after task completion/blocking
+```
+
+The model may say, “I am low confidence; route this to crucible.” But the runtime should decide whether that route is allowed. Otherwise every agent will learn that “crucible” is a way to buy more time.
+
+---
+
+# 1. What the broader ecosystem says this should look like
+
+There is still no universal “in-prompt agent scripting standard” for coding agents. What does exist is convergence around **explicit workflow/runtime orchestration**, durable state, checkpointing, routing, evaluator loops, and multi-agent specialization. LangGraph describes itself as a runtime for long-running, stateful agents with durable execution, human-in-the-loop, memory, and persistence; its durable execution docs emphasize saving progress so long workflows can resume without repeating completed work. ([LangChain Docs][1])
+
+Microsoft Agent Framework is especially relevant because it separates “agents” from “workflows”: agents handle open-ended model behavior, while workflows provide explicit control flow, type-validated routing, checkpointing, human-in-the-loop, and multi-agent orchestration. Its 2026 docs and launch materials specifically call out sequential, concurrent, handoff, group chat, Magentic-style orchestration, checkpointing, hydration, declarative YAML, A2A, and MCP support. ([Microsoft Learn][2])
+
+CrewAI Flows is another parallel: it frames flows as structured, event-driven workflows that connect tasks and crews, manage state, and support conditional logic, loops, and branching. That maps cleanly to ZYAL’s “runtime owns the loop” idea. ([CrewAI Documentation][3])
+
+Anthropic’s “Building Effective Agents” is probably the best conceptual guide for the hard-task lane. It names exactly the patterns ZYAL should encode: routing, parallelization, orchestrator-workers, and evaluator-optimizer. The evaluator-optimizer pattern is specifically for cases where clear evaluation criteria exist and iterative refinement adds measurable value. ([Anthropic][4])
+
+OpenAI’s Agents SDK docs make the same distinction in different language: orchestration can be LLM-directed or code-directed, and you can mix them; their guide also recommends adding specialists only when the contract changes, because premature agent splitting adds prompts, traces, and approval surfaces. That is directly applicable here: Crucible should route only the tasks whose contract actually changes from “implement this” to “research, compare, critique, and evidence-gate this.” ([OpenAI Developers][5])
+
+Research patterns also support the proposed design. **Self-Refine** alternates feedback and refinement to improve outputs without training. **Reflexion** stores verbal reflections in episodic memory between trials and explicitly limits memory length to avoid context blowup. **Tree of Thoughts** explores multiple reasoning paths and evaluates them before committing. **Multi-agent debate** uses multiple model instances over rounds to improve reasoning/factuality. ZYAL should not copy these as prompt tricks; it should encode them as host-orchestrated pass types. ([arXiv][6])
+
+OpenHands is also relevant, but mostly for two lessons: use repository-specific persistent instructions/skills for stable project knowledge, and use sandboxed/isolated runtimes for risky execution. OpenHands loads repo-specific skills or microagents from `.openhands/skills/` or `.openhands/microagents/`, and its runtime architecture emphasizes Docker isolation for executing arbitrary code safely and reproducibly. ([GitHub][7])
+
+For Jekko specifically, there is no native documented ZYAL/daemon runbook standard today. Jekko does support agents, subagents, model overrides, permissions, MCP tool gating, commands, plugins, custom config directories, compaction controls, and an ecosystem with background-agent/worktree/persistent-memory plugins. Those are the right primitives, but ZYAL would be a new native runtime layer rather than a wrapper around existing prompt commands. ([Jekko][8])
+
+---
+
+# 2. The new concept: **Crucible Lane**
+
+The daemon should have four lanes:
+
+```text
+                 ┌───────────────────────┐
+                 │   daemon selects task  │
+                 └───────────┬───────────┘
+                             │
+                             ▼
+                    host triage + scoring
+                             │
+        ┌────────────────────┼────────────────────┐
+        ▼                    ▼                    ▼
+  direct lane          standard lane         crucible lane
+ high confidence       medium risk           high risk /
+ small change          needs plan            low confidence /
+                                            repeated failure
+        │                    │                    │
+        ▼                    ▼                    ▼
+ implement+verify      plan+implement       research / compare /
+                                            critique / prototype /
+                                            evidence gate
+        └────────────────────┼────────────────────┘
+                             ▼
+                       checkpoint / commit
+                             │
+                             ▼
+                    host stop checks decide
+```
+
+The Crucible Lane is for tasks like:
+
+```text
+- algorithmic or architectural rework
+- refactors touching many files
+- migration/schema/runtime interactions
+- tasks with prior failed attempts
+- tasks where the agent explicitly reports low confidence
+- tasks with weak tests or unclear success criteria
+- tasks touching critical paths
+- tasks where implementation might regress hidden behavior
+```
+
+It is **not** for:
+
+```text
+- one-file obvious fixes
+- formatting
+- typo cleanup
+- already well-tested changes
+- routine tasklist bookkeeping
+- low-risk grep/edit/verify loops
+```
+
+The runtime should treat Crucible as a scarce resource.
+
+---
+
+# 3. Crucible state machine
+
+Add this state machine inside the daemon controller:
+
+```text
+task_selected
+  ↓
+triage
+  ↓
+direct | standard | crucible | blocked
+
+crucible:
+  intake
+    ↓
+  independent_strategy_generation
+    ↓
+  strategy_synthesis
+    ↓
+  adversarial_review
+    ↓
+  prototype_or_experiment
+    ↓
+  evidence_review
+    ↓
+  promote_to_implementation | another_round | blocked | abandon
+```
+
+A Crucible task should have bounded terminal states:
+
+```text
+promoted      enough evidence exists; implementation may proceed
+blocked       needs human decision, missing dependency, unclear requirement
+abandoned     not worth pursuing under budget/policy
+satisfied     task resolved during prototype/experiment
+maxed_out     pass budget exhausted; create blocker and move on
+```
+
+This gives you cross-loop collaboration without letting the hard-task scratchpad become its own infinite daemon.
+
+---
+
+# 4. The key rule: **agent confidence is only a signal, not the gate**
+
+Do not let the model’s self-confidence directly decide execution.
+
+Use three scores:
+
+```text
+risk_score
+  How likely is this task to cause a mistake or regression?
+
+evidence_score
+  How much objective evidence do we have that the current approach is correct?
+
+agent_confidence
+  What the agent says about its confidence, down-weighted heavily.
+```
+
+The route should be computed by the host:
+
+```text
+route = f(risk_score, evidence_score, failed_attempts, task_class, changed_paths, tests, agent_confidence)
+```
+
+A practical scoring model:
+
+```text
+risk_score =
+  0.20 * blast_radius
++ 0.20 * criticality
++ 0.15 * algorithmic_complexity
++ 0.15 * requirement_ambiguity
++ 0.10 * test_gap
++ 0.10 * previous_failures
++ 0.10 * agent_low_confidence
+
+evidence_score =
+  0.30 * verification_commands_passed
++ 0.20 * reviewer_approval
++ 0.15 * plan_convergence
++ 0.15 * diff_confinement
++ 0.10 * audit_cleanliness
++ 0.10 * reproducibility_from_fresh_context
+```
+
+Default route policy:
+
+```text
+direct:
+  risk_score <= 0.35
+  evidence_score >= 0.60
+  failed_attempts == 0
+
+standard:
+  risk_score <= 0.65
+  evidence_score >= 0.35
+
+crucible:
+  risk_score > 0.65
+  OR evidence_score < 0.35
+  OR failed_attempts >= 2
+  OR task_class in [algorithm, architecture, migration, security]
+  OR agent requests crucible and host finds at least one objective risk signal
+
+blocked:
+  no clear stop/evidence predicate
+  OR missing permission
+  OR required external decision
+```
+
+This prevents “everything routes to deep thinking.”
+
+---
+
+# 5. Per-task scratch memory
+
+The scratchpad should be a **typed task memory**, not a freeform forever notebook.
+
+Important design point: do not ask agents to store private chain-of-thought. Store safe, concise, user-inspectable artifacts:
+
+```text
+facts
+assumptions
+open questions
+known constraints
+candidate strategies
+failed approaches
+evidence
+test results
+risk notes
+decision records
+implementation sketch
+handoff summary
+```
+
+The source of truth remains SQLite. The filesystem mirror is generated for inspection.
+
+Recommended layout:
+
+```text
+.jekko/daemon/<runID>/
+  STATE.md
+  ledger.jsonl
+  tasks/
+    <taskID>/
+      TASK.md
+      HANDOFF.md
+      MEMORY.md
+      strategies/
+        strategy-001.yaml
+        strategy-002.yaml
+      attempts/
+        attempt-001.md
+        attempt-002.md
+      reviews/
+        review-001.yaml
+        redteam-001.yaml
+      evidence/
+        verify-001.json
+        audit-001.json
+      patches/
+        prototype-001.patch
+```
+
+Memory rules:
+
+```yaml
+scratch:
+  scope: task
+  source_of_truth: sqlite
+  mirror: ".jekko/daemon/{{run_id}}/tasks/{{task_id}}"
+  max_rounds: 4
+  max_attempts: 8
+  max_bytes_per_task: 250kb
+  summarize_after_attempts: 2
+  preserve:
+    - facts
+    - constraints
+    - failed_approaches
+    - best_strategy
+    - evidence
+    - open_questions
+  discard:
+    - raw_tool_spam
+    - duplicate plans
+    - obsolete hypotheses
+```
+
+This mirrors Reflexion’s useful idea—carry forward compact lessons between trials—without letting memory grow without bound. Reflexion’s paper reports truncating memory to recent reflections to avoid context-window issues, which is the same operational problem ZYAL has to solve. ([OpenReview][9])
+
+---
+
+# 6. Add these tables to the current daemon store plan
+
+The existing ZYAL plan already proposes `daemon_run`, `daemon_iteration`, `daemon_event`, `daemon_task`, `daemon_worker`, and `daemon_artifact`. Add these:
+
+```sql
+daemon_task_score
+  id
+  run_id
+  task_id
+  iteration
+  risk_score
+  evidence_score
+  agent_confidence
+  route
+  route_reason_json
+  features_json
+  created_at
+
+daemon_task_attempt
+  id
+  run_id
+  task_id
+  pass_id
+  worker_id
+  session_id
+  epoch
+  attempt_kind
+  status
+  started_at
+  ended_at
+  summary
+  output_ref
+  evidence_json
+  error_json
+
+daemon_task_memory
+  id
+  run_id
+  task_id
+  kind
+  visibility
+  pinned
+  body
+  body_hash
+  provenance_json
+  confidence
+  expires_at
+  created_at
+
+daemon_strategy
+  id
+  run_id
+  task_id
+  strategy_id
+  author_worker_id
+  scratch_access
+  summary
+  plan_json
+  expected_files_json
+  risk_json
+  score_json
+  status
+  created_at
+
+daemon_review
+  id
+  run_id
+  task_id
+  target_kind
+  target_id
+  reviewer_worker_id
+  review_type
+  verdict
+  score
+  findings_json
+  required_changes_json
+  created_at
+
+daemon_decision
+  id
+  run_id
+  task_id
+  decision
+  rationale
+  alternatives_json
+  evidence_refs_json
+  created_at
+```
+
+The important part is provenance. Every useful scratch memory should answer:
+
+```text
+Who wrote this?
+In which pass?
+Based on what evidence?
+Was it later contradicted?
+Is it pinned for future context?
+Should it expire?
+```
+
+---
+
+# 7. New runtime modules
+
+Add these to the implementation plan:
+
+```text
+packages/jekko/src/session/daemon-router.ts
+  Computes route: direct | standard | crucible | blocked.
+
+packages/jekko/src/session/daemon-scorer.ts
+  Computes risk/evidence/confidence scores from task metadata,
+  git state, prior attempts, LLM risk cards, and verification results.
+
+packages/jekko/src/session/daemon-crucible.ts
+  Runs bounded hard-task passes and promotion gates.
+
+packages/jekko/src/session/daemon-memory.ts
+  Stores task memory, summarizes attempts, mirrors files, expires scratch.
+
+packages/jekko/src/session/daemon-strategy.ts
+  Handles independent strategy generation, synthesis, ranking, and pruning.
+
+packages/jekko/src/session/daemon-review.ts
+  Runs critic/red-team/evaluator passes and records verdicts.
+
+packages/jekko/src/session/daemon-cleanup.ts
+  Releases locks, prunes scratch, archives artifacts, removes worktrees.
+```
+
+These should not be jammed into `daemon.ts`. `daemon.ts` should supervise. The new modules should keep the runtime understandable.
+
+---
+
+# 8. New daemon-only tools
+
+The model needs tools to interact with the crucible state, but the tools must be request/report tools, not authority tools.
+
+Add:
+
+```text
+daemon_task_score
+  Submit a structured risk/confidence/evidence card for current task.
+
+daemon_request_crucible
+  Request hard-task routing. Runtime may accept or deny.
+
+daemon_memory_write
+  Write a typed task memory item.
+
+daemon_memory_query
+  Retrieve allowed task memory for this pass.
+
+daemon_strategy_submit
+  Submit a candidate strategy.
+
+daemon_review_submit
+  Submit critique, red-team review, or approval.
+
+daemon_evidence_attach
+  Attach verification evidence, command output summary, artifact, or patch ref.
+
+daemon_decision_record
+  Record a host-visible decision or rejected alternative.
+
+daemon_promotion_request
+  Request promotion from crucible to implementation.
+
+daemon_block_task
+  Mark a task as blocked with reason and required human input.
+
+daemon_cleanup_request
+  Request scratch/worktree cleanup.
+```
+
+Do **not** add:
+
+```text
+daemon_force_promote
+daemon_force_stop
+daemon_bypass_evidence
+daemon_delete_memory
+daemon_disable_permissions
+```
+
+The runtime owns promotion, stop, deletion, and permission escalation.
+
+---
+
+# 9. ZYAL syntax addition: simple form
+
+This is the syntax I would add to the existing ZYAL block.
+
+```yaml
+routing:
+  enabled: true
+  default_lane: standard
+
+  triage:
+    host_scored: true
+    agent_may_request_crucible: true
+    agent_confidence_weight: 0.10
+
+  lanes:
+    direct:
+      when:
+        all:
+          - risk_lte: 0.35
+          - failed_attempts_lte: 0
+      action: implement_verify_checkpoint
+
+    standard:
+      when:
+        all:
+          - risk_lte: 0.65
+      action: plan_implement_verify_checkpoint
+
+    crucible:
+      when:
+        any:
+          - risk_gte: 0.65
+          - evidence_lt: 0.35
+          - failed_attempts_gte: 2
+          - task_class_in: [algorithm, architecture, migration, security]
+      action: run_crucible
+
+    blocked:
+      when:
+        any:
+          - missing_stop_predicate: true
+          - requires_human_decision: true
+      action: create_blocker
+
+crucible:
+  enabled: true
+  max_active_tasks: 2
+  max_rounds_per_task: 4
+  max_attempts_per_task: 8
+  on_budget_exhausted: block_task
+
+  scratch:
+    scope: task
+    source_of_truth: sqlite
+    mirror: true
+    max_bytes_per_task: 250kb
+    summarize_after_attempts: 2
+    expose_to_workers: summary_only
+
+  promotion:
+    require:
+      all:
+        - evidence_score_gte: 0.75
+        - reviewer_verdict: approve
+        - verification_plan_exists: true
+        - no_unresolved_critical_risks: true
+
+  cleanup:
+    on_promoted:
+      keep: [TASK.md, HANDOFF.md, MEMORY.md, best_strategy, evidence]
+      prune: [obsolete_attempts, raw_tool_outputs]
+    on_completed:
+      archive: true
+      delete_worktrees: true
+      release_locks: true
+```
+
+This keeps the user-facing configuration simple.
+
+---
+
+# 10. ZYAL syntax addition: explicit pass graph
+
+For advanced users, allow explicit Crucible passes.
+
+```yaml
+crucible:
+  enabled: true
+  max_rounds_per_task: 4
+
+  passes:
+    - id: blind_strategies
+      type: fanout
+      count: 3
+      agent: plan
+      model: best_available_reasoning
+      scratch_access: none
+      write: false
+      output_schema: strategy_card
+      purpose: |
+        Generate independent approaches without reading previous scratch.
+        Avoid anchoring on earlier plans.
+
+    - id: aware_strategy_improvement
+      type: fanout
+      count: 2
+      agent: plan
+      scratch_access: summary
+      write: false
+      output_schema: strategy_card
+      purpose: |
+        Read task memory and improve or reject existing approaches.
+
+    - id: synthesize
+      type: synthesize
+      agent: plan
+      inputs: [blind_strategies, aware_strategy_improvement]
+      output_schema: selected_strategy
+      select:
+        top_k: 2
+        criteria:
+          - correctness
+          - minimal_diff
+          - testability
+          - rollback_safety
+
+    - id: red_team
+      type: review
+      agent: review
+      scratch_access: summary
+      target: synthesize
+      output_schema: risk_review
+      purpose: |
+        Find regressions, hidden assumptions, missing tests, and rollback risks.
+
+    - id: prototype
+      type: experiment
+      agent: build
+      isolation: git_worktree
+      write: true
+      commit: false
+      max_duration: 20m
+      output_schema: experiment_result
+
+    - id: evidence_gate
+      type: evaluate
+      agent: review
+      inputs: [synthesize, red_team, prototype]
+      output_schema: promotion_review
+      promote_when:
+        all:
+          - reviewer_verdict: approve
+          - risk_score_lte: 0.45
+          - evidence_score_gte: 0.75
+
+    - id: implement
+      type: implement
+      agent: build
+      run_only_when: promoted
+      isolation: parent_or_fresh_worktree
+```
+
+This is where the “fresh second agent makes a new plan” and “second agent is forced to read and improve existing plan” both become first-class, intentional pass types:
+
+```yaml
+scratch_access: none      # fresh/blind
+scratch_access: summary   # informed, but not overloaded
+scratch_access: full      # rare, only for auditor/synthesizer
+```
+
+The blind pass is important. If all agents read the same scratchpad first, they anchor on the same flawed idea. The aware pass is also important, because once the daemon has learned something expensive, later agents should not throw it away.
+
+---
+
+# 11. Strategy reservoir: Tree-of-Thoughts without prompt magic
+
+The hard-task lane should maintain a **strategy reservoir**:
+
+```text
+strategy candidates
+  ↓
+score
+  ↓
+keep top K
+  ↓
+expand / critique / prototype
+  ↓
+promote or prune
+```
+
+ZYAL syntax:
+
+```yaml
+crucible:
+  strategy_reservoir:
+    enabled: true
+    max_candidates: 8
+    keep_top_k: 3
+    diversify:
+      require_distinct_files: false
+      require_distinct_approach: true
+    score:
+      weights:
+        correctness: 0.35
+        testability: 0.20
+        minimality: 0.15
+        maintainability: 0.15
+        rollback_safety: 0.15
+```
+
+This maps to Tree of Thoughts conceptually—explore multiple coherent paths, evaluate, prune, and continue—but keeps the search under host control rather than asking the model to “think of many paths” in one context. ([arXiv][10])
+
+---
+
+# 12. Evaluator-optimizer hardening loop
+
+For very hard tasks, add an evaluator-optimizer loop.
+
+```yaml
+crucible:
+  evaluator_optimizer:
+    enabled: true
+    max_cycles: 3
+
+    generator:
+      agent: build
+      scratch_access: summary
+      output: candidate_patch_or_plan
+
+    evaluator:
+      agent: review
+      scratch_access: summary
+      output: structured_feedback
+      must_check:
+        - correctness
+        - regression_risk
+        - test_coverage
+        - standard_compliance
+        - rollback_plan
+
+    stop_cycle_when:
+      any:
+        - evaluator_verdict: approve
+        - no_improvement_cycles_gte: 2
+        - max_cycles_reached: true
+```
+
+This maps directly to Anthropic’s evaluator-optimizer workflow and Self-Refine’s feedback/refine loop, but with explicit max cycles and runtime gating. ([Anthropic][4])
+
+---
+
+# 13. Multi-agent debate option
+
+For ambiguous algorithmic or architectural tasks:
+
+```yaml
+crucible:
+  debate:
+    enabled: true
+    trigger:
+      any:
+        - task_class_in: [algorithm, architecture]
+        - strategies_disagree: true
+        - risk_gte: 0.80
+
+    rounds: 2
+    participants:
+      - id: minimalist
+        agent: plan
+        stance: "smallest safe diff"
+      - id: architect
+        agent: plan
+        stance: "long-term architecture"
+      - id: skeptic
+        agent: review
+        stance: "find why both are wrong"
+    arbiter:
+      agent: review
+      output_schema: debate_decision
+```
+
+This should be rare because debate is expensive. But it is useful for the exact “only the hardest task remains” scenario. The multi-agent debate literature supports this as a test-time way to improve reasoning and factuality, especially when agents bring different rationales and challenge each other. ([arXiv][11])
+
+---
+
+# 14. Admission controls so Crucible does not eat everything
+
+Add hard limits:
+
+```yaml
+routing:
+  crucible_admission:
+    require_objective_signal: true
+
+    objective_signals:
+      any:
+        - failed_attempts_gte: 2
+        - touched_paths_match:
+            - "packages/jekko/src/session/**"
+            - "packages/jekko/src/server/**"
+            - "packages/jekko/migration/**"
+        - test_gap: high
+        - risk_gte: 0.65
+        - task_class_in: [algorithm, architecture, migration, security]
+
+    exclusions:
+      any:
+        - changed_files_lte: 1
+        - task_class_in: [formatting, typo, docs_small]
+        - known_fix_pattern: true
+
+    quotas:
+      max_crucible_tasks_per_20_iterations: 3
+      max_parallel_crucible_tasks: 2
+      max_total_crucible_time_per_task: 90m
+```
+
+The agent can request Crucible, but the runtime checks admission. This is the safety valve.
+
+---
+
+# 15. “Hardening passes above threshold” syntax
+
+This is probably the most useful concise form:
+
+```yaml
+hardening:
+  enabled: true
+  trigger:
+    any:
+      - risk_gte: 0.70
+      - evidence_lt: 0.40
+      - failed_attempts_gte: 2
+      - agent_confidence_lt: 0.45
+
+  passes:
+    - fresh_plan
+    - improve_existing_plan
+    - red_team
+    - prototype
+    - evidence_gate
+
+  limits:
+    max_rounds: 4
+    max_agents_per_round: 4
+    max_prototypes: 2
+
+  promote_when:
+    all:
+      - evidence_score_gte: 0.75
+      - risk_score_lte: 0.45
+      - verification_passed: true
+```
+
+This can be a preset:
+
+```yaml
+crucible:
+  preset: hardening_v1
+```
+
+Expanded internally by the runtime.
+
+Presets matter. Most users should not have to write a whole pass graph.
+
+---
+
+# 16. A full Jankurai-flavored ZYAL example with Crucible
+
+```yaml
+<<<ZYAL v1:daemon id=jankurai-clean-worktree>>>
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai dirty worktree hardening"
+  objective: |
+    Investigate all uncommitted work. Fix regressions. Run confidence checks.
+    Commit and push completed verified work. If audit still has findings or caps,
+    update JANKURAI_TASKLIST.md and move completed items to
+    JANKURAI_TASKLIST.md.completed.
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied, checkpoint_failed, no_progress]
+
+tasks:
+  ledger: sqlite
+  discover:
+    - git_dirty: true
+    - shell:
+        command: "jankurai audit . --json"
+        items: "$.findings[*]"
+
+routing:
+  enabled: true
+  default_lane: standard
+
+  scoring:
+    host_scored: true
+    agent_confidence_weight: 0.10
+    features:
+      - changed_file_count
+      - touched_critical_paths
+      - failed_attempts
+      - audit_severity
+      - test_gap
+      - migration_or_schema
+      - algorithmic_complexity
+      - agent_reported_uncertainty
+
+  lanes:
+    direct:
+      when:
+        all:
+          - risk_lte: 0.35
+          - failed_attempts_lte: 0
+      action: implement_verify_checkpoint
+
+    standard:
+      when:
+        all:
+          - risk_lte: 0.65
+      action: plan_implement_verify_checkpoint
+
+    crucible:
+      when:
+        any:
+          - risk_gte: 0.65
+          - evidence_lt: 0.35
+          - failed_attempts_gte: 2
+          - task_class_in: [algorithm, architecture, migration, security]
+      action: run_crucible
+
+crucible:
+  enabled: true
+  preset: hardening_v1
+  max_active_tasks: 2
+  max_rounds_per_task: 4
+  max_attempts_per_task: 8
+  on_budget_exhausted: block_task
+
+  scratch:
+    scope: task
+    source_of_truth: sqlite
+    mirror: ".jekko/daemon/{{run_id}}/tasks/{{task_id}}"
+    expose_to_workers: summary_only
+    max_bytes_per_task: 250kb
+    summarize_after_attempts: 2
+    preserve:
+      - facts
+      - constraints
+      - failed_approaches
+      - best_strategy
+      - evidence
+      - open_questions
+
+  passes:
+    - id: fresh_plans
+      type: fanout
+      count: 3
+      agent: plan
+      scratch_access: none
+      write: false
+      output_schema: strategy_card
+
+    - id: improve_existing
+      type: fanout
+      count: 2
+      agent: plan
+      scratch_access: summary
+      write: false
+      output_schema: strategy_card
+
+    - id: synthesize
+      type: synthesize
+      agent: plan
+      inputs: [fresh_plans, improve_existing]
+      output_schema: selected_strategy
+
+    - id: red_team
+      type: review
+      agent: review
+      target: synthesize
+      output_schema: risk_review
+
+    - id: prototype
+      type: experiment
+      agent: build
+      isolation: git_worktree
+      write: true
+      commit: false
+      max_duration: 20m
+
+    - id: evidence_gate
+      type: evaluate
+      agent: review
+      inputs: [synthesize, red_team, prototype]
+      promote_when:
+        all:
+          - evidence_score_gte: 0.75
+          - risk_score_lte: 0.45
+          - no_unresolved_critical_risks: true
+
+  cleanup:
+    on_promoted:
+      keep: [TASK.md, HANDOFF.md, MEMORY.md, best_strategy, evidence]
+      prune: [obsolete_attempts, raw_tool_outputs]
+    on_completed:
+      archive: true
+      release_locks: true
+      delete_worktrees: true
+
+stop:
+  all:
+    - shell:
+        command: "jankurai audit . --json target/jankurai/daemon-audit.json"
+        timeout: 30s
+        assert:
+          json:
+            "$.findings_count": 0
+            "$.caps_count": 0
+    - git_clean:
+        allow_untracked: false
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - shell: "bun --cwd packages/jekko test --timeout 30000 packages/jekko/test/session/daemon-runtime.test.ts"
+  git:
+    add: ["."]
+    commit_message: "jankurai: daemon verified work item"
+    push: ask
+
+context:
+  strategy: hybrid
+  compact_every: 1
+  hard_clear_every: 3
+  preserve:
+    - job.objective
+    - stop
+    - permissions
+    - task_ledger_summary
+    - crucible_summaries
+    - last_checkpoint
+
+permissions:
+  shell: ask
+  edit: allow
+  git_commit: ask
+  git_push: ask
+  workers: ask
+  mcp: ask
+
+ui:
+  theme: jekko-gold
+  banner: forever
+  show_lanes: true
+  show_crucible: true
+
+<<<END_ZYAL id=jankurai-clean-worktree>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-clean-worktree
+```
+
+---
+
+# 17. Collaboration model: typed cards, not shared Markdown chaos
+
+The old pattern:
+
+```text
+Everyone read THIS_TRACKER.md and update it
+```
+
+should become:
+
+```text
+Workers write typed cards into the daemon ledger.
+Markdown is only a generated mirror.
+```
+
+Cards:
+
+```yaml
+type: strategy_card
+task_id: task-123
+strategy_id: strategy-002
+summary: "Change daemon loop to return LoopOutcome and move restart logic to DaemonService."
+expected_files:
+  - packages/jekko/src/session/prompt.ts
+  - packages/jekko/src/session/daemon.ts
+risks:
+  - "Could regress normal jekko run idle exit behavior."
+verification:
+  - "Plain run exits on idle."
+  - "Daemon run continues after assistant_stop."
+confidence: 0.62
+```
+
+```yaml
+type: risk_review
+task_id: task-123
+target: strategy-002
+verdict: revise
+critical_findings:
+  - "Does not explain processor stop reason mapping."
+  - "Could continue after permission_denied."
+required_changes:
+  - "Add typed ProcessorOutcome."
+  - "Pause daemon on ask permission in headless."
+```
+
+```yaml
+type: evidence_card
+task_id: task-123
+evidence_id: evidence-004
+commands:
+  - command: "bun --cwd packages/jekko test packages/jekko/test/session/daemon-runtime.test.ts"
+    result: pass
+  - command: "jekko run 'hello'"
+    result: pass
+artifacts:
+  - "target/jankurai/daemon-audit.json"
+```
+
+```yaml
+type: handoff_card
+task_id: task-123
+summary: "Best plan is strategy-002 after red-team revisions."
+known_bad_approaches:
+  - "Do not overload session.status with daemon in v1."
+  - "Do not let assistant-generated ZYAL start daemon."
+next_action: "Implement LoopOutcome compatibility layer."
+```
+
+This gives agents a shared “chatter plan” without letting the conversation or Markdown file become the state machine.
+
+---
+
+# 18. MCP guidance
+
+Keep the terminology clean:
+
+```text
+MCP servers are tool/context providers.
+Workers are agents/subagents/sessions.
+```
+
+So ZYAL should not say “spin up multiple MCPs” when it means “spin up multiple coding agents.” It should say:
+
+```yaml
+workers:
+  max_parallel: 3
+  isolation: git_worktree
+```
+
+and separately:
+
+```yaml
+mcp:
+  profiles:
+    audit:
+      required: true
+      allow_tools:
+        - jankurai_audit
+    github:
+      required: false
+      allow_tools:
+        - github_get_issue
+        - github_create_comment
+```
+
+The MCP spec defines MCP as an open protocol for connecting LLM apps to external data sources and tools; that makes it the right place for tool profiles, resources, and health checks, not for worker identity. ([Model Context Protocol][12])
+
+Also, MCP security cannot be an afterthought. Recent MCP security discussions focus on prompt injection, tool abuse, tool-origin visibility, and human approval/consent fatigue. For ZYAL, that means MCP allowlists must be enforced before tool resolution, and required MCP health checks should pause the daemon if a critical server is unhealthy. ([Coalition for Secure AI][13])
+
+---
+
+# 19. TUI syntax highlighting and preview
+
+The TUI should make Crucible visually distinct from Forever.
+
+```text
+∞ FOREVER = gold
+⚗ CRUCIBLE = amber / copper
+✓ STOP CHECKS = green
+⚠ SIDE EFFECTS = orange/red
+🔒 LOCKS = blue/teal
+```
+
+While editing/pasting:
+
+```text
+- ZYAL sentinel line: bright gold
+- `confirm: RUN_FOREVER`: bright gold underline
+- `checkpoint.git.push`: amber/red
+- `permissions`: red/amber when broad
+- `crucible`: amber/copper
+- `scratch`: teal
+- `stop`: green
+- unknown keys: red squiggle
+- unarmed valid ZYAL: inert gray/gold preview
+- armed valid ZYAL: gold confirm dialog
+```
+
+Preview should show:
+
+```text
+FOREVER DAEMON
+  name: Jankurai dirty worktree hardening
+  stop: jankurai audit findings=0 caps=0 + git clean
+  checkpoint: git add/commit/push ask
+  permissions: shell ask, edit allow, push ask
+  routing: direct / standard / crucible / blocked
+  crucible: max 4 rounds, max 8 attempts, 2 active hard tasks
+  scratch: SQLite + mirror, 250kb per task
+  workers: git worktree isolation
+  risks: can run indefinitely, can edit files, can commit, can request push
+```
+
+Active banner:
+
+```text
+∞ FOREVER · Jankurai dirty worktree hardening · iter 42 · stop failed
+⚗ CRUCIBLE · task audit-17 · round 2/4 · evidence 0.58 · risk 0.71
+```
+
+This matters because Jekko already has community reports around compaction continuing unexpectedly, model loops, and subagent hangs/permission issues. Daemon and Crucible modes must be visually and semantically obvious rather than hidden inside normal chat behavior. ([GitHub][14])
+
+---
+
+# 20. Integration with the current ZYAL implementation plan
+
+I would update the existing implementation plan like this.
+
+## Add Phase 1.5: Task Routing and Crucible MVP
+
+After parser/schema/store basics, before swarms/MCP:
+
+```text
+Phase 1.5: Risk router + bounded Crucible lane
+  - Add routing/crucible/scratch schema.
+  - Add daemon-router.ts.
+  - Add daemon-scorer.ts.
+  - Add daemon-crucible.ts.
+  - Add daemon-memory.ts.
+  - Add task score/attempt/memory/strategy/review tables.
+  - Add daemon-only memory/strategy/review tools.
+  - Add tests proving easy tasks bypass Crucible.
+  - Add tests proving hard tasks enter Crucible and stop at max rounds.
+```
+
+## Parser/schema additions
+
+Modify:
+
+```text
+packages/jekko/src/agent-script/schema.ts
+packages/jekko/src/agent-script/parser.ts
+packages/jekko/src/agent-script/examples.ts
+packages/jekko/src/agent-script/parser.test.ts
+packages/jekko/specs/daemon-zyal.md
+```
+
+Add schema classes:
+
+```text
+OcalRouting
+OcalRoutingLane
+OcalRiskScoring
+OcalCrucible
+OcalCruciblePass
+OcalScratch
+OcalPromotion
+OcalCleanup
+```
+
+Parser tests:
+
+```text
+accepts crucible simple preset
+accepts explicit pass graph
+rejects unknown crucible pass type
+rejects unbounded crucible without max_rounds
+rejects scratch.source_of_truth other than sqlite in v1
+rejects promotion with no evidence gate
+rejects worker write crucible with isolation: none
+```
+
+## Store additions
+
+Modify:
+
+```text
+packages/jekko/src/session/daemon.sql.ts
+packages/jekko/src/session/daemon-store.ts
+packages/jekko/src/session/daemon-event.ts
+```
+
+Add migration tables listed above.
+
+## Runtime additions
+
+Modify/create:
+
+```text
+packages/jekko/src/session/daemon.ts
+packages/jekko/src/session/daemon-router.ts
+packages/jekko/src/session/daemon-scorer.ts
+packages/jekko/src/session/daemon-crucible.ts
+packages/jekko/src/session/daemon-memory.ts
+packages/jekko/src/session/daemon-strategy.ts
+packages/jekko/src/session/daemon-review.ts
+packages/jekko/src/session/daemon-cleanup.ts
+packages/jekko/src/session/daemon-workers.ts
+```
+
+Daemon task loop becomes:
+
+```text
+select task
+  ↓
+score task
+  ↓
+route task
+  ↓
+direct/standard/crucible/blocked
+  ↓
+record evidence
+  ↓
+checkpoint if appropriate
+  ↓
+evaluate global stop
+```
+
+## API additions
+
+Add:
+
+```text
+GET  /daemon/:runID/tasks
+GET  /daemon/:runID/tasks/:taskID
+GET  /daemon/:runID/tasks/:taskID/memory
+GET  /daemon/:runID/tasks/:taskID/crucible
+POST /daemon/:runID/tasks/:taskID/route
+POST /daemon/:runID/tasks/:taskID/block
+POST /daemon/:runID/tasks/:taskID/cleanup
+```
+
+## TUI additions
+
+Add:
+
+```text
+Crucible lane panel
+Task risk/evidence badges
+Scratch memory viewer
+Strategy reservoir viewer
+Review/evidence cards
+Cleanup/archive status
+```
+
+---
+
+# 21. Crucible-specific tests
+
+Add these to the test plan:
+
+```text
+Parser:
+  - valid crucible preset accepted
+  - explicit passes accepted
+  - unbounded crucible rejected
+  - write-enabled crucible without worktree isolation rejected
+  - assistant-origin crucible text is inert
+
+Router:
+  - easy low-risk task routes direct
+  - medium task routes standard
+  - failed twice routes crucible
+  - high risk + low evidence routes crucible
+  - low-confidence-only without objective signal does not route crucible
+  - blocked route when missing stop/evidence predicate
+
+Memory:
+  - task memory writes with provenance
+  - scratch mirror generated from DB
+  - raw tool outputs pruned
+  - pinned handoff survives hard context clear
+  - completed task cleanup archives and releases locks
+
+Crucible:
+  - blind strategy pass cannot read scratch
+  - aware strategy pass reads summary only
+  - red-team review can force another round
+  - max rounds creates blocker
+  - promotion requires evidence gate
+  - promoted task moves to implementation lane
+
+Daemon:
+  - global daemon continues while crucible task maxes out and another task remains
+  - global daemon stops only when stop checks pass
+  - normal non-daemon prompt behavior unchanged
+```
+
+---
+
+# 22. My recommended public terminology
+
+Use community-aligned names where possible:
+
+```text
+routing
+  matches Anthropic routing and workflow routing
+
+checkpoint
+  matches LangGraph and Microsoft Agent Framework
+
+workers
+  matches orchestrator-workers
+
+evaluator_optimizer
+  matches Anthropic pattern
+
+debate
+  matches multi-agent debate research
+
+scratch
+  user-friendly, but implemented as task memory
+
+strategy_reservoir
+  user-friendly Tree-of-Thoughts-like search
+
+promotion
+  makes clear that hard-task output is not automatically committed
+
+evidence_gate
+  makes clear that confidence is objective, not vibes
+```
+
+Avoid:
+
+```text
+MCP agents
+  MCP servers are tools/context, not workers.
+
+thoughts
+  invites chain-of-thought leakage and ambiguity.
+
+auto-approve
+  unsafe and unnecessary.
+
+self_confidence_gate
+  model confidence is not evidence.
+
+forever_crucible
+  daemon may be forever; crucible must be bounded.
+```
+
+---
+
+# 23. Final recommendation
+
+Add **ZYAL Crucible Lane** to the plan.
+
+The full mental model becomes:
+
+```text
+ZYAL daemon:
+  host-enforced forever loop
+
+ZYAL routing:
+  host decides easy / standard / hard / blocked
+
+ZYAL crucible:
+  bounded hard-task research, strategy, critique, prototype, and evidence loop
+
+ZYAL scratch:
+  durable per-task memory, not context-window sludge
+
+ZYAL promotion:
+  only evidence-gated hard tasks reach implementation
+
+ZYAL cleanup:
+  archive useful memory, delete stale scratch/worktrees, release locks
+```
+
+This solves the exact failure mode you are worried about:
+
+```text
+Easy tasks get done.
+Hard tasks remain.
+The daemon does not stall or thrash.
+Hard tasks accumulate structured knowledge across fresh agents.
+Fresh agents can either avoid scratch to generate independent plans,
+or read scratch to improve the best known plan.
+The runtime promotes only when evidence is strong enough.
+The task scratchpad is bounded and cleaned up.
+The outer daemon still runs forever until global stop checks pass.
+```
+
+That is the most powerful version I would add to the current ZYAL plan: **forever runtime outside, bounded crucible inside, evidence gates between them.**
+
+[1]: https://docs.langchain.com/oss/python/langgraph/overview "LangGraph overview - Docs by LangChain"
+[2]: https://learn.microsoft.com/en-us/agent-framework/workflows/ "Microsoft Agent Framework Workflows | Microsoft Learn"
+[3]: https://docs.crewai.com/en/concepts/flows "Flows - CrewAI"
+[4]: https://www.anthropic.com/research/building-effective-agents "Building Effective AI Agents \ Anthropic"
+[5]: https://developers.openai.com/api/docs/guides/agents/orchestration "Orchestration and handoffs | OpenAI API"
+[6]: https://arxiv.org/abs/2303.17651 "[2303.17651] Self-Refine: Iterative Refinement with Self-Feedback"
+[7]: https://github.com/OpenHands/OpenHands/blob/main/skills/README.md "OpenHands/skills/README.md at main · OpenHands/OpenHands · GitHub"
+[8]: https://jekko.ai/docs/agents/ "Agents | Jekko"
+[9]: https://openreview.net/pdf?id=vAElhFcKW6&utm_source=chatgpt.com "Language Agents with Verbal Reinforcement Learning"
+[10]: https://arxiv.org/abs/2305.10601?utm_source=chatgpt.com "Tree of Thoughts: Deliberate Problem Solving with Large Language Models"
+[11]: https://arxiv.org/abs/2305.14325 "[2305.14325] Improving Factuality and Reasoning in Language Models through Multiagent Debate"
+[12]: https://modelcontextprotocol.io/specification/2025-11-25?utm_source=chatgpt.com "Specification"
+[13]: https://www.coalitionforsecureai.org/securing-the-ai-agent-revolution-a-practical-guide-to-mcp-security/?utm_source=chatgpt.com "A Practical Guide to Model Context Protocol Security"
+[14]: https://github.com/anomalyco/jekko/issues/18794?utm_source=chatgpt.com "compact causes the agent to continue unexpectedly #18794"

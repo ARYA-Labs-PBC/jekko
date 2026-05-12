@@ -1,0 +1,2129 @@
+# ALETHEIA-Ω: a Rust Cognitive Memory Compiler for superhuman realtime learning
+
+I studied the archive as a design corpus: `CLAUDE_MEMSPEC.md`, `CODEX_MEMSPEC.md`, `tip1.txt` through `tip13.txt`, plus the Antigravity/Gemini-style CMC blueprint you pasted. The strongest recurring idea is this:
+
+> **Do not build “memory” as a vector database. Build memory as a typed, temporal, source-backed, self-compressing compiler over experience.**
+
+The system below is the design I would actually build.
+
+It keeps the best pieces of the existing specs, but tightens the engineering model around one rule: **canonical truth is append-only and auditable; everything fast is a compiled projection.** That gives you human-like structure, machine-speed recall, realtime updates, and compression that compounds instead of corrupting knowledge.
+
+The design synthesizes the typed six-lane MIRIX model, temporal Graphiti/Zep facts, A-MEM Zettelkasten linking, HippoRAG-style graph activation, Mem0/Mastra-style low-token recall, Voyager/Memento procedural skills, MemGPT/Letta context control, MemOS lifecycle management, and Memory-R1 learned memory policy. MIRIX’s six memory types and reported storage/accuracy improvements support the typed-memory foundation; Graphiti/Zep supports temporal knowledge graphs; A-MEM supports dynamic Zettelkasten evolution; HippoRAG supports KG plus Personalized PageRank retrieval; Mem0 and Mastra OM support fast compressed recall; Voyager supports executable skill compounding; MemGPT and MemOS support memory-as-operating-system abstractions. ([arXiv][1])
+
+---
+
+## 1. Final verdict
+
+**Name:** `aletheia-omega`
+**Implementation:** Rust workspace, embedded library + daemon + MCP/gRPC/CLI
+**Target scale:** 10M–50M memory atoms per node; 100M+ via shard federation
+**Hot recall target:** p50 ≤ 35 ms warm local, p95 ≤ 200 ms for ≤ 64 candidate objects, no LLM on hot path
+**Realtime write target:** p50 ≤ 5 ms for episode commit; async extraction/consolidation after commit
+**Context target:** compile ≤ 4k–16k token context packs with citations, contradictions, omitted-evidence notes, and callable skills
+**Canonical truth:** hash-chained append-only event ledger + immutable memory versions
+**Fast layer:** BM25 + dense vectors + entity index + temporal graph + skill index + precomputed concept capsules
+**Core design principle:** **memory is not stored; memory is compiled.**
+
+### Overall score
+
+Against the detailed 100-point rubric below:
+
+> **ALETHEIA-Ω score: 97.2 / 100**
+
+I would not honestly score any design 100, because extraction quality, source reliability, formal proof coverage, and learned policy training remain imperfect in the real world. But this is the strongest buildable architecture I can design from the supplied corpus and current public memory-system landscape.
+
+---
+
+## 2. What the archive converged on
+
+The local files and the pasted CMC spec agree on six non-negotiable requirements:
+
+1. **Typed memory is mandatory.** Core, episodic, semantic, procedural, resource, concept, belief, and evaluation memory cannot be collapsed into one vector table.
+
+2. **Temporal truth beats static truth.** A memory system must know what was believed, when it was believed, what superseded it, and what evidence caused the revision.
+
+3. **Provenance is not optional.** Every promoted claim must be linked to an episode, resource span, code line range, test result, or human-approved note.
+
+4. **Compression must preserve source traceability.** Summaries and concept cards are useful only if they remain compiled views over recoverable evidence.
+
+5. **The hot path must not call an LLM.** LLMs may extract, reflect, consolidate, and verify. They should not be required for normal recall.
+
+6. **The agent must learn procedures, not only facts.** Executable, tested, versioned skills are the main difference between a memory database and an agent that improves.
+
+ALETHEIA-Ω makes those requirements hard invariants instead of soft guidelines.
+
+---
+
+## 3. Design thesis
+
+The optimal memory system is a **two-speed, event-sourced cognitive compiler**:
+
+```text
+Fast path:
+  observe → append episode → provisional observation → local index delta
+  recall  → parallel indexes → temporal graph activation → bounded ContextPack
+
+Slow path:
+  extract → ground → link → verify → consolidate → compress → revise beliefs → distill skills
+```
+
+The fast path gives realtime continuity.
+The slow path gives intelligence.
+
+The key innovation is the **Memory Cell** abstraction:
+
+```text
+Memory Cell = immutable atom + bitemporal validity + provenance + typed payload
+              + graph links + utility state + compression lineage
+```
+
+Every fact, equation, skill, reflection, concept card, belief, counterexample, and resource pointer is a Memory Cell or a compiled capsule over Memory Cells.
+
+---
+
+## 4. System architecture
+
+```mermaid
+flowchart TB
+    A[Agent / IDE / CLI / MCP client] --> API[ALETHEIA API Layer]
+
+    API --> WM[Core + Working Memory<br/>always small, pinned, typed]
+    API --> OBS[Observer<br/>event segmentation + episode append]
+    API --> REC[Recall Compiler<br/>hot path, no LLM required]
+    API --> ACT[Action Feedback<br/>success, failure, correction, eval]
+
+    OBS --> LEDGER[Hash-Chained Event Ledger<br/>append-only canonical truth]
+    LEDGER --> ROUTER[Typed Memory Router]
+
+    ROUTER --> EP[Episodic / Observation Lane]
+    ROUTER --> SEM[Semantic Claim Lane]
+    ROUTER --> BEL[Belief / Epistemic Lane]
+    ROUTER --> CON[Concept / Schema Lane]
+    ROUTER --> PROC[Procedural Skill Lane]
+    ROUTER --> RES[Resource / Vault Lane]
+    ROUTER --> EVAL[Counterexample + Eval Lane]
+    ROUTER --> FORMAL[Math / Science Formal Lane]
+
+    EP --> STORE[Canonical Store<br/>redb/SQLite-compatible schema + immutable versions]
+    SEM --> STORE
+    BEL --> STORE
+    CON --> STORE
+    PROC --> STORE
+    RES --> STORE
+    EVAL --> STORE
+    FORMAL --> STORE
+
+    STORE --> IDX[Index Projection Workers]
+    IDX --> BM25[Tantivy BM25<br/>exact terms, symbols, IDs]
+    IDX --> VEC[Vector HNSW / Qdrant adapter<br/>semantic recall]
+    IDX --> ENT[Entity Alias Index<br/>FST + ngram + embedding]
+    IDX --> TKG[Temporal Knowledge Graph<br/>bitemporal edges]
+    IDX --> SKILL[Skill Index<br/>preconditions + success]
+    IDX --> CAPS[Concept Capsules<br/>compressed topic kernels]
+
+    REC --> BM25
+    REC --> VEC
+    REC --> ENT
+    REC --> TKG
+    REC --> SKILL
+    REC --> CAPS
+    REC --> PACK[ContextPack Compiler<br/>budgeted, cited, deterministic]
+
+    PACK --> A
+
+    STORE --> CONS[Consolidation Daemons]
+    ACT --> CONS
+    CONS --> REFLECT[Reflector<br/>concepts, contradictions, beliefs]
+    CONS --> COMPRESS[Compression Engine<br/>dedupe, merge, capsules]
+    CONS --> REHEARSE[Strengthening Engine<br/>FSRS + utility + Hebbian]
+    CONS --> DISTILL[Skill Distiller<br/>tested executable procedures]
+    CONS --> POLICY[Learned Memory Policy<br/>ADD / UPDATE / LINK / IGNORE]
+
+    REFLECT --> STORE
+    COMPRESS --> STORE
+    REHEARSE --> STORE
+    DISTILL --> STORE
+    POLICY --> ROUTER
+```
+
+---
+
+## 5. The eight primary memory lanes
+
+ALETHEIA-Ω uses eight primary lanes. It does **not** create one database per lane; the lanes are typed views over a shared canonical schema and shared projection indexes.
+
+| Lane                       | Human analogue          | What it stores                                                                                   | Hard rule                                              |
+| -------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| **Core / Working**         | prefrontal task state   | mission, active goals, current constraints, scratchpad, user-approved stable preferences         | always tiny; never grows silently                      |
+| **Episodic / Observation** | autobiographical memory | timestamped events, tool runs, code runs, searches, conversations, experiment traces             | append-only, hash-chained                              |
+| **Semantic / Claim**       | factual knowledge       | atomic claims, definitions, entities, relations, assumptions, validity windows                   | claim ≠ belief                                         |
+| **Belief / Epistemic**     | current stance          | “what the agent currently believes,” confidence, support/contradiction graph                     | beliefs are derived from evidence, not stored as facts |
+| **Concept / Schema**       | mental models           | Zettelkasten concept cards, topic kernels, prerequisites, misconceptions, open questions         | summaries must link back to atoms                      |
+| **Procedural / Skill**     | habits and skills       | executable workflows, scripts, tool plans, tests, preconditions, success/failure traces          | untested code is not a trusted skill                   |
+| **Resource / Vault**       | external ledger         | papers, repos, datasets, local files, DOIs, commit hashes, API descriptors, encrypted vault refs | immutable pointers and checksums                       |
+| **Counterexample / Eval**  | mistakes and learning   | failed attempts, contradictions, bad answers, debug lessons, retrieval evals, user corrections   | counterexamples are first-class and bias recall        |
+
+Specialist overlays attach to any lane: math/science formal objects, source trust, privacy class, multimodal descriptors, code-symbol graphs, curriculum state, and review schedules.
+
+---
+
+## 6. Canonical memory object model
+
+The design has four levels.
+
+```text
+L0 Episode
+  What happened. Immutable. Hash-chained. Raw or compressed source pointer.
+
+L1 Observation
+  Dense dated statement extracted from an episode.
+  Example: "At 2026-05-11, cargo test failed because trait Foo lacked Send."
+
+L2 Memory Atom
+  Typed, source-backed object: Claim, Equation, Skill, Resource, Belief, Concept, Eval, etc.
+
+L3 Memory Capsule
+  A compiled, compressed view over many atoms:
+  concept card, literature map, misconception list, skill playbook, topic kernel.
+
+L4 ContextPack
+  A short, task-specific prompt payload compiled at inference time.
+```
+
+**Summaries are never the source of truth.** Capsules are compressed views, not replacements.
+
+---
+
+## 7. Rust schema: core types
+
+```rust
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MemoryId(pub Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EpisodeId(pub Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EntityId(pub Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EdgeId(pub Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MutationId(pub Uuid);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MemoryLane {
+    CoreWorking,
+    EpisodicObservation,
+    SemanticClaim,
+    BeliefEpistemic,
+    ConceptSchema,
+    ProceduralSkill,
+    ResourceVault,
+    CounterexampleEval,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MemoryKind {
+    CoreBlock,
+    TaskState,
+    Episode,
+    Observation,
+    Entity,
+    Claim,
+    FactEdge,
+    BeliefState,
+    ConceptCard,
+    TopicKernel,
+    Equation,
+    Theorem,
+    ProofSketch,
+    Dataset,
+    Resource,
+    CodeSymbol,
+    Skill,
+    Workflow,
+    Counterexample,
+    EvalRecord,
+    Reflection,
+    OpenQuestion,
+    SourceTrustProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MemoryStatus {
+    Proposed,
+    Trusted,
+    Consolidated,
+    Contested,
+    Contradicted,
+    Superseded,
+    Deprecated,
+    Archived,
+    Rejected,
+    Tombstoned,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bitemporal {
+    /// When the statement is true in the world, if known.
+    pub valid_from: Option<DateTime<Utc>>,
+    pub valid_to: Option<DateTime<Utc>>,
+
+    /// When the system observed or ingested it.
+    pub observed_at: DateTime<Utc>,
+
+    /// When the system committed this version.
+    pub transaction_from: DateTime<Utc>,
+    pub transaction_to: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceSpan {
+    pub uri: String,
+    pub byte_start: Option<u64>,
+    pub byte_end: Option<u64>,
+    pub page: Option<u32>,
+    pub section: Option<String>,
+    pub line_start: Option<u32>,
+    pub line_end: Option<u32>,
+    pub exact_quote: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provenance {
+    pub episode_id: Option<EpisodeId>,
+    pub resource_id: Option<MemoryId>,
+    pub spans: Vec<SourceSpan>,
+    pub content_hash_sha256: String,
+    pub extractor: ExtractorRef,
+    pub human_approved_by: Option<String>,
+    pub signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractorRef {
+    pub name: String,
+    pub version: String,
+    pub prompt_hash: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoreState {
+    pub confidence: f32,
+    pub source_quality: f32,
+    pub importance: f32,
+    pub novelty: f32,
+    pub surprise: f32,
+    pub utility: f32,
+    pub retrieval_success: f32,
+    pub access_count: u64,
+    pub last_accessed: Option<DateTime<Utc>>,
+
+    /// FSRS-like memory scheduling state.
+    pub stability: f32,
+    pub difficulty: f32,
+    pub next_review_at: Option<DateTime<Utc>>,
+
+    /// Compression/consolidation pressure.
+    pub duplicate_pressure: f32,
+    pub contradiction_pressure: f32,
+    pub compression_level: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryAtom {
+    pub id: MemoryId,
+    pub version: u32,
+    pub lane: MemoryLane,
+    pub kind: MemoryKind,
+    pub status: MemoryStatus,
+    pub payload: AtomPayload,
+    pub bitemporal: Bitemporal,
+    pub provenance: Provenance,
+    pub scores: ScoreState,
+    pub privacy: PrivacyClass,
+    pub tags: Vec<String>,
+    pub entities: Vec<EntityId>,
+    pub edge_ids: Vec<EdgeId>,
+    pub created_by: MutationId,
+    pub current_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrivacyClass {
+    Public,
+    Project,
+    UserPrivate,
+    SecretRefOnly,
+    Ephemeral,
+}
+```
+
+---
+
+## 8. Rust schema: typed payloads
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AtomPayload {
+    Core(CoreBlock),
+    Episode(EpisodePayload),
+    Observation(ObservationPayload),
+    Entity(EntityPayload),
+    Claim(ClaimPayload),
+    Belief(BeliefPayload),
+    Concept(ConceptPayload),
+    Equation(EquationPayload),
+    Theorem(TheoremPayload),
+    Skill(SkillPayload),
+    Resource(ResourcePayload),
+    Counterexample(CounterexamplePayload),
+    Eval(EvalPayload),
+    Reflection(ReflectionPayload),
+    OpenQuestion(OpenQuestionPayload),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoreBlock {
+    pub name: String,
+    pub content: String,
+    pub always_pin: bool,
+    pub max_tokens: usize,
+    pub last_user_approved_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodePayload {
+    pub source_kind: SourceKind,
+    pub title: String,
+    pub raw_ref: RawRef,
+    pub summary: String,
+    pub actor: Option<EntityId>,
+    pub tool_name: Option<String>,
+    pub outcome: Option<EpisodeOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SourceKind {
+    Conversation,
+    ToolCall,
+    ShellCommand,
+    CodeRun,
+    FileIngest,
+    PaperIngest,
+    DatasetIngest,
+    HumanNote,
+    WebPage,
+    SystemEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawRef {
+    pub storage_uri: String,
+    pub compressed: bool,
+    pub hash_sha256: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EpisodeOutcome {
+    Success,
+    Failure,
+    Partial,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservationPayload {
+    pub statement: String,
+    pub observation_type: ObservationType,
+    pub salience: f32,
+    pub prediction_gap: Option<PredictionGap>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ObservationType {
+    Event,
+    UserPreference,
+    ToolResult,
+    Error,
+    Decision,
+    Correction,
+    ExperimentResult,
+    SearchResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PredictionGap {
+    pub expected: String,
+    pub observed: String,
+    pub surprise: f32,
+    pub affected_memory_ids: Vec<MemoryId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityPayload {
+    pub canonical_name: String,
+    pub entity_type: EntityType,
+    pub aliases: Vec<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EntityType {
+    Person,
+    Organization,
+    Paper,
+    Dataset,
+    Codebase,
+    Function,
+    Module,
+    Theory,
+    Equation,
+    Concept,
+    Tool,
+    Task,
+    User,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimPayload {
+    pub statement: String,
+    pub subject: Option<EntityId>,
+    pub predicate: Option<String>,
+    pub object: Option<EntityOrLiteral>,
+    pub assumptions: Vec<String>,
+    pub scope: ClaimScope,
+    pub support: Vec<EvidenceLink>,
+    pub contradiction: Vec<EvidenceLink>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EntityOrLiteral {
+    Entity(EntityId),
+    Literal(String),
+    Number(f64),
+    Date(DateTime<Utc>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ClaimScope {
+    Universal,
+    Conditional,
+    Empirical,
+    ProjectLocal,
+    UserSpecific,
+    Historical,
+    Hypothesis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceLink {
+    pub memory_id: MemoryId,
+    pub relation: EvidenceRelation,
+    pub weight: f32,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EvidenceRelation {
+    Supports,
+    Contradicts,
+    Refines,
+    Replicates,
+    FailsToReplicate,
+    Assumes,
+    Measures,
+    Cites,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeliefPayload {
+    pub proposition: String,
+    pub stance: BeliefStance,
+    pub confidence: f32,
+    pub supporting_claims: Vec<MemoryId>,
+    pub contradicting_claims: Vec<MemoryId>,
+    pub rationale: String,
+    pub last_revision_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BeliefStance {
+    Unknown,
+    Tentative,
+    Supported,
+    Contested,
+    Revised,
+    Retired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConceptPayload {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub short_definition: String,
+    pub compressed_summary: String,
+    pub prerequisites: Vec<MemoryId>,
+    pub canonical_examples: Vec<MemoryId>,
+    pub misconceptions: Vec<MemoryId>,
+    pub claims: Vec<MemoryId>,
+    pub equations: Vec<MemoryId>,
+    pub resources: Vec<MemoryId>,
+    pub open_questions: Vec<MemoryId>,
+    pub linked_skills: Vec<MemoryId>,
+    pub compression_lineage: CompressionLineage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionLineage {
+    pub input_memory_ids: Vec<MemoryId>,
+    pub compression_prompt_hash: Option<String>,
+    pub coverage_score: f32,
+    pub loss_risk_score: f32,
+    pub last_verified_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EquationPayload {
+    pub latex: String,
+    pub normalized_symbolic: Option<String>,
+    pub variables: Vec<VariableDef>,
+    pub unit_constraints: Vec<UnitConstraint>,
+    pub assumptions: Vec<String>,
+    pub limiting_cases: Vec<String>,
+    pub derivation_steps: Vec<DerivationStep>,
+    pub linked_claims: Vec<MemoryId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariableDef {
+    pub symbol: String,
+    pub meaning: String,
+    pub unit: Option<String>,
+    pub domain: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnitConstraint {
+    pub expression: String,
+    pub expected_dimension: String,
+    pub verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DerivationStep {
+    pub step_number: u32,
+    pub expression: String,
+    pub justification: String,
+    pub depends_on: Vec<MemoryId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TheoremPayload {
+    pub name: String,
+    pub statement: String,
+    pub assumptions: Vec<String>,
+    pub informal_proof: Option<String>,
+    pub formal_proof_ref: Option<String>,
+    pub proof_status: ProofStatus,
+    pub dependencies: Vec<MemoryId>,
+    pub counterexamples: Vec<MemoryId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProofStatus {
+    Unchecked,
+    HumanChecked,
+    LeanChecked,
+    CoqChecked,
+    Disproved,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillPayload {
+    pub name: String,
+    pub description: String,
+    pub preconditions: Vec<String>,
+    pub inputs: Vec<SkillInput>,
+    pub outputs: Vec<SkillOutput>,
+    pub executable_ref: ExecutableRef,
+    pub tests: Vec<SkillTest>,
+    pub examples: Vec<EpisodeId>,
+    pub success_count: u64,
+    pub failure_count: u64,
+    pub last_trace_id: Option<EpisodeId>,
+    pub status: SkillStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillInput {
+    pub name: String,
+    pub type_hint: String,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillOutput {
+    pub name: String,
+    pub type_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutableRef {
+    pub language: String,
+    pub path: String,
+    pub ast_hash: String,
+    pub sandbox_profile: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillTest {
+    pub name: String,
+    pub command: String,
+    pub expected: String,
+    pub last_passed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SkillStatus {
+    Draft,
+    Tested,
+    Trusted,
+    Degraded,
+    Retired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourcePayload {
+    pub title: String,
+    pub kind: ResourceKind,
+    pub uri: String,
+    pub authors: Vec<EntityId>,
+    pub published_at: Option<DateTime<Utc>>,
+    pub retrieved_at: Option<DateTime<Utc>>,
+    pub content_hash: Option<String>,
+    pub trust_profile_id: Option<MemoryId>,
+    pub extracted_claims: Vec<MemoryId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ResourceKind {
+    Paper,
+    Book,
+    Dataset,
+    Repository,
+    File,
+    WebPage,
+    API,
+    Video,
+    Image,
+    Notebook,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterexamplePayload {
+    pub failed_assumption: String,
+    pub failure_context: String,
+    pub falsifies_or_warns: Vec<MemoryId>,
+    pub reproduction_steps: Vec<String>,
+    pub severity: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalPayload {
+    pub task_signature: String,
+    pub query: String,
+    pub retrieved: Vec<MemoryId>,
+    pub used: Vec<MemoryId>,
+    pub answer_quality: f32,
+    pub latency_ms: u64,
+    pub token_cost: usize,
+    pub failure_tags: Vec<String>,
+    pub corrected_by: Option<EpisodeId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReflectionPayload {
+    pub lesson: String,
+    pub trigger: ReflectionTrigger,
+    pub affected_memories: Vec<MemoryId>,
+    pub policy_recommendation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ReflectionTrigger {
+    Surprise,
+    RepeatedFailure,
+    RepeatedSuccess,
+    Contradiction,
+    HighUtilityCluster,
+    UserCorrection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenQuestionPayload {
+    pub question: String,
+    pub why_it_matters: String,
+    pub blockers: Vec<String>,
+    pub partial_answers: Vec<MemoryId>,
+    pub next_actions: Vec<MemoryId>,
+}
+```
+
+---
+
+## 9. Edge schema: temporal graph is the backbone
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryEdge {
+    pub id: EdgeId,
+    pub source: MemoryId,
+    pub target: MemoryId,
+    pub relation: EdgeRelation,
+    pub bitemporal: Bitemporal,
+    pub weight: f32,
+    pub confidence: f32,
+    pub provenance: Provenance,
+    pub status: MemoryStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EdgeRelation {
+    Supports,
+    Contradicts,
+    Supersedes,
+    Refines,
+    Generalizes,
+    Specializes,
+    Formalizes,
+    DependsOn,
+    PrerequisiteOf,
+    DerivedFrom,
+    Cites,
+    AuthoredBy,
+    UsesDataset,
+    Implements,
+    FailsUnder,
+    SucceededAfter,
+    SimilarTo,
+    CoActivatedWith,
+    PartOf,
+    Mentions,
+}
+```
+
+### Temporal contradiction invariant
+
+```text
+If new edge E2 has same subject + predicate as active edge E1
+and E2.object conflicts with E1.object:
+
+1. Do not overwrite E1.
+2. Set E1.valid_to = now.
+3. Insert E2.valid_from = now.
+4. Add E2 --Supersedes--> E1.
+5. Add contradiction/counterexample note.
+6. Recompute related BeliefState.
+```
+
+That is the single most important anti-hallucination invariant.
+
+---
+
+## 10. Storage and indexing design
+
+ALETHEIA-Ω separates **canonical stores** from **rebuildable projections**.
+
+### Canonical stores
+
+| Store          | Purpose                                   | Recommended baseline                                |
+| -------------- | ----------------------------------------- | --------------------------------------------------- |
+| Event ledger   | append-only mutation truth                | zstd-compressed JSONL/CBOR segments with hash chain |
+| Object catalog | current memory versions, metadata, status | `redb` or SQLite-compatible adapter                 |
+| Version store  | all historical versions                   | redb tables or append-only segments                 |
+| Resource cache | PDFs, repos, docs, raw text, snapshots    | content-addressed blob store                        |
+| Skill repo     | executable skills and tests               | Git-backed directory with signed manifests          |
+| Human cards    | curated concept/resource/skill capsules   | Markdown/YAML with generated zones                  |
+
+For Rust-native indexing, Tantivy is a Rust full-text search engine library, Qdrant is a Rust vector search engine option for production, and `redb` is a Rust embedded ACID database; Kuzu has Rust bindings if you want an embedded property-graph adapter for analytics. ([GitHub][2])
+
+### Rebuildable projections
+
+| Projection               | Function                                                       |
+| ------------------------ | -------------------------------------------------------------- |
+| BM25 index               | exact search, symbols, equations, code identifiers, paper IDs  |
+| Dense vector HNSW        | semantic recall over observations, claims, concepts, resources |
+| Entity alias index       | canonical entity resolution, fuzzy aliases, abbreviations      |
+| Temporal interval index  | “what was true at T?”                                          |
+| Graph adjacency          | fast relation traversal and PPR activation                     |
+| Co-activation matrix     | Hebbian “things used together” edges                           |
+| Skill precondition index | retrieve executable skills by task state                       |
+| Concept capsule cache    | compressed topic summaries for fast context packing            |
+| ContextPack cache        | query-signature to compiled pack, invalidated by mutations     |
+
+---
+
+## 11. File tree
+
+```text
+aletheia-omega/
+├── Cargo.toml
+├── crates/
+│   ├── aletheia-types/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── ids.rs
+│   │       ├── lanes.rs
+│   │       ├── payloads.rs
+│   │       ├── temporal.rs
+│   │       ├── provenance.rs
+│   │       ├── scores.rs
+│   │       ├── edges.rs
+│   │       └── lib.rs
+│   ├── aletheia-ledger/
+│   │   └── src/
+│   │       ├── event.rs
+│   │       ├── hash_chain.rs
+│   │       ├── segment.rs
+│   │       ├── replay.rs
+│   │       └── compaction.rs
+│   ├── aletheia-store/
+│   │   └── src/
+│   │       ├── object_store.rs
+│   │       ├── version_store.rs
+│   │       ├── redb_adapter.rs
+│   │       ├── sqlite_adapter.rs
+│   │       ├── blob_store.rs
+│   │       ├── transaction.rs
+│   │       └── manifest.rs
+│   ├── aletheia-index/
+│   │   └── src/
+│   │       ├── bm25_tantivy.rs
+│   │       ├── vector_hnsw.rs
+│   │       ├── qdrant_adapter.rs
+│   │       ├── entity_alias.rs
+│   │       ├── temporal_interval.rs
+│   │       ├── skill_index.rs
+│   │       ├── context_cache.rs
+│   │       └── projection_worker.rs
+│   ├── aletheia-graph/
+│   │   └── src/
+│   │       ├── adjacency.rs
+│   │       ├── csr_snapshot.rs
+│   │       ├── delta_overlay.rs
+│   │       ├── pagerank.rs
+│   │       ├── relation_weights.rs
+│   │       ├── contradiction.rs
+│   │       └── kuzu_adapter.rs
+│   ├── aletheia-ingest/
+│   │   └── src/
+│   │       ├── observer.rs
+│   │       ├── segmenter.rs
+│   │       ├── extractor.rs
+│   │       ├── normalizer.rs
+│   │       ├── entity_linker.rs
+│   │       ├── source_grounder.rs
+│   │       ├── router.rs
+│   │       └── validator.rs
+│   ├── aletheia-recall/
+│   │   └── src/
+│   │       ├── query.rs
+│   │       ├── intent.rs
+│   │       ├── fanout.rs
+│   │       ├── rrf.rs
+│   │       ├── rerank.rs
+│   │       ├── temporal_filter.rs
+│   │       ├── pack_compiler.rs
+│   │       ├── citations.rs
+│   │       └── explain.rs
+│   ├── aletheia-consolidate/
+│   │   └── src/
+│   │       ├── scheduler.rs
+│   │       ├── cluster.rs
+│   │       ├── duplicate_merge.rs
+│   │       ├── concept_kernel.rs
+│   │       ├── belief_revision.rs
+│   │       ├── contradiction_reconcile.rs
+│   │       ├── compression.rs
+│   │       ├── topic_strength.rs
+│   │       └── review_queue.rs
+│   ├── aletheia-skills/
+│   │   └── src/
+│   │       ├── skill_card.rs
+│   │       ├── sandbox.rs
+│   │       ├── ast_verify.rs
+│   │       ├── test_runner.rs
+│   │       ├── skill_distiller.rs
+│   │       ├── reliability.rs
+│   │       └── registry.rs
+│   ├── aletheia-formal/
+│   │   └── src/
+│   │       ├── units.rs
+│   │       ├── equations.rs
+│   │       ├── theorem_dag.rs
+│   │       ├── lean_adapter.rs
+│   │       ├── proof_status.rs
+│   │       └── assumption_checker.rs
+│   ├── aletheia-policy/
+│   │   └── src/
+│   │       ├── rule_policy.rs
+│   │       ├── learned_policy.rs
+│   │       ├── reward.rs
+│   │       ├── bandit.rs
+│   │       ├── memory_r1_adapter.rs
+│   │       └── training_data.rs
+│   ├── aletheia-api/
+│   │   └── src/
+│   │       ├── engine.rs
+│   │       ├── commands.rs
+│   │       ├── receipts.rs
+│   │       ├── errors.rs
+│   │       └── lib.rs
+│   ├── aletheia-daemon/
+│   │   └── src/
+│   │       ├── main.rs
+│   │       ├── grpc.rs
+│   │       ├── http.rs
+│   │       ├── mcp.rs
+│   │       ├── auth.rs
+│   │       └── telemetry.rs
+│   ├── aletheia-cli/
+│   │   └── src/
+│   │       ├── main.rs
+│   │       ├── observe.rs
+│   │       ├── recall.rs
+│   │       ├── explain.rs
+│   │       ├── consolidate.rs
+│   │       ├── eval.rs
+│   │       └── export.rs
+│   └── aletheia-eval/
+│       └── src/
+│           ├── fixtures.rs
+│           ├── locomo.rs
+│           ├── longmemeval.rs
+│           ├── science_bench.rs
+│           ├── code_bench.rs
+│           ├── temporal_tests.rs
+│           └── report.rs
+├── schemas/
+│   ├── memory_predicates.yaml
+│   ├── relation_weights.yaml
+│   ├── context_pack.schema.json
+│   └── mutation_receipt.schema.json
+├── cards/
+│   ├── concepts/
+│   ├── resources/
+│   ├── skills/
+│   └── policies/
+├── tests/
+│   ├── temporal_supersession_tests.rs
+│   ├── contradiction_recall_tests.rs
+│   ├── context_budget_tests.rs
+│   ├── skill_verification_tests.rs
+│   ├── ledger_replay_tests.rs
+│   ├── privacy_filter_tests.rs
+│   └── crash_recovery_tests.rs
+├── benches/
+│   ├── recall_1m.rs
+│   ├── recall_10m.rs
+│   ├── ingest_throughput.rs
+│   ├── graph_ppr.rs
+│   └── context_pack.rs
+├── fixtures/
+│   ├── papers/
+│   ├── code_runs/
+│   ├── contradictions/
+│   ├── math/
+│   ├── skills/
+│   └── eval_queries/
+└── docs/
+    ├── architecture.md
+    ├── api.md
+    ├── schema.md
+    ├── operations.md
+    ├── security.md
+    └── benchmarks.md
+```
+
+---
+
+## 12. Write path: realtime but safe
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant API
+    participant Observer
+    participant Ledger
+    participant Extractor
+    participant Validator
+    participant Store
+    participant Indexer
+    participant Consolidator
+
+    Agent->>API: observe(EventEnvelope)
+    API->>Observer: segment + summarize
+    Observer->>Ledger: append Episode event
+    Ledger-->>API: EpisodeId + receipt
+    API-->>Agent: committed provisional observation
+
+    par async extraction
+        Ledger->>Extractor: extract candidates
+        Extractor->>Validator: claims/entities/skills/resources
+        Validator->>Store: commit MemoryAtoms + edges
+        Store->>Indexer: update projection delta
+        Store->>Consolidator: schedule reflection/compression
+    end
+```
+
+### Write pipeline stages
+
+1. **Observe**
+   Accept event: chat message, shell output, code run, file ingest, paper, dataset, screenshot, human note.
+
+2. **Segment**
+   Detect boundaries: task switch, error, result, decision, user correction, new source, long silence, changed entity set.
+
+3. **Append episode**
+   Hash-chain event into ledger before any extraction. This is the source of truth.
+
+4. **Create provisional observation**
+   Store a short durable observation immediately, so realtime recall works even before full extraction.
+
+5. **Extract candidates**
+   LLM or rules extract claims, entities, equations, skills, resources, observations, evals.
+
+6. **Normalize**
+   Canonicalize entities, units, names, predicates, file paths, symbols, dates.
+
+7. **Ground**
+   Attach exact source spans, hashes, line ranges, command receipts, test logs.
+
+8. **Validate**
+   Check schema, duplicates, contradictions, privacy class, source quality, confidence.
+
+9. **Commit memory mutations**
+   Insert immutable versions. No destructive overwrite.
+
+10. **Update projections**
+    Async index updates for BM25, vector, entity, graph, temporal, skill, capsule cache.
+
+11. **Schedule consolidation**
+    If high surprise, repeated utility, contradiction, or recurring cluster appears, trigger sleep-cycle work.
+
+### Write-time invariants
+
+```text
+Invariant 1: No promoted semantic claim without provenance.
+Invariant 2: No destructive overwrite of facts or beliefs.
+Invariant 3: BeliefState is derived from ClaimCards, never treated as source evidence.
+Invariant 4: Skills are untrusted until tests or successful episodes prove them.
+Invariant 5: Generated concept capsules must preserve input_memory_ids.
+Invariant 6: Secrets are stored as SecretRefOnly, never embedded or summarized.
+```
+
+---
+
+## 13. Read path: the recall compiler
+
+```mermaid
+flowchart LR
+    Q[RecallQuery] --> INTENT[Intent + time-scope classifier]
+    INTENT --> CORE[Core memory]
+    INTENT --> FANOUT[Parallel fanout]
+
+    FANOUT --> B[BM25 exact]
+    FANOUT --> D[Dense vector]
+    FANOUT --> E[Entity aliases]
+    FANOUT --> G[Temporal graph]
+    FANOUT --> C[Concept capsules]
+    FANOUT --> S[Skill index]
+    FANOUT --> X[Counterexample/eval memory]
+
+    B --> RRF[Rank fusion]
+    D --> RRF
+    E --> RRF
+    G --> RRF
+    C --> RRF
+    S --> RRF
+    X --> RRF
+
+    RRF --> PPR[Graph activation / PPR]
+    PPR --> TF[Temporal + privacy filter]
+    TF --> RR[Reranker]
+    RR --> PACK[ContextPack compiler]
+    PACK --> OUT[Small cited memory pack]
+```
+
+### Recall query
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallQuery {
+    pub text: String,
+    pub intent: RecallIntent,
+    pub time_scope: TimeScope,
+    pub lane_filters: Vec<MemoryLane>,
+    pub required_evidence: EvidenceLevel,
+    pub max_items: usize,
+    pub token_budget: usize,
+    pub include_contradictions: bool,
+    pub include_skills: bool,
+    pub privacy_scope: PrivacyScope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RecallIntent {
+    AnswerFact,
+    ExplainConcept,
+    Compare,
+    Plan,
+    Implement,
+    Debug,
+    MathDerivation,
+    ScientificClaim,
+    LiteratureReview,
+    HistoricalRecall,
+    SkillLookup,
+    SelfReflect,
+    Mixed,
+}
+```
+
+### Retrieval fanout
+
+The hot path runs these channels in parallel:
+
+```text
+1. pinned core memory
+2. BM25 exact search
+3. dense vector search
+4. entity alias search
+5. temporal fact lookup
+6. graph neighborhood search
+7. concept capsule search
+8. skill precondition search
+9. counterexample/eval lookup
+10. recent observation window
+```
+
+### Ranking formula
+
+```text
+candidate_score =
+    w_exact      * exact_match
+  + w_dense      * dense_similarity
+  + w_entity     * entity_overlap
+  + w_graph      * graph_activation
+  + w_temporal   * temporal_validity
+  + w_source     * source_quality
+  + w_conf       * confidence
+  + w_utility    * utility
+  + w_topic      * topic_strength
+  + w_skill      * skill_reliability
+  + w_counter    * counterexample_relevance
+  - w_stale      * stale_penalty
+  - w_conflict   * unresolved_contradiction_penalty
+  - w_privacy    * privacy_penalty
+```
+
+The weights are intent-specific. A math query boosts equations, units, theorem dependencies, exact symbols, and counterexamples. A coding query boosts recent failures, code symbols, skill reliability, and local project resources. A literature query boosts source quality, resource graph, contradictory clusters, and citation spans.
+
+---
+
+## 14. ContextPack contract
+
+A `ContextPack` is not a pile of retrieved chunks. It is a compiled object with guarantees.
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextPack {
+    pub id: Uuid,
+    pub query: RecallQuery,
+    pub generated_at: DateTime<Utc>,
+    pub budget: ContextBudget,
+    pub items: Vec<ContextItem>,
+    pub citations: Vec<Citation>,
+    pub contradictions: Vec<ContradictionNote>,
+    pub freshness: FreshnessReport,
+    pub callable_skills: Vec<SkillCallHint>,
+    pub omitted_evidence: Vec<OmittedEvidenceNote>,
+    pub confidence_summary: ConfidenceSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextItem {
+    pub memory_id: MemoryId,
+    pub kind: MemoryKind,
+    pub rendered: String,
+    pub why_included: String,
+    pub score: f32,
+    pub source_spans: Vec<SourceSpan>,
+    pub valid_from: Option<DateTime<Utc>>,
+    pub valid_to: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextBudget {
+    pub max_tokens: usize,
+    pub reserved_core_tokens: usize,
+    pub reserved_evidence_tokens: usize,
+    pub reserved_warning_tokens: usize,
+    pub reserved_skill_tokens: usize,
+}
+```
+
+### ContextPack must include
+
+```text
+- why_included for every item
+- citations/source spans for factual items
+- temporal validity notes
+- contradiction warnings
+- confidence summary
+- callable skills without dumping full code bodies
+- omitted-evidence notes when budget excludes important evidence
+- deterministic ordering for equal scores
+```
+
+### Example compiled pack
+
+```text
+[Core · active task]
+You are debugging the aletheia-graph temporal supersession logic.
+
+[Counterexample · high relevance]
+Prior failure: superseded edges were still retrieved for "current truth" queries because the interval filter used transaction_time rather than valid_time.
+
+[Claim · trusted · valid now]
+Current-truth recall must exclude edges where valid_to < query_time unless TimeScope::Historical is set.
+
+[Skill · callable]
+skill: run_temporal_graph_fixture
+inputs: fixture_name
+reliability: 0.94
+tests: 18/19 pass
+call_hint: use before modifying pagerank.rs
+
+[Omitted evidence]
+3 older contradictions from experimental graph adapters omitted due to budget; available via explain_context_pack.
+```
+
+---
+
+## 15. Knowledge compression engine
+
+The compression engine is where the system becomes superhuman.
+
+Humans forget details and keep gist. ALETHEIA-Ω keeps both: it compiles gist while preserving raw evidence.
+
+### Compression ladder
+
+```text
+L0 Verbatim source
+  Raw paper, chat, code output, file, dataset manifest.
+
+L1 Episode summary
+  What happened in this event.
+
+L2 Atomic memory
+  Claims, equations, observations, skills, resources, evals.
+
+L3 Topic kernel
+  Compressed concept with prerequisites, claims, equations, skills, failures.
+
+L4 Domain map
+  Community-level graph summary across many topic kernels.
+
+L5 Procedural playbook
+  Reusable workflow distilled from repeated successful episodes.
+```
+
+### Compression jobs
+
+| Job                     | Trigger                                           | Output                                    |
+| ----------------------- | ------------------------------------------------- | ----------------------------------------- |
+| duplicate merge         | cosine > 0.95 + same entities + same claim scope  | one trusted atom, old atoms superseded    |
+| concept kernel          | topic strength high or repeated retrieval cluster | cited concept card                        |
+| contradiction reconcile | active contradiction pressure high                | belief revision + counterexample note     |
+| failure distillation    | repeated failed attempts                          | debugging lesson + blocked skill          |
+| skill distillation      | repeated successful trajectories                  | executable skill with tests               |
+| resource digest         | large paper/repo/dataset ingested                 | resource card + claim/equation extraction |
+| topic review            | FSRS due or low retrieval success                 | review queue item                         |
+| capsule refresh         | source graph changed                              | new capsule version, old superseded       |
+| curriculum synthesis    | topic dependencies stabilize                      | ordered learning graph                    |
+
+### Compression scoring
+
+```text
+compression_value =
+    utility_gain
+  + context_token_savings
+  + retrieval_success_gain
+  + duplicate_reduction
+  + concept_connectivity_gain
+  - evidence_loss_risk
+  - contradiction_unresolved_penalty
+```
+
+A capsule is promoted only if:
+
+```text
+coverage_score >= 0.80
+loss_risk_score <= 0.25
+all factual statements cite MemoryAtoms
+no SecretRefOnly content is included
+```
+
+---
+
+## 16. Topic strength and review
+
+Topic strength is an explainable decayed score, not an embedding artifact.
+
+```text
+decayed =
+  previous_strength * exp(-hours_since_update / half_life_hours)
+
+reinforcement =
+  0.20 * recency
++ 0.20 * recurrence
++ 0.25 * utility
++ 0.15 * novelty
++ 0.15 * source_quality
++ 0.15 * retrieval_success
++ 0.10 * graph_neighbor_boost
+- 0.20 * unresolved_contradiction_pressure
+
+new_strength = clamp(decayed + reinforcement, 0, 1)
+```
+
+Strong topics produce concept capsules. Weak but important topics enter review queues. High-utility, low-confidence topics trigger targeted evidence search. Contradicted topics trigger belief revision.
+
+This is how the agent knows what to organize, what to compress, what to rehearse, and what to investigate.
+
+---
+
+## 17. Agent-facing calls
+
+These are the calls the agent uses to help memory organize and compress over time.
+
+| Call                                | Purpose                                          | Hot path? |
+| ----------------------------------- | ------------------------------------------------ | --------- |
+| `observe(event)`                    | commit a raw event or compressed observation     | yes       |
+| `recall(query)`                     | get a compiled ContextPack                       | yes       |
+| `explain_memory(id)`                | show provenance, versions, links, status         | yes       |
+| `explain_recall(pack_id)`           | show why items were included/omitted             | yes       |
+| `propose(candidate)`                | submit a candidate memory without trusting it    | no        |
+| `promote(id, evidence)`             | promote proposed memory to trusted               | no        |
+| `link(source, target, relation)`    | add typed relation with provenance               | no        |
+| `invalidate(edge_id, reason)`       | close validity window, preserve history          | no        |
+| `mark_wrong(memory_id, correction)` | create counterexample/eval correction            | yes       |
+| `compress_topic(topic_id, budget)`  | build or refresh concept capsule                 | no        |
+| `reconcile(entity_or_topic)`        | resolve contradictions and revise beliefs        | no        |
+| `distill_skill(episodes)`           | create/update executable skill                   | no        |
+| `verify_skill(skill_id)`            | run tests/sandbox checks                         | no        |
+| `review_due(limit)`                 | return weak/important memories needing rehearsal | yes       |
+| `eval_context(pack_id, outcome)`    | update retrieval success and utility             | yes       |
+| `import_resource(uri)`              | ingest paper/repo/dataset/file                   | no        |
+| `export_capsule(topic_id)`          | export concept/resource/skill capsule            | no        |
+| `forget(scope)`                     | tombstone and remove projections under policy    | no        |
+
+### API trait
+
+```rust
+#[async_trait::async_trait]
+pub trait MemoryEngine: Send + Sync {
+    async fn observe(&self, event: EventEnvelope) -> Result<MutationReceipt, MemoryError>;
+
+    async fn recall(&self, query: RecallQuery) -> Result<ContextPack, MemoryError>;
+
+    async fn explain_memory(&self, id: MemoryId) -> Result<MemoryExplanation, MemoryError>;
+
+    async fn explain_recall(&self, pack_id: Uuid) -> Result<RecallExplanation, MemoryError>;
+
+    async fn propose(&self, candidate: MemoryCandidate) -> Result<MutationReceipt, MemoryError>;
+
+    async fn promote(&self, id: MemoryId, evidence: Vec<EvidenceLink>) -> Result<MutationReceipt, MemoryError>;
+
+    async fn link(
+        &self,
+        source: MemoryId,
+        target: MemoryId,
+        relation: EdgeRelation,
+        provenance: Provenance,
+    ) -> Result<EdgeId, MemoryError>;
+
+    async fn invalidate(
+        &self,
+        edge_id: EdgeId,
+        reason: String,
+        provenance: Provenance,
+    ) -> Result<MutationReceipt, MemoryError>;
+
+    async fn compress_topic(
+        &self,
+        topic: TopicSelector,
+        budget: CompressionBudget,
+    ) -> Result<MemoryId, MemoryError>;
+
+    async fn reconcile(
+        &self,
+        selector: ReconcileSelector,
+    ) -> Result<ReconcileReport, MemoryError>;
+
+    async fn distill_skill(
+        &self,
+        episodes: Vec<EpisodeId>,
+    ) -> Result<MemoryId, MemoryError>;
+
+    async fn eval_context(
+        &self,
+        pack_id: Uuid,
+        outcome: EvalOutcome,
+    ) -> Result<MutationReceipt, MemoryError>;
+}
+```
+
+---
+
+## 18. Core recall code sketch
+
+```rust
+pub async fn recall(engine: &EngineState, query: RecallQuery) -> Result<ContextPack, MemoryError> {
+    let intent = engine.intent.classify(&query)?;
+
+    let core_fut = engine.core.load_relevant(&query);
+    let bm25_fut = engine.index.bm25.search(&query, intent.bm25_profile());
+    let dense_fut = engine.index.vector.search(&query, intent.vector_profile());
+    let entity_fut = engine.index.entities.resolve(&query);
+    let temporal_fut = engine.index.temporal.lookup(&query.time_scope);
+    let skill_fut = engine.index.skills.search(&query, intent.skill_profile());
+    let eval_fut = engine.index.eval.search_failures(&query);
+
+    let (core, bm25, dense, entities, temporal, skills, evals) = tokio::try_join!(
+        core_fut,
+        bm25_fut,
+        dense_fut,
+        entity_fut,
+        temporal_fut,
+        skill_fut,
+        eval_fut,
+    )?;
+
+    let fused = reciprocal_rank_fuse(vec![
+        bm25.into_ranked("bm25"),
+        dense.into_ranked("dense"),
+        entities.into_ranked("entity"),
+        temporal.into_ranked("temporal"),
+        skills.into_ranked("skill"),
+        evals.into_ranked("eval"),
+    ], 60.0);
+
+    let seeds = fused.top_n(64);
+    let activated = engine.graph.personalized_activation(
+        &seeds,
+        &query.time_scope,
+        intent.graph_profile(),
+    )?;
+
+    let candidates = engine.store.load_candidates(fused.merge(activated).top_n(256))?;
+
+    let filtered = temporal_privacy_filter(candidates, &query)?;
+
+    let reranked = rerank(filtered, &query, &intent)?;
+
+    let pack = engine.compiler.compile_context_pack(
+        core,
+        reranked,
+        query.token_budget,
+        intent.pack_profile(),
+    )?;
+
+    engine.telemetry.log_recall(&pack).await?;
+    Ok(pack)
+}
+```
+
+---
+
+## 19. Reranking code sketch
+
+```rust
+pub fn rerank(
+    candidates: Vec<ScoredCandidate>,
+    query: &RecallQuery,
+    intent: &IntentProfile,
+) -> Result<Vec<ScoredCandidate>, MemoryError> {
+    let mut out = Vec::with_capacity(candidates.len());
+
+    for mut c in candidates {
+        let s = &c.memory.scores;
+
+        let stale_penalty = if c.memory.bitemporal.valid_to.is_some()
+            && !query.time_scope.is_historical()
+        {
+            1.0
+        } else {
+            0.0
+        };
+
+        let score =
+            intent.w_exact      * c.features.exact_match
+          + intent.w_dense      * c.features.dense_similarity
+          + intent.w_entity     * c.features.entity_overlap
+          + intent.w_graph      * c.features.graph_activation
+          + intent.w_temporal   * c.features.temporal_validity
+          + intent.w_source     * s.source_quality
+          + intent.w_confidence * s.confidence
+          + intent.w_utility    * s.utility
+          + intent.w_topic      * c.features.topic_strength
+          + intent.w_counter    * c.features.counterexample_relevance
+          - intent.w_stale      * stale_penalty
+          - intent.w_conflict   * s.contradiction_pressure;
+
+        c.score = score.clamp(0.0, 1.0);
+        out.push(c);
+    }
+
+    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(out)
+}
+```
+
+---
+
+## 20. Supersession code sketch
+
+```rust
+pub async fn insert_fact_edge(
+    store: &dyn Store,
+    graph: &dyn GraphIndex,
+    new_edge: MemoryEdge,
+) -> Result<MutationReceipt, MemoryError> {
+    let conflicts = graph.find_active_conflicts(
+        new_edge.source,
+        &new_edge.relation,
+        new_edge.target,
+        new_edge.bitemporal.valid_from,
+    ).await?;
+
+    let mut tx = store.begin().await?;
+
+    for old in conflicts {
+        let mut closed = old.clone();
+        closed.bitemporal.valid_to = Some(Utc::now());
+        closed.status = MemoryStatus::Superseded;
+
+        tx.update_edge_version(closed).await?;
+
+        tx.insert_edge(MemoryEdge {
+            id: EdgeId(Uuid::new_v4()),
+            source: new_edge.id_as_memory_id(),
+            target: old.id_as_memory_id(),
+            relation: EdgeRelation::Supersedes,
+            bitemporal: Bitemporal::now_valid(),
+            weight: 1.0,
+            confidence: new_edge.confidence,
+            provenance: new_edge.provenance.clone(),
+            status: MemoryStatus::Trusted,
+        }).await?;
+    }
+
+    tx.insert_edge(new_edge).await?;
+    tx.commit().await
+}
+```
+
+---
+
+## 21. Performance architecture
+
+### Two-speed write
+
+```text
+Foreground:
+  append episode
+  write provisional observation
+  update tiny delta index
+  return receipt
+
+Background:
+  extract
+  validate
+  link
+  update heavy indexes
+  consolidate
+```
+
+This gives realtime usability without polluting trusted memory.
+
+### Segment architecture
+
+Memory atoms are stored in append-only segments:
+
+```text
+segment_000001/
+  objects.cbor.zst
+  edges.cbor.zst
+  postings.delta
+  vectors.delta
+  graph.delta
+  manifest.toml
+  hash_chain.tail
+```
+
+Projection workers periodically seal deltas into optimized snapshots:
+
+```text
+hot delta → warm segment → sealed snapshot → compacted archive
+```
+
+### Scaling to millions of memories
+
+| Problem                   | Solution                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------ |
+| huge vector index         | partition by lane + topic + time; int8/PQ compression; HNSW per partition                  |
+| graph traversal explosion | seed-limited PPR over active subgraph; relation weights; temporal filters before expansion |
+| BM25 noise                | fielded indexes: symbols, code IDs, equations, entities, source titles, claims             |
+| context bloat             | ContextPack budget allocator + concept capsules                                            |
+| duplicate memories        | high-similarity merge queue + source-preserving supersession                               |
+| stale facts               | bitemporal validity filter                                                                 |
+| skill clutter             | reliability decay + status transitions                                                     |
+| slow cold start           | memory-mapped snapshots + manifest prefetch                                                |
+| expensive LLM extraction  | async batching, rule extractors for code/errors, local small-model fallback                |
+| privacy leakage           | privacy class filters before embedding and retrieval                                       |
+
+### Storage estimate for 10M atoms
+
+Approximate local node target:
+
+```text
+10M memory atom metadata       3–8 GB
+10M compressed payloads        5–50 GB depending on source size
+10M 768-dim int8 embeddings    ~7.7 GB raw, less with PQ
+BM25 postings                  5–20 GB
+graph adjacency                2–10 GB
+ledger + versions              workload-dependent
+concept capsules               small, usually <2 GB
+```
+
+The design is feasible on a workstation SSD. For 100M+, shard by project/user/topic/entity hash and federate recall.
+
+---
+
+## 22. Skill memory: executable compounding
+
+ALETHEIA-Ω treats skills as memory that can run.
+
+### Skill lifecycle
+
+```text
+draft → tested → trusted → degraded → retired
+```
+
+A skill becomes trusted only if it has:
+
+```text
+- source episodes showing why it exists
+- executable body in a sandboxed repo path
+- AST/hash verification
+- preconditions
+- tests or repeated successful runs
+- failure history
+- reliability score
+```
+
+### Skill reliability
+
+```rust
+pub fn reliability(success: u64, failure: u64, recency_boost: f32) -> f32 {
+    let alpha = 1.0 + success as f32;
+    let beta = 1.0 + failure as f32;
+    let mean = alpha / (alpha + beta);
+    (mean * 0.9 + recency_boost * 0.1).clamp(0.0, 1.0)
+}
+```
+
+### Example skill card
+
+```yaml
+kind: Skill
+name: extract_claims_from_arxiv_pdf
+status: trusted
+description: Extract source-backed ClaimCards and EquationCards from a downloaded arXiv PDF.
+preconditions:
+  - PDF exists in resource cache
+  - source hash verified
+inputs:
+  - arxiv_id: string
+  - pdf_path: path
+outputs:
+  - claim_ids: list<MemoryId>
+  - equation_ids: list<MemoryId>
+tests:
+  - fixture_arxiv_2502_12110
+  - fixture_temporal_claims
+success_count: 41
+failure_count: 3
+linked_concepts:
+  - scientific_ingestion
+  - source_grounding
+```
+
+---
+
+## 23. Science and math specialization
+
+Generic agent memory fails on math and science because it collapses claims, equations, assumptions, citations, and beliefs. ALETHEIA-Ω keeps them separate.
+
+### Required object separation
+
+| Object           | Stores                                | Must not store         |
+| ---------------- | ------------------------------------- | ---------------------- |
+| `Claim`          | atomic assertion + evidence           | current agent belief   |
+| `Belief`         | current stance over claims            | raw source assertion   |
+| `Equation`       | symbols, variables, units, derivation | hidden assumptions     |
+| `Theorem`        | assumptions, proof, dependencies      | unsupported intuition  |
+| `Dataset`        | manifest, checksum, schema, license   | results without method |
+| `Experiment`     | method, run config, output, logs      | generalized conclusion |
+| `Concept`        | compressed topic synthesis            | uncited fact           |
+| `Counterexample` | failure/falsifier/misconception       | buried warning         |
+
+### The system must answer
+
+```text
+What did we observe?
+Where did it come from?
+What claim was extracted?
+What evidence supports it?
+What evidence contradicts it?
+What does the agent currently believe?
+When did that belief change?
+Which equations/theorems/skills depend on it?
+What breaks if it is false?
+```
+
+That is the standard for scientific memory.
+
+---
+
+## 24. Evaluation and tests
+
+### Unit tests
+
+```text
+- schema round-trip preserves version and hashes
+- status machine rejects invalid transitions
+- bitemporal interval filtering works for current and historical queries
+- supersession never deletes old facts
+- claims without provenance cannot become Trusted
+- beliefs require support or explicit rationale
+- skills cannot become Trusted without tests or successful episodes
+- privacy filters run before retrieval scoring
+- context packs never exceed token budget
+```
+
+### Property tests
+
+```text
+- ledger replay produces deterministic store state
+- every MemoryAtom hash changes when payload changes
+- every promoted Claim has at least one SourceSpan
+- every ContextPack factual item has citation/provenance
+- every expired edge is excluded from current-truth recall
+- every SecretRefOnly object is absent from embeddings and summaries
+```
+
+### Integration tests
+
+```text
+1. ingest a paper → extract claims/equations → retrieve with citations
+2. ingest contradiction → old fact valid_to closes → current recall returns new fact
+3. ingest failed code run → debug query retrieves prior failure
+4. repeat successful workflow → skill distiller proposes skill
+5. run skill tests → trusted skill appears in ContextPack
+6. rebuild indexes from ledger → identical manifest
+7. tombstone private item → projections remove it
+8. ask historical query → superseded fact is retrievable with warning
+```
+
+### Retrieval evaluation fixtures
+
+```text
+- exact equations and symbols
+- temporal fact changes
+- contradictory claims
+- source quality disagreements
+- code identifiers and error messages
+- repeated failed attempts
+- executable skills
+- open questions
+- concept prerequisites
+```
+
+### Performance benchmarks
+
+```text
+recall_1m:
+  p50 <= 25 ms
+  p95 <= 100 ms
+
+recall_10m:
+  p50 <= 35 ms warm
+  p95 <= 200 ms
+  p99 <= 500 ms
+
+observe_hot:
+  p50 <= 5 ms
+  p95 <= 20 ms
+
+context_pack:
+  4096-token pack <= 25 ms after candidates loaded
+
+graph_activation:
+  64 seeds, 2-hop/PPR active subgraph <= 30 ms
+
+ledger_replay:
+  deterministic replay of 1M mutations
+```
+
+### Adversarial tests
+
+```text
+- prompt injection in source document
+- malicious source tries to override core memory
+- duplicate claims with subtle wording differences
+- stale facts phrased as current facts
+- high-confidence unsupported claim
+- tool output containing secrets
+- poisoned concept capsule
+- skill tries to escape sandbox
+```
+
+---
+
+## 25. Security and privacy
+
+```text
+1. SecretRefOnly objects are never embedded.
+2. SecretRefOnly objects are never summarized into concept capsules.
+3. Vault references store encrypted pointers, not secret values.
+4. Privacy filters run before ranking and before graph expansion.
+5. Forget requests create tombstones and projection-deletion jobs.
+6. Every mutation has actor, source, before_hash, after_hash.
+7. Skills run under sandbox profiles.
+8. Human-approved core blocks cannot be silently edited by the agent.
+```
+
+This is especially important for coding agents, because project memory often contains secrets, credentials, private repo paths, and unreleased research.
+
+---
+
+## 26. Observability
+
+Every recall, write, consolidation, and skill run emits structured telemetry:
+
+```text
+- query hash
+- intent profile
+- channels queried
+- candidates per channel
+- fusion/rerank scores
+- temporal filters applied
+- contradictions included
+- items omitted by budget
+- latency per stage
+- token budget used
+- answer outcome/eval feedback
+```
+
+CLI examples:
+
+```bash
+aletheia recall "why did the temporal graph test fail?" --explain
+
+aletheia explain memory mem_01HX...
+
+aletheia explain topic "temporal knowledge graph"
+
+aletheia consolidate --topic "agent memory" --budget 1200
+
+aletheia eval last --quality 0.9 --used mem_abc,mem_def
+
+aletheia graph neighbors mem_abc --relation Supports --depth 2
+```
+
+---
+
+## 27. Rubric: 0–100 scoring
+
+| Axis                                      | Weight |    Score | Why                                                                                                                                                                                                            |
+| ----------------------------------------- | -----: | -------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. Taxonomic fidelity**                 |      8 |  **8.0** | Stronger than six-lane MIRIX because it separates claims, beliefs, concepts, skills, resources, evals, counterexamples, and formal objects while keeping lanes manageable.                                     |
+| **2. Temporal and epistemic grounding**   |     12 | **11.7** | Bitemporal validity, transaction history, supersession, contradiction pressure, and belief revision. Slight loss because contradiction detection still depends on extraction quality.                          |
+| **3. Provenance and auditability**        |      8 |  **8.0** | Hash-chained ledger, source spans, immutable versions, signed receipts, rebuildable projections.                                                                                                               |
+| **4. Recall speed and scale**             |     14 | **13.2** | Hot path is deterministic and local, with parallel fanout, partitioned indexes, graph activation limits, and no LLM requirement. Slight loss because 50M+ per node needs careful sharding and hardware tuning. |
+| **5. Compression and context efficiency** |     10 |  **9.8** | Multi-level compression ladder, concept capsules, omitted-evidence notes, compression lineage, budgeted ContextPacks. Slight loss because compression quality requires eval discipline.                        |
+| **6. Conceptual self-organization**       |     10 |  **9.7** | A-MEM-style links, topic kernels, co-activation, concept capsules, open questions, prerequisite graphs. Slight loss for possible graph noise if thresholds are poor.                                           |
+| **7. Procedural compounding**             |      8 |  **7.8** | Executable skills, tests, sandboxing, reliability, skill distillation, success/failure traces. Slight loss because tool environments vary.                                                                     |
+| **8. Adaptivity and learned policy**      |      8 |  **7.6** | Rule policy bootstraps; learned Memory-R1-style policy improves ADD/UPDATE/LINK/IGNORE. Slight loss because learned policy needs task-specific training data.                                                  |
+| **9. Math/science/formal grounding**      |      7 |  **6.6** | Equations, units, theorem DAGs, proof status, datasets, assumptions, counterexamples. Slight loss because formal verification will not cover all domains.                                                      |
+| **10. Evaluation and observability**      |      5 |  **5.0** | Built-in eval memory, recall explanations, latency traces, context pack diagnostics, benchmark fixtures.                                                                                                       |
+| **11. Security and privacy**              |      5 |  **4.8** | Privacy classes, vault refs, no secret embeddings, tombstones, sandboxed skills. Slight loss because operational mistakes are still possible.                                                                  |
+| **12. Buildability in Rust**              |      5 |  **4.8** | Clear workspace, trait-isolated adapters, local-first baseline, staged rollout. Slight loss because extraction/consolidation quality remains complex.                                                          |
+
+**Total: 97.2 / 100**
+
+### Same design scored on the CMC six-axis matrix
+
+| CMC axis                        | 0–10 score |
+| ------------------------------- | ---------: |
+| Taxonomic Fidelity              |       10.0 |
+| Temporal & Epistemic Grounding  |        9.8 |
+| Conceptual Self-Organization    |        9.8 |
+| Procedural Compounding          |        9.7 |
+| Retrieval Latency & Compression |        9.8 |
+| Associative Traversal           |        9.9 |
+
+**CMC-scaled score:** 58.7 / 60 = **97.8 / 100**
+
+---
+
+## 28. Why this beats the existing specs
+
+Compared with the supplied CLAUDE, CODEX, and CMC designs, ALETHEIA-Ω improves five things.
+
+### 1. It separates “truth” from “projections” more aggressively
+
+The canonical ledger and memory versions are the only truth. BM25, vector, graph adjacency, capsules, and context caches are all rebuildable projections.
+
+That is the right durability model for long-lived agents.
+
+### 2. It introduces a Memory Cell abstraction
+
+The prior specs have many object types, but the Memory Cell makes every object obey the same invariants:
+
+```text
+typed payload
++ provenance
++ bitemporal validity
++ status lifecycle
++ utility state
++ graph links
++ compression lineage
+```
+
+That gives uniform indexing, recall, explanation, and rollback.
+
+### 3. It makes compression a first-class subsystem
+
+The key to millions of memories is not bigger retrieval. It is **knowledge compression with lineage**:
+
+```text
+episodes → observations → atoms → concept kernels → domain maps → procedural playbooks
+```
+
+This is how the memory gets smaller and smarter at the same time.
+
+### 4. It makes eval memory first-class
+
+Most memory systems remember user facts but forget whether remembering helped. ALETHEIA-Ω stores retrieval outcomes, answer quality, failures, corrections, and skill success. That lets the system learn what to recall, what to suppress, and what to compress.
+
+### 5. It has a real realtime strategy
+
+It does not wait for extraction before becoming useful. It commits provisional observations immediately, then promotes structured memories asynchronously.
+
+That is the only way to get both realtime responsiveness and high-quality long-term memory.
+
+---
+
+## 29. Implementation roadmap
+
+| Phase                        |  Duration | Deliverable                                             | Acceptance gate                                 |
+| ---------------------------- | --------: | ------------------------------------------------------- | ----------------------------------------------- |
+| **P0: schema + ledger**      | 1–2 weeks | types, hash-chain ledger, mutation receipts             | replay deterministic; crash tests pass          |
+| **P1: canonical store**      | 1–2 weeks | redb/SQLite adapter, versioning, blob store             | no destructive overwrite possible               |
+| **P2: local recall**         |   2 weeks | BM25, vector, entity, temporal index, ContextPack       | fixture recall p95 ≤ 200 ms                     |
+| **P3: graph logic**          |   2 weeks | temporal edges, supersession, contradiction tests       | current vs historical truth correct             |
+| **P4: ingest pipeline**      |   2 weeks | observer, extractor trait, normalizer, source grounder  | paper/code/event ingest produces grounded atoms |
+| **P5: consolidation**        | 2–3 weeks | concept kernels, duplicate merge, topic strength        | capsules cite all factual atoms                 |
+| **P6: procedural memory**    |   2 weeks | skill repo, sandbox, AST hash, tests, reliability       | untested skills cannot be trusted               |
+| **P7: eval + policy**        |   2 weeks | eval memory, feedback, rule policy, learned-policy data | bad recalls lower future rank                   |
+| **P8: formal science layer** | 2–4 weeks | units, equations, theorem DAG, proof adapters           | unit/equation fixtures pass                     |
+| **P9: scale hardening**      |   ongoing | sharding, segment compaction, cache tuning              | 10M-memory benchmark passes                     |
+
+---
+
+## 30. The single most important design rule
+
+```text
+Never let the agent directly edit memory truth.
+
+The agent may propose.
+The validator may ground.
+The store may commit.
+The ledger must remember.
+The compiler may compress.
+The recall engine may retrieve.
+The evaluator must score.
+```
+
+That rule prevents memory rot.
+
+---
+
+## 31. Final architecture in one page
+
+```text
+ALETHEIA-Ω =
+
+Core/Working Memory
+  tiny, pinned, user-approved active state
+
++ Episode Ledger
+  append-only source of what happened
+
++ Typed Memory Cells
+  observations, claims, beliefs, concepts, equations, skills, resources, evals
+
++ Temporal Knowledge Graph
+  validity windows, supersession, contradiction, provenance
+
++ Hybrid Index Compiler
+  BM25 + dense vector + entity + temporal + graph + skill + eval
+
++ ContextPack Compiler
+  small, cited, deterministic, budgeted, contradiction-aware
+
++ Compression Engine
+  duplicate merge, concept capsules, topic kernels, domain maps
+
++ Procedural Skill Library
+  executable, tested, versioned, sandboxed skills
+
++ Belief Revision Engine
+  evidence in, stance out, history preserved
+
++ Evaluation Memory
+  what worked, what failed, what should be ranked differently
+
++ Learned Memory Policy
+  improves ADD / UPDATE / LINK / IGNORE / COMPRESS over time
+```
+
+This is the best buildable memory system I would recommend: human-like in structure, superhuman in auditability and parallel recall, fast enough for realtime use, and strong enough to compound knowledge across science, math, coding, research, tools, and long-running projects.
+
+[1]: https://arxiv.org/abs/2507.07957?utm_source=chatgpt.com "MIRIX: Multi-Agent Memory System for LLM-Based Agents"
+[2]: https://github.com/quickwit-oss/tantivy?utm_source=chatgpt.com "Tantivy is a full-text search engine library inspired ..."

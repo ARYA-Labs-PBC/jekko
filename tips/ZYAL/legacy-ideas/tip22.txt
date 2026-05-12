@@ -1,0 +1,2818 @@
+Here is the expansion I would propose after treating ZYAL as a serious control-plane language rather than just another agent prompt format.
+
+My conclusion: **ZYAL is not redundant.** It should not try to become OpenHands, LangGraph, Hermes, OpenClaw, Claude Code, Codex, or Jekko. The stronger position is: **ZYAL becomes the portable, host-enforced daemon contract that can drive all of them.** It should be the thing that says: what may run, where it may write, what evidence is required, how memory is handled, when humans intervene, how experiments compete, how promotion happens, and how a multi-month autonomous engineering effort remains observable and reversible.
+
+The short version of the upgrade path is: **ZYAL v1 is a good daemon runbook. ZYAL v2 should become a durable agent operating system manifest.**
+
+---
+
+# 1. Where ZYAL is already strong
+
+ZYAL already has several ideas that many agent systems either lack or leave as application code:
+
+1. **Host-owned lifecycle.** The model does not get to decide when the daemon starts, stops, promotes, commits, or retries.
+2. **Preview before arming.** The `ZYAL_ARM RUN_FOREVER` sentinel is excellent. It separates “model proposed a runbook” from “human authorized long-running work.”
+3. **SQLite as truth.** This is a major advantage. Many agent systems have logs, but fewer make durable state central to the language.
+4. **Circuit breakers.** ZYAL explicitly rejects infinite swarms and unbounded retries.
+5. **Incubator passes.** The incubator is the most differentiated part of the spec. It moves ZYAL beyond “loop until tests pass” into structured maturation.
+6. **Promotion gates.** The idea that readiness requires host evidence, not model confidence, is exactly right.
+7. **Guardrails and constraints.** These are framed as runtime-enforced, not prompt-enforced, which is the right safety boundary.
+8. **Sentinel-based portability.** The fact that a ZYAL block can live inside any chat prompt is strategically important. It makes ZYAL embeddable in Jekko, Codex, Claude, OpenHands, and custom hosts.
+
+The core design is already better than a generic “agent loop.” Anthropic’s public guidance on effective agents emphasizes simple, composable workflow patterns such as chaining, routing, parallelization, orchestrator-workers, and evaluator-optimizer loops; ZYAL already encodes several of these declaratively instead of relying on ad hoc prompt instructions. ([Anthropic][1])
+
+---
+
+# 2. The biggest missing piece: ZYAL needs to become a control plane, not just a loop spec
+
+Right now ZYAL is mostly a **daemon loop language**. To manage very large autonomous coding projects, it needs to describe the entire control plane:
+
+* runtime isolation
+* repo topology
+* agent-computer interface
+* durable workflow semantics
+* memory governance
+* model routing
+* evaluation policy
+* human approval roles
+* artifact provenance
+* dependency graph ownership
+* distributed fan-out
+* patch lineage
+* security posture
+* rollback and release policy
+* observability and cost accounting
+
+The best comparison is not “ZYAL versus LangChain” or “ZYAL versus OpenHands.” The better analogy is:
+
+> **ZYAL should be to coding agents what Kubernetes manifests, CI/CD pipelines, workflow engines, and policy-as-code are to cloud infrastructure.**
+
+OpenHands, for example, provides an agent platform with sandboxed runtimes, action execution, browser/shell/IPython capabilities, a composable SDK, and enterprise features; its docs also emphasize large and legacy codebase work, dependency mapping, isolated environments, RBAC, permissions, and scaling to many agents. ([OpenHands][2])
+LangGraph emphasizes durable execution, persistence, human-in-the-loop interrupts, pause/resume, long-running workflows, and memory. ([LangChain Docs][3])
+Hermes emphasizes persistent memory, self-improving skills, scheduled automations, subagents, messaging channels, and sandboxing backends. ([GitHub][4])
+OpenClaw emphasizes a self-hosted gateway for channels, sessions, routing, agent bindings, device nodes, and multi-agent routing. ([OpenClaw][5])
+
+ZYAL should absorb the control-plane lessons from these systems without becoming any single one of them.
+
+---
+
+# 3. The highest-priority ZYAL upgrades
+
+## 3.1 Add an explicit `runtime` / `sandbox` block
+
+ZYAL currently has permissions, write scopes, and worktrees, but it does not fully specify **where** the daemon runs, what the runtime can access, what network calls are allowed, what secrets are mounted, what package managers may execute, or what resource limits exist.
+
+OpenHands treats sandboxing as central: actions execute inside a Docker runtime for security, consistency, resource control, isolation, and reproducibility. ([OpenHands Docs][6]) Claude Code’s documentation also treats sandboxing, filesystem/network restrictions, protected paths, and approval reduction as first-class concerns. ([Claude][7])
+
+ZYAL should add:
+
+```yaml
+runtime:
+  sandbox:
+    type: docker                 # docker | podman | firecracker | local | remote
+    image: ghcr.io/acme/zyal-runner@sha256:...
+    user: nonroot
+    working_dir: /workspace
+
+  resources:
+    cpu: 8
+    memory: 32GiB
+    disk: 200GiB
+    max_processes: 256
+    max_open_files: 4096
+
+  filesystem:
+    mounts:
+      - source: "."
+        target: "/workspace"
+        mode: read_write
+      - source: "/tmp/zyal-cache"
+        target: "/cache"
+        mode: read_write
+    protected_paths:
+      - ".git/"
+      - ".github/workflows/"
+      - ".env"
+      - ".env.*"
+      - "secrets/"
+      - "infra/prod/"
+    deny_write_patterns:
+      - "**/*.pem"
+      - "**/id_rsa"
+      - "**/package-lock.json"
+    allow_write_patterns:
+      - "src/**"
+      - "test/**"
+      - "docs/**"
+
+  network:
+    default: deny
+    allow_domains:
+      - "github.com"
+      - "api.github.com"
+      - "registry.npmjs.org"
+    deny_private_networks: true
+    max_bytes_out: 50MiB
+
+  secrets:
+    policy: secret_refs_only
+    refs:
+      - name: GITHUB_TOKEN
+        source: vault://jekko/github-token
+        expose_to: host_only        # host_only | tools | model_never
+      - name: NPM_TOKEN
+        source: vault://jekko/npm-readonly
+        expose_to: tools
+    redact_patterns:
+      - "ghp_[A-Za-z0-9_]{20,}"
+      - "sk-[A-Za-z0-9]{20,}"
+
+  package_managers:
+    npm:
+      install: ask
+      scripts: ask
+    bun:
+      install: ask
+      scripts: ask
+    pip:
+      install: deny
+```
+
+This is critical. A daemon language that can run for hours or days must be explicit about resource, network, filesystem, and secret boundaries.
+
+---
+
+## 3.2 Add durable workflow semantics, not just loop semantics
+
+ZYAL says SQLite is truth, but it does not yet define enough semantics around replay, idempotency, signals, queries, updates, and activity retries.
+
+LangGraph’s durable execution checkpoints graph state so workflows can pause, resume, and recover. ([LangChain Docs][3]) Temporal and DBOS-style durable workflow systems persist workflow state, support retries, timers, signals, queries, and recovery from exactly where a workflow stopped. ([Temporal][8])
+
+ZYAL should add:
+
+```yaml
+workflow:
+  durable: true
+
+  replay:
+    mode: deterministic_host_steps
+    tool_call_replay: cached_observation     # cached_observation | reexecute | deny
+    model_call_replay: summarize_only        # summarize_only | cached | requery_forbidden
+    nondeterminism:
+      random_seed: capture
+      time: capture
+      environment: capture
+
+  idempotency:
+    key: "{{run_id}}:{{task_id}}:{{pass_id}}:{{iteration}}"
+    dedupe_window: 24h
+    side_effects:
+      git_commit: exactly_once
+      git_push: human_approved_once
+      webhook: at_least_once_with_dedupe_key
+
+  signals:
+    - name: pause
+      source: human
+    - name: change_objective
+      source: human
+      schema:
+        type: object
+        required: [objective_patch]
+    - name: inject_context
+      source: human
+      schema:
+        type: object
+        required: [message]
+
+  queries:
+    - name: run_status
+    - name: task_status
+    - name: current_diff
+    - name: evidence_packet
+    - name: cost_report
+
+  updates:
+    - name: reprioritize_task
+      requires_role: maintainer
+    - name: approve_checkpoint
+      requires_role: maintainer
+    - name: block_file
+      requires_role: security
+```
+
+This would make ZYAL far more robust for multi-day or multi-week agentic work.
+
+---
+
+## 3.3 Add an explicit `repo` / `codebase` topology block
+
+ZYAL currently lets tasks be discovered by shell commands, but for huge projects the agent needs a map of the codebase: modules, owners, dependency graph, test targets, release branches, APIs, generated files, forbidden zones, and migration state.
+
+OpenHands’ enterprise positioning explicitly calls out large and legacy codebases, dependency mapping, orchestrated changes, and isolated environments. ([OpenHands][2]) SWE-agent research also shows that the agent-computer interface—navigation, editing, testing, and feedback—significantly affects performance on real software tasks. ([arXiv][9])
+
+ZYAL should add:
+
+```yaml
+repo:
+  scale:
+    mode: enterprise_monorepo
+    estimated_files: 5000000
+    estimated_loc: 1000000000
+
+  topology:
+    discover:
+      - name: git-files
+        command: "git ls-files"
+      - name: package-graph
+        command: "pnpm list -r --json"
+      - name: bazel-graph
+        command: "bazel query 'deps(//...)' --output=graph"
+        optional: true
+      - name: test-targets
+        command: "node scripts/list-test-targets.js --json"
+    graph_store: sqlite
+    refresh_every: 25_iterations
+
+  ownership:
+    sources:
+      - ".github/CODEOWNERS"
+      - "OWNERS"
+      - "teams.yaml"
+    require_owner_review:
+      paths:
+        - "infra/**"
+        - "security/**"
+        - "payments/**"
+
+  generated_code:
+    detect:
+      - "**/*.pb.go"
+      - "**/generated/**"
+      - "**/*.gen.ts"
+    write_policy: deny_direct_edit
+    regeneration_commands:
+      - "bun run codegen"
+
+  contracts:
+    api_specs:
+      - "openapi/**/*.yaml"
+      - "proto/**/*.proto"
+    on_change:
+      require:
+        - contract_tests
+        - downstream_impact_report
+
+  test_matrix:
+    mapping:
+      strategy: host_discovered
+      command: "node scripts/tests-for-changed-files.js --json"
+    minimum:
+      changed_file_tests: required
+      package_tests: required
+      integration_tests: risk_based
+```
+
+For 1B+ LOC projects, this block is not optional. The model cannot “read the repo.” The host must build and maintain a project graph, and every agent pass should work against that graph.
+
+---
+
+## 3.4 Add a real memory architecture
+
+ZYAL currently has `context`, `tasks`, SQLite, and incubator scratch. That is not enough.
+
+Long-running autonomous coding needs at least seven memory types:
+
+1. **Run memory** — current run state, iterations, events, errors.
+2. **Task memory** — task capsule, attempts, hypotheses, blockers, evidence.
+3. **Project memory** — architecture map, dependency graph, conventions, generated-code rules.
+4. **Episodic memory** — what happened, when, with which tools, and what changed.
+5. **Semantic memory** — reusable facts about the codebase and domain.
+6. **Procedural memory** — skills, recipes, playbooks, debugging patterns.
+7. **Governance memory** — approvals, human preferences, policy decisions, blocked patterns.
+
+Research systems such as MemGPT explored tiered memory beyond fixed context windows, and Zep-like approaches emphasize temporal knowledge graphs for long-term agent memory. ([arXiv][10]) Hermes is also highly relevant because it persists knowledge, searches past conversations, builds skills from experience, and maintains a closed learning loop. ([GitHub][4])
+
+ZYAL should add:
+
+```yaml
+memory:
+  truth:
+    primary: sqlite
+    mirror: ".jekko/daemon/{{run_id}}"
+    event_log: append_only
+    checksums: true
+
+  tiers:
+    working:
+      purpose: active_context
+      max_tokens: 120000
+      source: regenerated_from_memory
+      compaction:
+        strategy: evidence_preserving
+        never_summarize:
+          - failing_test_output
+          - human_approval
+          - security_findings
+          - final_diff
+    episodic:
+      storage: sqlite
+      include:
+        - model_messages
+        - tool_calls
+        - observations
+        - diffs
+        - decisions
+        - failures
+    semantic:
+      storage: vector_plus_graph
+      embed:
+        - task_capsules
+        - architecture_notes
+        - code_summaries
+        - incident_summaries
+      graph:
+        enabled: true
+        node_types: [module, file, symbol, test, owner, task, decision, risk]
+        edge_types: [depends_on, modifies, tested_by, owned_by, blocked_by]
+    procedural:
+      storage: skills
+      require_human_approval_to_persist: true
+      versioned: true
+    governance:
+      storage: sqlite
+      immutable_events:
+        - approval
+        - rejection
+        - policy_override
+        - blocked_action
+
+  retrieval:
+    policy: host_ranked
+    rank_by:
+      - task_relevance
+      - code_path_overlap
+      - recency
+      - authority
+      - evidence_quality
+    trust_labels:
+      - human_verified
+      - test_verified
+      - model_inferred
+      - untrusted_external
+      - stale
+
+  poisoning_defense:
+    untrusted_sources:
+      - web
+      - issue_comments
+      - repo_docs_unreviewed
+      - tool_output_from_external_command
+    require_quote_boundary: true
+    strip_instructions_from_untrusted_content: true
+    prompt_injection_scan: true
+```
+
+The most important rule: **memory writes should not automatically become truth.** They should be proposed, validated, labeled, and versioned.
+
+---
+
+## 3.5 Add `skills` as first-class reusable procedural memory
+
+Claude Code has a skills system where a skill is a directory containing a `SKILL.md` file and related resources, loaded only when relevant. Its plugin system can also include skills, agents, hooks, MCP servers, LSP servers, and monitors. ([Claude][11]) Hermes also emphasizes auto-generated and evolving skills. ([GitHub][4])
+
+ZYAL needs a controlled version of this:
+
+```yaml
+skills:
+  registries:
+    - name: org
+      source: git://github.com/acme/zyal-skills
+      ref: "v3.4.1"
+    - name: local
+      source: ".jekko/skills"
+
+  import:
+    - org/typescript-migration@3.4.1
+    - org/react-query-refactor@2.1.0
+    - org/security-review@1.8.0
+
+  policy:
+    require_signature: true
+    allow_model_generated_skills: propose_only
+    human_approval_to_install: true
+    max_skill_context_tokens: 12000
+
+  execution:
+    tool_permissions_from_skill: deny
+    skill_may_request_permissions: true
+    skill_may_write_files: false
+```
+
+This gives ZYAL reusable expertise without turning every daemon run into a giant prompt.
+
+---
+
+## 3.6 Add `models` and `routing`
+
+ZYAL currently says which agent to use, but not which model, under what budget, with what fallback, or how to enforce diversity across critic/prototype/review passes.
+
+OpenAI’s Agents SDK docs describe orchestration, tools, MCP, guardrails, human-in-the-loop, custom storage, model/provider abstraction, observability, and conversation strategies. ([OpenAI Developers][12]) Claude Code and other tools expose model selection and subagent configuration as part of the agent harness. ([Claude][13])
+
+ZYAL should add:
+
+```yaml
+models:
+  default:
+    provider: openai
+    model: gpt-5.5-pro
+    max_output_tokens: 24000
+
+  routes:
+    planning:
+      model: gpt-5.5-pro
+      temperature: 0.2
+    coding:
+      model: gpt-5.5-pro
+      temperature: 0.1
+    cheap_iteration:
+      model: small-fast-code
+      max_cost_per_call: 0.02
+    security_critic:
+      model: independent-security-model
+      require_different_provider_from: coding
+    reducer:
+      model: gpt-5.5-pro
+      require_blind_to_worker_reasoning: true
+
+  budgets:
+    run:
+      max_cost_usd: 500
+      max_tokens_in: 200000000
+      max_tokens_out: 20000000
+    task:
+      max_cost_usd: 25
+    pass:
+      max_cost_usd: 5
+
+  fallbacks:
+    on_provider_error:
+      - model: backup-code-model
+    on_context_overflow:
+      - compact
+      - switch_to_project_graph_retrieval
+      - pause
+```
+
+The key addition is **model diversity for critical review**. A prototype and its critic should not always be the same model family with the same context.
+
+---
+
+## 3.7 Add evidence packets as the core promotion unit
+
+ZYAL’s readiness gates are good, but they should be formalized into **evidence packets**.
+
+For serious software work, promotion should require a structured packet containing:
+
+* changed files
+* affected modules
+* tests run
+* test outputs
+* risk score
+* security scan results
+* rollback plan
+* owner impact
+* migration impact
+* generated file impact
+* performance impact
+* unresolved objections
+* reviewer approvals
+* exact diff hash
+
+This matters because “tests passed” is not enough. A recent security benchmark on “vibe coding” found that agents can produce functionally correct but insecure code; the benchmark reported poor security across tested agents, even when functional correctness was much higher. ([arXiv][14]) METR’s randomized controlled trial also found that experienced developers using AI tools on their own repositories were slowed down by 19%, despite expecting and perceiving speedups, which is a warning against relying on subjective productivity signals. ([METR][15])
+
+Add:
+
+```yaml
+evidence:
+  packet:
+    required:
+      - diff_summary
+      - affected_files
+      - affected_symbols
+      - tests_run
+      - failing_tests_before
+      - passing_tests_after
+      - security_review
+      - rollback_plan
+      - risk_assessment
+      - owner_impact
+      - unresolved_objections
+      - provenance
+
+  provenance:
+    record:
+      - model
+      - prompt_hash
+      - tool_calls
+      - input_context_hashes
+      - diff_hash
+      - test_output_hashes
+      - human_approvals
+
+  gates:
+    promote:
+      require:
+        tests_run:
+          min_count: 1
+          must_include_changed_file_tests: true
+        security_review:
+          severity_max: medium
+        rollback_plan:
+          required: true
+        unresolved_critical_objections:
+          equals: 0
+        diff_hash:
+          stable_since_last_verification: true
+```
+
+Then every checkpoint, promotion, merge, and release can point to a durable evidence object.
+
+---
+
+## 3.8 Add stronger anti-vibe-coding controls
+
+The user mentioned “jankurai.” The broader lesson is not “add 260 static vibe-coding rules and call it done.” Static checks are useful, but they miss context drift, test gaming, insecure correctness, hidden coupling, and agent self-confirmation. Community posts around Jankurai describe real-time audits against hundreds of “vibe coding” failure modes and integration with coding agents, but that should be treated as emerging community signal, not sufficient safety infrastructure. ([LinkedIn][16])
+
+ZYAL should add a dedicated `quality` or `anti_vibe` block:
+
+```yaml
+quality:
+  anti_vibe:
+    enabled: true
+
+    require_understanding_before_edit:
+      min_architecture_notes: 1
+      min_affected_symbols_identified: 3
+      min_tests_mapped_to_change: 1
+
+    prohibit_test_gaming:
+      deny_patterns:
+        - "it.skip"
+        - "describe.skip"
+        - "test.skip"
+        - "TODO.*test"
+        - "expect\\(true\\)\\.toBe\\(true\\)"
+      detect_removed_assertions: true
+      detect_weakened_snapshots: true
+      compare_test_count_to_baseline: true
+
+    require_negative_tests:
+      when:
+        touches:
+          - "auth/**"
+          - "payments/**"
+          - "security/**"
+      min_negative_tests: 1
+
+    require_security_for_functional_changes:
+      enabled: true
+      scans:
+        - semgrep
+        - dependency_audit
+        - secret_scan
+        - prompt_injection_review
+
+    risk_metrics:
+      diff_risk_score:
+        inputs:
+          - changed_file_count
+          - generated_file_touch
+          - security_sensitive_path
+          - deleted_tests
+          - public_api_change
+          - dependency_change
+          - migration_change
+      pause_if_score_gte: 0.8
+
+    reviewer_challenge:
+      require_critic_pass: true
+      critic_must_not_see_builder_rationale: true
+      critic_must_attempt_counterexample: true
+```
+
+This turns anti-vibe quality from a vibe itself into enforceable invariants.
+
+---
+
+## 3.9 Add prompt-injection and untrusted-content semantics
+
+ZYAL guardrails currently match dangerous command patterns and outputs, but it needs a richer trust model.
+
+OWASP’s LLM Top 10 includes prompt injection, insecure output handling, training data poisoning, model denial of service, and supply-chain vulnerabilities. ([OWASP][17]) Google’s prompt-injection guidance discusses layered defenses such as classifiers, sanitization, suspicious URL redaction, reinforcement, and user confirmation. ([blog.google][18])
+
+Add:
+
+```yaml
+trust:
+  labels:
+    - trusted_human
+    - trusted_repo_code
+    - trusted_repo_config
+    - untrusted_repo_text
+    - untrusted_web
+    - untrusted_issue_comment
+    - untrusted_tool_output
+    - secret
+    - policy
+
+  classification:
+    repo_files:
+      "**/*.md": untrusted_repo_text
+      "docs/**": untrusted_repo_text
+      ".github/workflows/**": trusted_repo_config
+      "src/**": trusted_repo_code
+    web_results: untrusted_web
+    issue_comments: untrusted_issue_comment
+
+  prompt_injection:
+    scan_untrusted_content: true
+    strip_tool_instructions_from_untrusted: true
+    quarantine_matches: true
+    require_human_approval_on:
+      - untrusted_content_requests_secret
+      - untrusted_content_requests_permission_change
+      - untrusted_content_requests_git_push
+      - untrusted_content_requests_policy_override
+
+  data_flow:
+    taint_tracking: true
+    tainted_content_may_influence:
+      - code_edit: ask
+      - shell_command: deny
+      - permission_request: deny
+      - memory_write: require_review
+```
+
+This is essential for agents that read GitHub issues, docs, Stack Overflow, web pages, or arbitrary repo text.
+
+---
+
+## 3.10 Add capability leases instead of broad permissions
+
+Current ZYAL permissions are too coarse:
+
+```yaml
+permissions:
+  shell: ask
+  edit: allow
+  git_commit: ask
+```
+
+That is not enough for enterprise-scale autonomy. Permissions should be time-bound, path-bound, command-bound, and purpose-bound.
+
+Claude Code has fine-grained allow/ask/deny permissions, protected paths, and modes, and Jekko has a similar allow/ask/deny model. ([Claude][19]) ZYAL should go further with **capability leases**:
+
+```yaml
+capabilities:
+  leases:
+    - id: edit-src-auth
+      grants:
+        edit:
+          paths:
+            - "src/auth/**"
+            - "test/auth/**"
+      expires:
+        after_iterations: 5
+      purpose: "Fix auth token refresh tests"
+
+    - id: run-tests
+      grants:
+        shell:
+          allow:
+            - "bun test *"
+            - "npm test *"
+          deny:
+            - "curl *"
+            - "rm -rf *"
+      expires:
+        after: 2h
+
+    - id: git-checkpoint
+      grants:
+        git_commit:
+          paths:
+            - "src/auth/**"
+            - "test/auth/**"
+      requires:
+        - evidence.tests_run
+        - evidence.diff_hash
+      human_approval: true
+
+  escalation:
+    allowed: true
+    request_format:
+      require:
+        - reason
+        - exact_command_or_path
+        - expected_effect
+        - rollback_plan
+    auto_deny:
+      - secret_access
+      - production_deploy
+      - force_push
+      - external_network_new_domain
+```
+
+This makes permissions auditable and revocable.
+
+---
+
+# 4. ZYAL versus major systems: gaps, overlap, and how to position it
+
+## 4.1 ZYAL and OpenHands
+
+**Overlap:** both care about coding agents, runtime execution, isolated environments, and long-running software tasks.
+
+**OpenHands strength:** runtime architecture, action execution, sandboxing, browser/shell/IPython interface, agent SDK, and multi-agent scaling. Its ICLR paper describes actions such as command execution, Python execution, browser interaction, file editing, and an event stream within a Docker sandbox.  Its SDK docs describe one-off tasks, routine maintenance, major refactors, automatic context compression, task planning/decomposition, security analysis, and model-agnostic operation. ([OpenHands Docs][20])
+
+**ZYAL gap:** ZYAL does not yet specify the agent-computer interface deeply enough. It says `shell`, `edit`, `mcp`, and `workers`, but not enough about runtime action types, observation schemas, sandbox APIs, browser state, terminal sessions, or replay.
+
+**Recommended ZYAL move:** add `runtime`, `aci`, and `observations`:
+
+```yaml
+aci:
+  actions:
+    shell:
+      enabled: true
+      pty: false
+      capture:
+        stdout: true
+        stderr: true
+        exit_code: true
+        duration: true
+    editor:
+      mode: patch_only          # patch_only | direct_write
+      require_diff_preview: true
+    browser:
+      enabled: false
+    notebook:
+      enabled: false
+
+  observations:
+    normalize: true
+    max_observation_tokens: 12000
+    preserve_full_output_in_sqlite: true
+    summarize_for_model: true
+```
+
+ZYAL should not duplicate OpenHands’ runtime implementation. It should be able to **target** an OpenHands runtime.
+
+---
+
+## 4.2 ZYAL and LangChain / LangGraph
+
+**Overlap:** task orchestration, agents, tools, state, memory, human-in-the-loop, durable execution.
+
+**LangGraph strength:** it is a programmatic graph runtime with durable execution, checkpoints, interrupts, memory, pause/resume, and time travel. ([LangChain Docs][3]) LangChain’s modern agents are built on LangGraph for persistence, human-in-the-loop, and durable execution. ([LangChain Docs][21])
+
+**ZYAL gap:** ZYAL has SQLite but not formal graph/workflow semantics. It has handlers, loops, and incubators, but not explicit state machine edges, typed transitions, replay contracts, or graph compilation.
+
+**Recommended ZYAL move:** add a `workflow` block that can compile to LangGraph, Temporal, DBOS, or a native Jekko daemon runner.
+
+```yaml
+compile:
+  targets:
+    - jekko-daemon
+    - langgraph
+    - temporal
+    - dbos
+  unsupported_feature_policy: fail_preview
+```
+
+ZYAL should be the declarative manifest; LangGraph can be one implementation backend.
+
+---
+
+## 4.3 ZYAL and Hermes Agent
+
+**Overlap:** persistent memory, subagents, scheduled automations, long-running tasks, sandbox backends, and a self-improving loop.
+
+**Hermes strength:** it is an always-on agent with persistent memory, auto-generated skills, scheduled tasks, messaging channels, and subagents. ([GitHub][4]) Hermes also has an Jekko skill that can run Jekko as a worker with long-running sessions, isolated workdirs, and session/cost management. ([GitHub][22])
+
+**ZYAL gap:** ZYAL has no first-class skills, user/team memory, scheduler, channel routing, or self-improvement policy.
+
+**Recommended ZYAL move:** borrow Hermes’ memory/skills/scheduler ideas, but keep the safety boundary stricter:
+
+```yaml
+scheduler:
+  enabled: true
+  timezone: America/Denver
+  jobs:
+    - id: nightly-ci-sweep
+      cron: "0 2 * * *"
+      runbook: safe-ci-fixer
+      require_arm_each_time: false
+      max_duration: 2h
+
+learning:
+  skills:
+    propose_from_successful_runs: true
+    require_human_approval: true
+  memory:
+    persist_task_lessons: true
+    persist_user_preferences: ask
+  self_modification:
+    allow_update_zyal_runbook: propose_only
+    allow_update_skill: propose_only
+```
+
+The critical difference: Hermes can be an always-on personal/ops agent; ZYAL should be an always-auditable control contract.
+
+---
+
+## 4.4 ZYAL and OpenClaw
+
+**Overlap:** both can sit around other agents and coordinate execution.
+
+**OpenClaw strength:** gateway architecture. It exposes channels such as Discord, Telegram, Signal, Slack-like integrations, sessions, routing, agent bindings, device nodes, control UI, and persistent conversations. ([OpenClaw][5]) Its CLI supports sending turns through a gateway, selecting agent/session/channel, and using SecretRef-style credentials. ([OpenClaw][23])
+
+**ZYAL gap:** no channels, routing, identity, notification approval workflow, or mobile control plane.
+
+**Recommended ZYAL move:** add a `channels` and `identity` block:
+
+```yaml
+identity:
+  run_owner: "eng-platform"
+  approvers:
+    maintainers:
+      - github_team: "platform-maintainers"
+    security:
+      - github_team: "security-reviewers"
+    release:
+      - github_team: "release-managers"
+
+channels:
+  notify:
+    - id: slack-platform
+      type: slack
+      target: "#platform-agents"
+      events:
+        - paused
+        - checkpoint_failed
+        - promotion_ready
+        - budget_exhausted
+    - id: github-issue
+      type: github_issue_comment
+      events:
+        - evidence_packet_ready
+
+  approvals:
+    default:
+      channel: slack-platform
+      timeout: 4h
+      on_timeout: pause
+    git_push:
+      require_role: maintainer
+    production_touch:
+      require_role: security
+```
+
+This is how ZYAL becomes operable outside a single terminal.
+
+---
+
+## 4.5 ZYAL and Claude Code / Codex / Jekko
+
+**Overlap:** all are coding-agent environments with shells, editing, permissions, subagents, hooks, worktrees, and tool integrations.
+
+Claude Code has hooks, subagents, skills, plugins, permissions, sandboxing, and auto-memory concepts. ([Claude][24]) Codex has parallel threads, worktree support, automations, Git workflows, terminal actions, skills, and plugins. ([OpenAI Developers][25]) Jekko already supports agents, subagents, MCP, tool permissions, sessions, forking, and model/agent flags. ([Jekko][26])
+
+**ZYAL gap:** no adapter/capability negotiation layer.
+
+**Recommended ZYAL move:** add host capability negotiation:
+
+```yaml
+portable:
+  min_host:
+    supports:
+      - shell
+      - edit
+      - git
+      - sqlite_ledger
+      - permissions
+      - stop_conditions
+
+  adapters:
+    jekko:
+      agent_map:
+        plan: plan
+        build: build
+      permission_map:
+        shell: shell
+        edit: edit
+    claude_code:
+      agent_map:
+        plan: general-purpose
+        build: code-writer
+      hooks_strategy: native_hooks
+    codex:
+      worktree_strategy: native
+      automations_strategy: native
+    openhands:
+      runtime_strategy: docker_runtime
+      action_map:
+        shell: CmdRunAction
+        browser: BrowserInteractiveAction
+
+  unsupported_feature_policy: fail_preview
+```
+
+This would let the same ZYAL runbook live inside different chat surfaces while the host decides what it can actually enforce.
+
+---
+
+# 5. Proposed ZYAL v2 top-level schema
+
+ZYAL v1 already has many keys. I would not simply keep adding loose sections. I would group ZYAL v2 into clear layers.
+
+```yaml
+version: v2
+intent: daemon
+confirm: RUN_FOREVER
+
+job: {}
+portable: {}
+identity: {}
+runtime: {}
+repo: {}
+workflow: {}
+loop: {}
+context: {}
+memory: {}
+models: {}
+agents: {}
+skills: {}
+mcp: {}
+permissions: {}
+capabilities: {}
+tasks: {}
+fan_out: {}
+incubator: {}
+evidence: {}
+verification: {}
+quality: {}
+trust: {}
+guardrails: {}
+constraints: {}
+retry: {}
+hooks: {}
+on: {}
+checkpoint: {}
+release: {}
+observability: {}
+channels: {}
+budgets: {}
+cleanup: {}
+ui: {}
+```
+
+Not every runbook needs every block. The point is to make the control plane complete.
+
+---
+
+# 6. Concrete examples of what ZYAL is missing
+
+## Example A: enterprise monorepo migration runbook
+
+This is the kind of ZYAL fragment needed for a 1B+ LOC project. It is intentionally not an armable full block.
+
+```yaml
+job:
+  name: Enterprise auth migration
+  objective: >
+    Migrate all internal services from legacy session validation to signed
+    short-lived service tokens, preserving backwards compatibility and
+    avoiding production-risky changes.
+
+repo:
+  scale:
+    mode: enterprise_monorepo
+    estimated_loc: 1000000000
+  topology:
+    discover:
+      - name: files
+        command: "git ls-files"
+      - name: owners
+        command: "cat .github/CODEOWNERS"
+      - name: dependency-graph
+        command: "bazel query 'deps(//...)' --output=json"
+      - name: test-targets
+        command: "node tools/list-tests.js --json"
+    graph_store: sqlite
+  ownership:
+    sources: [".github/CODEOWNERS", "OWNERS"]
+    require_owner_review:
+      paths: ["auth/**", "infra/**", "payments/**"]
+  generated_code:
+    detect: ["**/generated/**", "**/*.pb.go", "**/*.gen.ts"]
+    write_policy: deny_direct_edit
+
+runtime:
+  sandbox:
+    type: docker
+    image: ghcr.io/acme/agent-runner@sha256:...
+    user: nonroot
+  resources:
+    cpu: 16
+    memory: 64GiB
+    disk: 1TiB
+  network:
+    default: deny
+    allow_domains: ["github.com", "api.github.com", "registry.npmjs.org"]
+  secrets:
+    policy: secret_refs_only
+    refs:
+      - name: GITHUB_TOKEN
+        source: vault://eng/github-readonly
+        expose_to: host_only
+
+memory:
+  tiers:
+    working:
+      max_tokens: 160000
+      compaction:
+        strategy: evidence_preserving
+    semantic:
+      storage: vector_plus_graph
+      graph:
+        node_types: [module, file, symbol, owner, test, task, decision]
+        edge_types: [depends_on, tested_by, owned_by, modifies]
+    procedural:
+      storage: skills
+      require_human_approval_to_persist: true
+
+agents:
+  supervisor:
+    agent: plan
+    model_route: planning
+  workers:
+    - id: migrator
+      count: 20
+      agent: build
+      isolation: git_worktree
+      write_scope:
+        from_repo_graph_shard: true
+    - id: security-reviewer
+      count: 3
+      agent: critic
+      isolation: same_session
+      read_only: true
+    - id: test-mapper
+      count: 5
+      agent: plan
+      read_only: true
+
+fan_out:
+  strategy: map_reduce
+  split:
+    dynamic:
+      command: "node tools/shard-by-dependency-scc.js --json"
+      output: json_array
+  worker:
+    agent: build
+    isolation: git_worktree
+    max_parallel: 20
+    timeout: 2h
+  reduce:
+    strategy: custom_shell
+    command: "node tools/merge-nonconflicting-patches.js"
+  on_partial_failure: continue
+
+evidence:
+  packet:
+    required:
+      - affected_modules
+      - tests_run
+      - contract_tests
+      - owner_impact
+      - rollback_plan
+      - security_review
+      - diff_hash
+  gates:
+    promote:
+      require:
+        tests_run:
+          must_include_changed_file_tests: true
+        security_review:
+          severity_max: medium
+        owner_impact:
+          codeowners_notified: true
+        rollback_plan:
+          required: true
+
+quality:
+  anti_vibe:
+    enabled: true
+    prohibit_test_gaming:
+      detect_removed_assertions: true
+      detect_weakened_snapshots: true
+      compare_test_count_to_baseline: true
+    require_understanding_before_edit:
+      min_affected_symbols_identified: 5
+      min_tests_mapped_to_change: 2
+
+checkpoint:
+  when: after_verified_change
+  verify:
+    - command: "node tools/tests-for-diff.js --run"
+      timeout: 30m
+      assert: { exit_code: 0 }
+    - command: "node tools/security-review-for-diff.js"
+      timeout: 20m
+      assert:
+        json:
+          path: "$.critical_findings"
+          equals: 0
+  git:
+    add: ["."]
+    commit_message: "auth-migration: shard {{shard_id}} checkpoint {{iteration}}"
+    push: ask
+```
+
+The important upgrades here are repo topology, graph sharding, ownership, evidence packets, sandboxing, memory tiers, anti-vibe controls, and custom reduce logic.
+
+---
+
+## Example B: multi-hypothesis incubator for hard tasks
+
+ZYAL’s current incubator is good. It should become more explicit about **disjointed experiments** and **stateful inheritance**.
+
+The goal: generate several independent approaches, keep them separated, test them, criticize them, and only merge evidence-backed work.
+
+```yaml
+incubator:
+  enabled: true
+  strategy: multi_hypothesis_pool
+
+  route_when:
+    any:
+      - repeated_attempts_gte: 2
+      - no_progress_iterations_gte: 3
+      - risk_score_gte: 0.65
+      - touches_high_risk_path: true
+
+  hypothesis_pool:
+    count: 5
+    diversity:
+      require_different_models: true
+      require_blind_initial_context: true
+      prohibit_worker_cross_talk_before_reduce: true
+    seed_context:
+      include:
+        - task_objective
+        - failing_tests
+        - affected_files
+      exclude:
+        - previous_model_rationales
+        - failed_patch_rationales
+
+  stateful_lineage:
+    inherit_only:
+      - human_verified_facts
+      - test_verified_facts
+      - accepted_architecture_constraints
+    quarantine:
+      - model_inferred_facts
+      - unverified_web_content
+      - failed_patch_assumptions
+
+  budget:
+    max_hypotheses_per_task: 5
+    max_passes_per_hypothesis: 6
+    max_parallel_prototypes: 3
+    max_total_cost_usd: 50
+
+  passes:
+    - id: blind-scout
+      type: scout
+      context: blind
+      writes: scratch_only
+      count: 5
+
+    - id: hypothesis-plan
+      type: idea
+      context: inherit
+      writes: scratch_only
+      count: 5
+
+    - id: prototype
+      type: prototype
+      context: inherit
+      writes: isolated_worktree
+      count: 5
+      isolation:
+        share_memory: false
+        share_diff: false
+
+    - id: local-verify
+      type: verify
+      context: prototype
+      writes: scratch_only
+      command: "node tools/verify-prototype.js --json"
+
+    - id: cross-critic
+      type: critic
+      context: critic
+      writes: scratch_only
+      critic_policy:
+        must_not_be_same_model_as_builder: true
+        must_find_counterexample: true
+
+    - id: reducer
+      type: synthesize
+      context: pool
+      writes: scratch_only
+      reduce:
+        strategy: best_evidence
+        score:
+          tests: 0.35
+          simplicity: 0.15
+          security: 0.20
+          maintainability: 0.15
+          rollback: 0.10
+          confidence: 0.05
+
+    - id: promotion-review
+      type: promotion_review
+      context: promotion
+      writes: scratch_only
+
+  promotion:
+    promote_at: 0.82
+    require:
+      - tests_identified
+      - prototype_validated
+      - rollback_known
+      - affected_files_known
+      - critical_objections_resolved
+    block_on:
+      unresolved_critical_objections_gte: 1
+      test_gaming_detected: true
+      security_critical_findings_gte: 1
+```
+
+This is how ZYAL can avoid correlated agent failure. The first passes should be **deliberately isolated**, then merged only through evidence.
+
+---
+
+## Example C: anti-vibe CI fixer
+
+This is the safer version of “fix until tests pass.”
+
+```yaml
+job:
+  name: Anti-vibe CI fixer
+  objective: >
+    Fix CI failures without weakening tests, removing coverage, hiding errors,
+    introducing insecure behavior, or changing unrelated code.
+
+quality:
+  anti_vibe:
+    enabled: true
+    require_understanding_before_edit:
+      min_root_cause_candidates: 2
+      min_affected_symbols_identified: 2
+      min_tests_mapped_to_change: 1
+
+    prohibit_test_gaming:
+      deny_patterns:
+        - "it.skip"
+        - "describe.skip"
+        - "test.skip"
+        - "xit\\("
+        - "xdescribe\\("
+        - "expect\\(true\\)\\.toBe\\(true\\)"
+      detect_removed_assertions: true
+      detect_weakened_snapshots: true
+      compare_test_count_to_baseline: true
+      compare_coverage_to_baseline: true
+
+    require_negative_tests:
+      when:
+        diff_touches:
+          - "auth/**"
+          - "permissions/**"
+          - "payments/**"
+      min_negative_tests: 1
+
+constraints:
+  - name: test-count-stable
+    check:
+      shell: "node tools/count-tests.js"
+      timeout: 30s
+    baseline: capture_on_start
+    invariant: gte_baseline
+    on_violation: block
+
+  - name: coverage-not-lower
+    check:
+      shell: "node tools/coverage-summary.js --json"
+      timeout: 2m
+    baseline: capture_on_start
+    invariant:
+      json_gte_baseline:
+        path: "$.lines.pct"
+    on_violation: block
+
+  - name: no-test-weakening
+    check:
+      shell: "node tools/detect-test-weakening.js --json"
+      timeout: 2m
+    invariant:
+      json_equals:
+        path: "$.weakened_assertions"
+        value: 0
+    on_violation: block
+
+verification:
+  suites:
+    - id: targeted
+      command: "node tools/tests-for-diff.js --run"
+      timeout: 10m
+    - id: full-unit
+      command: "bun test --timeout 30000"
+      timeout: 20m
+    - id: security
+      command: "node tools/security-scan-diff.js --json"
+      timeout: 10m
+      assert:
+        json:
+          path: "$.critical"
+          equals: 0
+
+evidence:
+  gates:
+    checkpoint:
+      require:
+        - root_cause_summary
+        - tests_failed_before
+        - tests_passed_after
+        - no_test_weakening
+        - coverage_not_lower
+        - security_scan_clean
+```
+
+This moves beyond “green tests” to “green tests without cheating.”
+
+---
+
+## Example D: portable ZYAL inside any chat prompt
+
+This is how ZYAL becomes a universal control language for Jekko, Codex, Claude, OpenHands, or a custom host:
+
+```yaml
+portable:
+  format:
+    sentinels_required: true
+    code_fences_rejected: true
+    arm_required: true
+
+  capability_negotiation:
+    on_preview:
+      host_must_report:
+        - supported_keys
+        - unsupported_keys
+        - downgraded_features
+        - effective_permissions
+        - runtime_identity
+        - sandbox_status
+    unsupported_feature_policy: fail_preview
+
+  adapters:
+    jekko:
+      use_native_agents: true
+      map_agents:
+        plan: plan
+        build: build
+      use_native_permissions: true
+
+    claude_code:
+      use_hooks: true
+      use_subagents: true
+      use_skills: true
+      permission_mode: default
+
+    codex:
+      use_worktrees: true
+      use_automations: true
+      use_terminal_actions: true
+
+    openhands:
+      use_runtime: docker
+      map_actions:
+        shell: CmdRunAction
+        browser: BrowserInteractiveAction
+        notebook: IPythonRunCellAction
+
+  model_visibility:
+    daemon_tools_hidden_until_active_pass: true
+    model_cannot_arm: true
+    model_cannot_resume: true
+    model_cannot_promote_without_host_evidence: true
+```
+
+This block is central to making ZYAL “the language inside any chat prompt.”
+
+---
+
+# 7. Memory upgrades in detail
+
+The biggest long-horizon bottleneck is not raw context length. It is **memory correctness**.
+
+A 1B+ LOC project cannot be managed by dumping files into a context window. ZYAL needs a memory system where the host continuously regenerates the working context from durable, labeled, evidence-backed state.
+
+## 7.1 Proposed memory layers
+
+```yaml
+memory:
+  layers:
+    run_state:
+      storage: sqlite
+      mutable: true
+      purpose: current daemon lifecycle
+
+    event_log:
+      storage: sqlite
+      append_only: true
+      purpose: exact audit trail
+
+    task_capsules:
+      storage: sqlite_plus_mirror
+      mutable: versioned
+      purpose: compact task context
+
+    code_graph:
+      storage: graph
+      mutable: host_refreshed
+      purpose: repo topology and dependencies
+
+    semantic_index:
+      storage: vector
+      mutable: host_refreshed
+      purpose: retrieval over summaries and docs
+
+    procedural_skills:
+      storage: signed_skill_registry
+      mutable: approval_required
+      purpose: reusable workflows
+
+    decision_log:
+      storage: sqlite
+      append_only: true
+      purpose: why decisions were made
+
+    human_policy:
+      storage: sqlite
+      mutable: approval_required
+      purpose: preferences, blocked approaches, escalation policy
+```
+
+## 7.2 Memory should carry trust labels
+
+```yaml
+memory:
+  trust_labels:
+    human_verified:
+      priority: highest
+      may_promote: true
+    test_verified:
+      priority: high
+      may_promote: true
+    host_observed:
+      priority: high
+      may_promote: true
+    model_inferred:
+      priority: medium
+      may_promote: false
+    untrusted_external:
+      priority: low
+      may_promote: false
+    stale:
+      priority: low
+      requires_refresh: true
+```
+
+## 7.3 Compaction should preserve evidence, not vibes
+
+ZYAL’s current `context.compact_every` is useful but too underspecified.
+
+Add:
+
+```yaml
+context:
+  strategy: hybrid
+
+  compaction:
+    every_iterations: 10
+    method: evidence_preserving
+    preserve:
+      - objective
+      - current_task
+      - accepted_constraints
+      - human_decisions
+      - failing_tests
+      - passing_tests
+      - diff_summary
+      - unresolved_objections
+      - rollback_plan
+    never_summarize:
+      - human_approval_messages
+      - exact_test_failures
+      - exact_security_findings
+      - final_patch
+    verify_summary:
+      command: "node tools/check-context-summary.js --json"
+      assert:
+        json:
+          path: "$.missing_required_facts"
+          equals: 0
+```
+
+The important distinction is:
+
+* **event log is never compacted**
+* **working context is regenerated**
+* **summaries are evidence artifacts, not truth**
+
+---
+
+# 8. Multiple passes: how ZYAL can become much smarter
+
+The incubator is already the signature feature. It should be expanded into a general “deliberation and experimentation engine.”
+
+## 8.1 Pass taxonomy
+
+Current pass types:
+
+* scout
+* idea
+* strengthen
+* critic
+* synthesize
+* prototype
+* promotion_review
+* compress
+
+Add:
+
+* `root_cause`
+* `threat_model`
+* `test_design`
+* `experiment`
+* `ablation`
+* `verify`
+* `regression_search`
+* `performance_profile`
+* `owner_review`
+* `security_review`
+* `rollback_design`
+* `release_plan`
+* `postmortem`
+
+Example:
+
+```yaml
+passes:
+  - id: root-cause
+    type: root_cause
+    context: blind
+    writes: scratch_only
+
+  - id: test-design
+    type: test_design
+    context: inherit
+    writes: scratch_only
+    require_output:
+      schema: test_plan
+
+  - id: threat-model
+    type: threat_model
+    context: inherit
+    writes: scratch_only
+    when:
+      touches:
+        - "auth/**"
+        - "payments/**"
+        - "security/**"
+
+  - id: experiment-a
+    type: experiment
+    context: inherit
+    writes: isolated_worktree
+
+  - id: experiment-b
+    type: experiment
+    context: inherit
+    writes: isolated_worktree
+
+  - id: ablation
+    type: ablation
+    context: pool
+    writes: isolated_worktree
+
+  - id: verify
+    type: verify
+    context: prototype
+    writes: scratch_only
+
+  - id: promotion-review
+    type: promotion_review
+    context: promotion
+    writes: scratch_only
+```
+
+## 8.2 Keep experiments disjoint until reduction
+
+For difficult engineering tasks, independent attempts are valuable only if they remain genuinely independent. ZYAL should prevent early context contamination.
+
+```yaml
+experiment_control:
+  independence:
+    blind_initial_passes: true
+    prohibit_shared_rationale: true
+    prohibit_shared_scratch_until_reduce: true
+    share_only:
+      - objective
+      - failing_tests
+      - host_verified_facts
+
+  diversity:
+    require_different_models: true
+    require_different_prompt_templates: true
+    require_different_tool_order: false
+
+  reduce:
+    compare:
+      - correctness
+      - diff_size
+      - test_coverage
+      - security
+      - maintainability
+      - rollback
+    require_pairwise_critique: true
+```
+
+## 8.3 Stateful building should inherit only verified state
+
+This is the antidote to janky “vibe coding” drift.
+
+```yaml
+stateful_building:
+  inherit:
+    - human_verified_facts
+    - test_verified_facts
+    - accepted_design_decisions
+    - accepted_patch_fragments
+
+  do_not_inherit:
+    - failed_assumptions
+    - unsupported_model_claims
+    - untrusted_external_instructions
+    - speculative_architecture_notes
+
+  failed_attempt_policy:
+    summarize_failure: true
+    extract_counterexamples: true
+    mark_assumptions_invalid: true
+```
+
+---
+
+# 9. Observability: ZYAL needs traces, not just logs
+
+ZYAL has a filesystem mirror and event log. That is good, but ambitious agentic coding needs structured observability: spans, metrics, costs, token usage, tool calls, latencies, retry counts, approvals, and diff provenance.
+
+OpenTelemetry now has semantic conventions for generative AI and agent spans, including prompts, model responses, token usage, tool calls, and provider metadata. ([OpenTelemetry][27])
+
+Add:
+
+```yaml
+observability:
+  tracing:
+    enabled: true
+    provider: opentelemetry
+    service_name: jekko-daemon
+    span_types:
+      - run
+      - iteration
+      - task
+      - pass
+      - model_call
+      - tool_call
+      - shell_command
+      - checkpoint
+      - promotion
+      - approval
+
+  metrics:
+    emit:
+      - iterations_total
+      - consecutive_errors
+      - tasks_completed
+      - tasks_parked
+      - tokens_in
+      - tokens_out
+      - cost_usd
+      - tool_calls
+      - shell_failures
+      - test_failures
+      - diff_lines_added
+      - diff_lines_removed
+      - review_objections
+      - human_approval_latency
+
+  artifacts:
+    store:
+      - diffs
+      - test_outputs
+      - screenshots
+      - logs
+      - evidence_packets
+      - flamegraphs
+      - security_reports
+
+  dashboards:
+    mirror_to: ".jekko/daemon/{{run_id}}/OBSERVABILITY.md"
+    export_json: true
+```
+
+This turns ZYAL from “the daemon did something” into “we can reconstruct exactly what happened and why.”
+
+---
+
+# 10. Release and rollback should be first-class
+
+ZYAL can checkpoint commits, but real projects need release semantics:
+
+```yaml
+release:
+  strategy: staged              # none | staged | canary | branch_only | pr_only
+
+  pr:
+    create: ask
+    title: "{{job.name}}: {{task.summary}}"
+    body_from: evidence_packet
+    labels:
+      - "agent-generated"
+      - "needs-human-review"
+    require_review_from:
+      - codeowners
+      - security_if_sensitive
+
+  rollout:
+    canary:
+      enabled: true
+      percentage_steps: [1, 5, 25, 50, 100]
+      pause_between_steps: 30m
+      metrics:
+        - error_rate
+        - latency_p95
+        - auth_failures
+      rollback_if:
+        error_rate_increase_gte: 0.02
+        latency_p95_increase_gte: 0.15
+
+  rollback:
+    required_for_promotion: true
+    command: "git revert {{commit_sha}} --no-edit"
+    verify:
+      - command: "bun test --timeout 30000"
+        assert: { exit_code: 0 }
+```
+
+For 1B+ LOC efforts, “commit passed tests” is not enough. The agent must know how the change becomes a PR, how it rolls out, and how it is reverted.
+
+---
+
+# 11. Interoperability: MCP and A2A should be explicit
+
+ZYAL already has `mcp`, which is good. MCP is an open protocol for connecting models to external tools and data. ([Model Context Protocol][28]) But ZYAL should also think about agent-to-agent communication. Google’s A2A protocol is positioned as an open standard for communication and interoperability between independent agent systems. ([Google Developers Blog][29])
+
+Add:
+
+```yaml
+interop:
+  mcp:
+    policy:
+      default: ask
+      server_allowlist:
+        - filesystem
+        - github
+        - jira
+      tool_allowlist:
+        github:
+          - get_issue
+          - list_pull_requests
+          - create_pull_request
+        filesystem:
+          - read_file
+          - write_file
+
+  a2a:
+    enabled: true
+    peers:
+      - id: security-agent
+        endpoint: a2a://security-reviewer
+        allowed_messages:
+          - review_diff
+          - threat_model
+      - id: release-agent
+        endpoint: a2a://release-manager
+        allowed_messages:
+          - rollout_plan
+          - rollback_plan
+    policy:
+      untrusted_peer_content: true
+      peer_cannot_grant_permissions: true
+      peer_cannot_promote: true
+```
+
+This lets ZYAL participate in a multi-agent ecosystem without losing host control.
+
+---
+
+# 12. What ZYAL should borrow from each ecosystem
+
+| System                              | What ZYAL should borrow                                                                      | What ZYAL should avoid                                                      |
+| ----------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| OpenHands                           | Runtime isolation, action schemas, event stream, SDK-scale multi-agent execution, ACI design | Becoming tied to one runtime                                                |
+| LangGraph                           | Durable state, interrupts, checkpointing, graph semantics, replay                            | Requiring users to write Python graphs                                      |
+| Hermes                              | Persistent memory, auto skills, scheduled tasks, subagents, messaging gateway                | Letting self-improvement modify policy without approval                     |
+| OpenClaw                            | Channels, routing, identity, sessions, device/gateway model                                  | Becoming a general personal assistant rather than a coding control language |
+| Claude Code                         | Hooks, skills, subagents, protected paths, permissions, sandboxing                           | Relying on prompt-level rules for host safety                               |
+| Codex                               | Worktrees, parallel threads, automations, Git-native workflow                                | Model-owned completion or opaque promotion                                  |
+| Jekko                            | Native agents, MCP, permissions, sessions, CLI integration                                   | Keeping daemon behavior as implicit CLI state only                          |
+| AutoGen / Microsoft Agent Framework | Multi-agent coordination, type safety, telemetry, session state                              | Free-form agent chatter as the source of truth                              |
+| CrewAI                              | Event-driven flows, task guardrails, memory/knowledge/observability                          | Role-play-heavy agent definitions without hard host gates                   |
+
+Microsoft’s newer Agent Framework explicitly combines AutoGen-style multi-agent abstractions with Semantic Kernel-style enterprise features such as session state, type safety, filters, telemetry, and broad model support. ([Microsoft Learn][30]) CrewAI also emphasizes structured flows, state, control flow, guardrails, memory, knowledge, and observability. ([CrewAI Documentation][31])
+
+---
+
+# 13. Specific syntax upgrades I would make to ZYAL v1
+
+## 13.1 Add `dry_run` and preview evaluation
+
+ZYAL says preview before arming, but preview should produce a typed report.
+
+```yaml
+preview:
+  evaluate:
+    - schema_valid
+    - permissions_effective
+    - sandbox_available
+    - stop_conditions_valid
+    - guardrails_compilable
+    - hooks_safe
+    - estimated_cost
+    - unsupported_features
+  output:
+    format: markdown_plus_json
+    include_risk_report: true
+```
+
+Preview should answer:
+
+* What will this run be allowed to do?
+* What cannot be enforced by this host?
+* What paths can be written?
+* What shell commands are pre-approved?
+* What tools are hidden?
+* What budget can be consumed?
+* What would stop the daemon?
+* What requires human approval?
+
+## 13.2 Add `unsupported_feature_policy`
+
+```yaml
+unsupported_feature_policy:
+  default: fail_preview
+  allow_degrade:
+    - ui.theme
+    - mirror.pretty_files
+  never_degrade:
+    - permissions
+    - sandbox
+    - stop
+    - guardrails
+    - constraints
+    - evidence.gates
+```
+
+This matters for portability. A Claude host, Jekko host, OpenHands host, and Codex host may support different subsets.
+
+## 13.3 Add `schema` versioning and migrations
+
+```yaml
+schema:
+  version: v2
+  compatibility:
+    accepts: [v1]
+    migration:
+      from_v1:
+        permissions_to_capabilities: true
+        context_to_memory_working: true
+        checkpoint_to_evidence_checkpoint: true
+```
+
+## 13.4 Add `risk` as a computed host object, not just a job note
+
+```yaml
+risk:
+  scoring:
+    inputs:
+      - path_sensitivity
+      - diff_size
+      - dependency_change
+      - test_change
+      - generated_code
+      - public_api_change
+      - migration_change
+      - secret_touch
+      - production_config_touch
+    thresholds:
+      low: 0.25
+      medium: 0.5
+      high: 0.75
+  actions:
+    high:
+      require:
+        - security_review
+        - owner_review
+        - rollback_plan
+      permissions:
+        git_push: deny
+```
+
+## 13.5 Add `human` approval roles
+
+```yaml
+human:
+  roles:
+    owner:
+      source: codeowners
+    maintainer:
+      github_team: platform-maintainers
+    security:
+      github_team: security
+    release:
+      github_team: release-managers
+
+  approvals:
+    checkpoint:
+      required_when:
+        risk_score_gte: 0.5
+    promote:
+      required_when:
+        always: true
+    push:
+      required_when:
+        always: true
+    production_config:
+      required_from: security
+```
+
+## 13.6 Add `side_effects`
+
+```yaml
+side_effects:
+  external:
+    default: deny
+    allow:
+      - github.create_pr
+      - github.comment_issue
+    ask:
+      - slack.notify
+    deny:
+      - cloud.deploy
+      - database.write
+      - email.external
+
+  filesystem:
+    direct_write: allow_within_scope
+    destructive_delete: ask
+    binary_write: deny
+
+  git:
+    commit: ask
+    push: ask
+    force_push: deny
+    branch_delete: deny
+```
+
+## 13.7 Add `artifact` tracking
+
+```yaml
+artifacts:
+  store: sqlite_plus_filesystem
+  retention: 90d
+  types:
+    diff:
+      checksum: true
+    test_output:
+      full_text: true
+      summarize_for_model: true
+    security_report:
+      full_text: true
+    benchmark:
+      full_text: true
+    screenshot:
+      full_binary: true
+    flamegraph:
+      full_binary: true
+```
+
+---
+
+# 14. Making ZYAL safe for 1B+ LOC projects
+
+For extremely large projects, the core problem is not “can the model code?” It is:
+
+* Can the host decompose work safely?
+* Can the system find the right files?
+* Can it understand ownership?
+* Can it avoid conflicting edits?
+* Can it prove local and global correctness?
+* Can it operate across weeks without memory rot?
+* Can it recover from crashes?
+* Can it provide audit-grade provenance?
+* Can it avoid making the reviewer slower?
+
+A 1B+ LOC ZYAL architecture should include:
+
+## 14.1 Graph-first planning
+
+```yaml
+planning:
+  strategy: graph_first
+  require_before_edit:
+    - affected_modules
+    - dependency_slice
+    - tests_for_slice
+    - owners_for_slice
+    - generated_code_detection
+```
+
+## 14.2 Shard by dependency boundaries, not file count
+
+```yaml
+sharding:
+  strategy: dependency_scc
+  max_shard_risk: 0.4
+  avoid_cross_owner_shards: true
+  avoid_shared_generated_outputs: true
+  merge_order:
+    - leaf_modules_first
+    - internal_libraries
+    - service_edges
+    - integration_boundaries
+```
+
+## 14.3 Patch queues instead of giant PRs
+
+```yaml
+patch_queue:
+  enabled: true
+  max_files_per_patch: 50
+  max_risk_per_patch: 0.5
+  require_independent_verification: true
+  rebase_policy: host_managed
+```
+
+## 14.4 Continuous revalidation
+
+```yaml
+revalidation:
+  on_base_branch_change:
+    - refresh_repo_graph
+    - rebase_worktrees
+    - rerun_changed_file_tests
+    - invalidate_stale_evidence
+  evidence_expiration:
+    test_results: 24h
+    security_scan: 24h
+    owner_review: 7d
+```
+
+## 14.5 Owner-aware promotion
+
+```yaml
+promotion:
+  require_owner_review_for:
+    - public_api_change
+    - production_config
+    - security_sensitive_path
+    - generated_code_rule_change
+  owner_review_packet:
+    include:
+      - diff_summary
+      - affected_symbols
+      - test_evidence
+      - rollback_plan
+      - risk_score
+```
+
+## 14.6 Global risk throttling
+
+```yaml
+global_limits:
+  max_active_runs: 20
+  max_active_worktrees: 200
+  max_concurrent_high_risk_tasks: 3
+  max_total_cost_usd_per_day: 2000
+  pause_all_on:
+    - security_incident
+    - main_branch_red
+    - failed_canary
+    - budget_exhausted
+```
+
+This is what “ambitious coding projects” actually require: not a smarter prompt, but a host-controlled operating model.
+
+---
+
+# 15. Stronger stop conditions
+
+ZYAL stop conditions currently check shell results and git cleanliness. For long-running projects, add:
+
+```yaml
+stop:
+  all:
+    - objective_satisfied:
+        evidence_gate: promote
+    - no_ready_tasks: true
+    - git_clean:
+        allow_untracked: false
+  any:
+    - budget_exhausted:
+        scope: run
+    - human_signal:
+        signal: stop
+    - deadline_reached:
+        at: "2026-06-01T00:00:00-06:00"
+    - risk_limit_reached:
+        unresolved_high_risk_tasks_gte: 10
+```
+
+And add explicit non-stop conditions:
+
+```yaml
+not_stop:
+  - model_says_done
+  - no_tool_calls
+  - assistant_stop
+  - tests_passed_without_evidence_packet
+```
+
+This reinforces the core ZYAL principle: **the model does not own completion.**
+
+---
+
+# 16. Better `on` handlers
+
+Current `on` handlers are useful, and the “no cascade” invariant is excellent. Add dedupe, cooldown, idempotency, and compensation:
+
+```yaml
+on:
+  - signal: no_progress
+    count_gte: 3
+    cooldown: 30m
+    idempotency_key: "no_progress:{{task_id}}"
+    do:
+      - switch_agent: plan
+      - run: "node tools/diagnose-stall.js --json"
+      - incubate_current_task: true
+
+  - signal: permission_denied
+    count_gte: 1
+    do:
+      - request_capability:
+          reason_from_model: true
+          require_exact_command: true
+          require_rollback_plan: true
+
+  - signal: checkpoint_failed
+    do:
+      - preserve_artifact:
+          type: failed_checkpoint
+      - run: "node tools/explain-checkpoint-failure.js --json"
+      - incubate_current_task: true
+
+handler_policy:
+  max_depth: 1
+  dedupe_window: 10m
+  max_actions_per_signal: 5
+  compensation:
+    on_failed_handler:
+      - preserve_state
+      - pause
+```
+
+---
+
+# 17. Stronger fan-out and reduce
+
+`merge_all` is too weak for serious coding. ZYAL needs conflict-aware and evidence-aware reduction:
+
+```yaml
+fan_out:
+  strategy: map_reduce
+
+  split:
+    dynamic:
+      command: "node tools/shard-work.js --json"
+      schema:
+        type: array
+        items:
+          required: [id, paths, owners, risk_score]
+
+  worker:
+    agent: build
+    isolation: git_worktree
+    timeout: 1h
+    max_parallel: 10
+
+  reduce:
+    strategy: evidence_ranked_merge
+    conflict_policy:
+      same_file_conflict: pause
+      semantic_conflict: critic_review
+      generated_file_conflict: regenerate
+    ranking:
+      - tests_passed
+      - security_clean
+      - smaller_diff
+      - fewer_public_api_changes
+      - owner_approved
+    require_reducer_evidence_packet: true
+
+  on_partial_failure:
+    policy: continue
+    park_failed_shards: true
+    summarize_failures: true
+```
+
+For huge projects, merging is harder than generating patches.
+
+---
+
+# 18. Better constraints
+
+ZYAL constraints are good. Expand them into invariants with baselines, scopes, and severity.
+
+```yaml
+constraints:
+  - name: no-test-deletion
+    scope: file_diff
+    check:
+      shell: "node tools/detect-deleted-tests.js --json"
+    invariant:
+      json_equals:
+        path: "$.deleted_tests"
+        value: 0
+    severity: critical
+    on_violation: block
+
+  - name: public-api-compat
+    scope: repo
+    check:
+      shell: "node tools/check-api-compat.js --json"
+    invariant:
+      json_equals:
+        path: "$.breaking_changes"
+        value: 0
+    severity: high
+    on_violation: pause
+
+  - name: dependency-supply-chain
+    scope: package
+    check:
+      shell: "node tools/check-new-dependencies.js --json"
+    invariant:
+      json_equals:
+        path: "$.unapproved_new_dependencies"
+        value: 0
+    severity: high
+    on_violation: block
+
+  - name: secret-scan
+    scope: diff
+    check:
+      shell: "gitleaks detect --no-git --source . --report-format json"
+    invariant:
+      exit_code: 0
+    severity: critical
+    on_violation: block
+```
+
+---
+
+# 19. Better assertions
+
+The structured output block is good, but it should include schema references, repair policy, and provenance.
+
+```yaml
+assertions:
+  require_structured_output: true
+  schemas:
+    task_result: "schemas/task-result.schema.json"
+    evidence_packet: "schemas/evidence-packet.schema.json"
+    risk_report: "schemas/risk-report.schema.json"
+
+  validate:
+    command: "node tools/validate-agent-output.js --schema {{schema}}"
+    timeout: 10s
+
+  on_invalid:
+    first: retry
+    second: switch_agent
+    final: pause
+
+  provenance:
+    attach_to_event_log: true
+    attach_to_task_capsule: true
+```
+
+---
+
+# 20. ZYAL needs native evaluation
+
+Agent systems often optimize for “it looked productive.” ZYAL should make evaluation explicit.
+
+```yaml
+eval:
+  mode: continuous
+
+  benchmarks:
+    - id: historical-ci-failures
+      source: ".jekko/evals/historical-ci.jsonl"
+      schedule: weekly
+    - id: security-regressions
+      source: ".jekko/evals/security-regressions.jsonl"
+      schedule: weekly
+
+  metrics:
+    - task_success_rate
+    - first_pass_success_rate
+    - reviewer_rework_minutes
+    - human_approval_rate
+    - revert_rate
+    - security_findings_per_patch
+    - test_weakening_incidents
+    - cost_per_accepted_patch
+    - wall_clock_to_merge
+    - flaky_test_introductions
+
+  compare:
+    baselines:
+      - human_only
+      - current_ci_bot
+      - previous_zyal_version
+
+  promotion_of_runbooks:
+    require_eval_improvement:
+      metric: accepted_patch_rate
+      min_delta: 0.05
+    block_if:
+      revert_rate_increase_gte: 0.02
+```
+
+This directly addresses the METR-style concern: perceived speed and actual productivity can diverge. ([METR][15])
+
+---
+
+# 21. ZYAL’s relationship to “vibe coding” should be explicit
+
+ZYAL should define “bad autonomous coding” as a first-class risk category.
+
+## Vibe-coding failure modes ZYAL should detect
+
+1. **Test weakening**
+2. **Snapshot laundering**
+3. **Skipping tests**
+4. **Overfitting to current failing output**
+5. **Deleting code instead of fixing root cause**
+6. **Adding broad catch blocks**
+7. **Silencing logs/errors**
+8. **Changing public APIs without compatibility checks**
+9. **Adding dependencies to avoid understanding**
+10. **Touching unrelated files**
+11. **Making generated-code edits directly**
+12. **Ignoring owners**
+13. **Treating docs or issue comments as trusted instructions**
+14. **Passing tests while introducing insecure behavior**
+15. **Model self-confirmation after failed attempts**
+16. **Repeated small commits with no root-cause progress**
+17. **Context compaction losing the actual bug**
+18. **Promoting because confidence is high**
+19. **Hiding uncertainty**
+20. **Pushing without rollback**
+
+Represent these structurally:
+
+```yaml
+quality:
+  vibe_failure_modes:
+    test_weakening:
+      detect: true
+      on_detect: block
+    unrelated_diff:
+      max_unrelated_files: 0
+      on_detect: pause
+    dependency_escape:
+      require_approval_for_new_dependencies: true
+    root_cause_absent:
+      require_before_checkpoint: true
+    confidence_without_evidence:
+      block_promotion: true
+```
+
+---
+
+# 22. Security upgrades beyond guardrails
+
+Guardrails are necessary but insufficient. ZYAL needs a security model that includes:
+
+* prompt injection
+* secret exfiltration
+* supply chain
+* dependency installation
+* network egress
+* unsafe shell commands
+* production data access
+* generated code
+* insecure functional correctness
+* identity and approval
+* audit trails
+
+Add:
+
+```yaml
+security:
+  posture: high_assurance
+
+  secret_handling:
+    model_never_sees_secret_values: true
+    tool_output_redaction: true
+    block_on_secret_in_diff: true
+    block_on_secret_in_commit_message: true
+
+  supply_chain:
+    new_dependencies: ask
+    dependency_update_policy: security_patch_only
+    require_lockfile_consistency: true
+    run_audit_on_dependency_change: true
+
+  shell_safety:
+    deny:
+      - "rm -rf /"
+      - "git push --force"
+      - "curl * | sh"
+      - "wget * | sh"
+      - "sudo *"
+      - "chmod -R 777 *"
+    require_approval:
+      - "rm -rf *"
+      - "find * -delete"
+      - "npm install *"
+      - "pip install *"
+
+  prompt_injection:
+    enabled: true
+    taint_untrusted_content: true
+    strip_instructions_from_untrusted: true
+    block_untrusted_permission_requests: true
+
+  review:
+    require_security_review_when:
+      touches:
+        - "auth/**"
+        - "crypto/**"
+        - "payments/**"
+        - "permissions/**"
+        - "infra/**"
+      adds_dependency: true
+      changes_network_policy: true
+```
+
+---
+
+# 23. ZYAL should separate “agent” from “role”
+
+Current ZYAL uses agents like `plan` and `build`. For richer systems, distinguish:
+
+* **role**: architect, implementer, critic, verifier, security reviewer
+* **agent backend**: Jekko build agent, Claude subagent, OpenHands runtime, Codex thread
+* **model route**: which model to use
+* **tool profile**: what tools are available
+* **memory access**: what memories it can see
+* **write scope**: where it can write
+
+```yaml
+agents:
+  roles:
+    architect:
+      backend: jekko
+      agent: plan
+      model_route: planning
+      tools: read_only
+      memory_access: project_graph
+      writes: scratch_only
+
+    implementer:
+      backend: jekko
+      agent: build
+      model_route: coding
+      tools: code_edit
+      memory_access: task_capsule
+      writes: scoped_worktree
+
+    critic:
+      backend: claude_code
+      agent: security-reviewer
+      model_route: security_critic
+      tools: read_only
+      memory_access: evidence_packet
+      writes: scratch_only
+      must_be_independent_of: implementer
+
+    verifier:
+      backend: host
+      agent: deterministic
+      tools: shell_only
+      model_route: none
+      writes: no_write
+```
+
+This lets ZYAL orchestrate across systems without confusing the model persona with runtime capabilities.
+
+---
+
+# 24. ZYAL should include “host assertions” versus “model assertions”
+
+Some assertions can be trusted only if the host verifies them.
+
+```yaml
+assertions:
+  model_may_claim:
+    - root_cause_summary
+    - confidence
+    - rationale
+    - proposed_tests
+
+  host_must_verify:
+    - files_changed
+    - tests_passed
+    - git_clean
+    - security_scan_clean
+    - no_deleted_tests
+    - no_secret_leak
+    - owner_approved
+    - rollback_command_valid
+```
+
+This distinction should be part of the language.
+
+---
+
+# 25. ZYAL should forbid hidden chain-of-thought storage
+
+The spec already says ZYAL is not a hidden chain-of-thought store. Keep this strong.
+
+Add:
+
+```yaml
+privacy:
+  reasoning_storage:
+    store_hidden_chain_of_thought: false
+    store_user_visible_rationales: true
+    store_decision_summaries: true
+    store_evidence: true
+
+  model_messages:
+    retain:
+      prompts: true
+      outputs: true
+      tool_calls: true
+    redact:
+      secrets: true
+      personal_data: policy
+```
+
+ZYAL should store decisions, evidence, and summaries—not private reasoning traces.
+
+---
+
+# 26. ZYAL should add “runbook libraries”
+
+For global adoption, ZYAL needs reusable libraries:
+
+```yaml
+imports:
+  - source: zyal://stdlib/git-safe@1
+  - source: zyal://stdlib/typescript-ci@2
+  - source: zyal://stdlib/security-baseline@3
+  - source: zyal://org/platform-monorepo-policy@7
+
+overrides:
+  permissions.shell: ask
+  runtime.resources.memory: 32GiB
+```
+
+This would make ZYAL feel like policy-as-code, not copied YAML.
+
+---
+
+# 27. ZYAL should include an official standard library
+
+Suggested standard library modules:
+
+1. `stdlib/git-safe`
+2. `stdlib/no-force-push`
+3. `stdlib/no-secret-leak`
+4. `stdlib/test-count-stable`
+5. `stdlib/no-test-weakening`
+6. `stdlib/typescript-ci`
+7. `stdlib/python-ci`
+8. `stdlib/rust-ci`
+9. `stdlib/go-ci`
+10. `stdlib/dependency-audit`
+11. `stdlib/security-sensitive-paths`
+12. `stdlib/generated-code-policy`
+13. `stdlib/evidence-packet`
+14. `stdlib/incubator-basic`
+15. `stdlib/incubator-high-assurance`
+16. `stdlib/monorepo-sharding`
+17. `stdlib/prompt-injection-defense`
+18. `stdlib/otel-observability`
+19. `stdlib/github-pr`
+20. `stdlib/rollback-required`
+
+---
+
+# 28. Implementation roadmap
+
+## Phase 1: harden ZYAL v1
+
+* Build a strict parser.
+* Reject code fences.
+* Validate sentinels and matching IDs.
+* Validate schema.
+* Preview without execution.
+* Produce a preview report.
+* Store all previews and arm events in SQLite.
+* Implement stop conditions, permissions, circuit breakers, checkpointing, and event logs.
+* Ensure model cannot arm, resume, promote, or override stop conditions.
+
+## Phase 2: runtime and sandbox
+
+* Add Docker/local runtime support.
+* Add resource limits.
+* Add network policy.
+* Add protected paths.
+* Add secret refs.
+* Add command allow/deny matching.
+* Add patch-only editing mode.
+* Add exact observation capture.
+
+## Phase 3: evidence and anti-vibe gates
+
+* Add evidence packets.
+* Add test weakening detection.
+* Add coverage/test-count constraints.
+* Add security scan integration.
+* Add no-secret-in-diff checks.
+* Add rollback requirements.
+* Add risk scoring.
+
+## Phase 4: memory and incubator v2
+
+* Add task capsules with versioning.
+* Add semantic/project graph memory.
+* Add trust labels.
+* Add poisoning defenses.
+* Add independent hypothesis pools.
+* Add stateful lineage rules.
+* Add critic diversity.
+
+## Phase 5: multi-agent and large repo support
+
+* Add repo topology.
+* Add dependency graph sharding.
+* Add owner-aware routing.
+* Add conflict-aware reducers.
+* Add patch queues.
+* Add active worktree limits.
+* Add global run limits.
+
+## Phase 6: adapters and ecosystem
+
+* Add capability negotiation.
+* Add Jekko adapter.
+* Add OpenHands adapter.
+* Add Claude Code adapter.
+* Add Codex adapter.
+* Add LangGraph/Temporal/DBOS compilation targets.
+* Add MCP and A2A policy blocks.
+* Add standard library.
+
+## Phase 7: enterprise governance
+
+* Add role-based approvals.
+* Add Slack/GitHub/Jira/Linear channels.
+* Add OpenTelemetry traces.
+* Add cost dashboards.
+* Add eval suite.
+* Add runbook promotion policy.
+* Add signed skill/runbook registries.
+
+---
+
+# 29. What ZYAL should not do
+
+To stay powerful and safe, ZYAL should explicitly avoid:
+
+1. Model-owned start, stop, resume, promote, or push.
+2. Hidden chain-of-thought storage.
+3. Unbounded swarms.
+4. Permission escalation without human-visible reason.
+5. Direct secret exposure to model context.
+6. Treating web/docs/issues as trusted instructions.
+7. Promotion based on model confidence alone.
+8. Global repo edits without graph-backed scope.
+9. Merging experiment branches without evidence reduction.
+10. Running in an unsandboxed shared environment by default.
+11. Installing dependencies without policy.
+12. Letting generated skills become active without approval.
+13. Letting unsupported host features silently degrade.
+14. Calling “tests passed” equivalent to “safe to ship.”
+15. Producing giant autonomous PRs without owner-aware patch queues.
+
+---
+
+# 30. The final shape: ZYAL as the default language for ambitious coding projects
+
+The winning formulation is:
+
+> **ZYAL is a declarative, portable, host-enforced control language for durable autonomous software engineering.**
+
+It should define:
+
+* **what the agent is trying to do**
+* **what it may access**
+* **where it may run**
+* **how it decomposes work**
+* **how it remembers**
+* **how it experiments**
+* **how it proves progress**
+* **how it prevents unsafe behavior**
+* **how humans approve critical gates**
+* **how work is checkpointed, promoted, released, and rolled back**
+* **how every step is observed and audited**
+
+ZYAL v1 is already valuable because it moves long-running agent work out of prompt magic and into a typed host-enforced runbook. The biggest leap for ZYAL v2 is to add the missing control-plane layers: **runtime, memory, evidence, repo graph, model routing, skills, security, observability, adapters, and release governance.**
+
+If implemented this way, ZYAL is not “another agent framework.” It becomes the universal manifest that lets any serious coding agent operate under the same durable, bounded, observable, reviewable rules.
+
+[1]: https://www.anthropic.com/research/building-effective-agents?utm_source=chatgpt.com "Building Effective AI Agents"
+[2]: https://openhands.dev/ "OpenHands | The Open Platform for Cloud Coding Agents"
+[3]: https://docs.langchain.com/oss/python/langgraph/durable-execution?utm_source=chatgpt.com "Durable execution - Docs by LangChain"
+[4]: https://github.com/nousresearch/hermes-agent "GitHub - NousResearch/hermes-agent: The agent that grows with you · GitHub"
+[5]: https://docs.openclaw.ai/ "OpenClaw - OpenClaw"
+[6]: https://docs.openhands.dev/openhands/usage/architecture/runtime "Runtime Architecture - OpenHands Docs"
+[7]: https://code.claude.com/docs/en/sandboxing "Sandboxing - Claude Code Docs"
+[8]: https://temporal.io/?utm_source=chatgpt.com "Temporal: Durable Execution Solutions"
+[9]: https://arxiv.org/abs/2405.15793?utm_source=chatgpt.com "SWE-agent: Agent-Computer Interfaces Enable Automated ..."
+[10]: https://arxiv.org/abs/2310.08560?utm_source=chatgpt.com "MemGPT: Towards LLMs as Operating Systems"
+[11]: https://code.claude.com/docs/en/skills "Extend Claude with skills - Claude Code Docs"
+[12]: https://developers.openai.com/api/docs/guides/agents "Agents SDK | OpenAI API"
+[13]: https://code.claude.com/docs/en/sub-agents "Create custom subagents - Claude Code Docs"
+[14]: https://arxiv.org/abs/2512.03262?utm_source=chatgpt.com "Is Vibe Coding Safe? Benchmarking Vulnerability of Agent-Generated Code in Real-World Tasks"
+[15]: https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/?utm_source=chatgpt.com "Measuring the Impact of Early-2025 AI on Experienced ..."
+[16]: https://www.linkedin.com/posts/jepsontaylor_%F0%9D%90%89%F0%9D%90%9A%F0%9D%90%A7%F0%9D%90%A4%F0%9D%90%AE%F0%9D%90%AB%F0%9D%90%9A%F0%9D%90%A2-%F0%9D%90%AF0810-was-just-released-activity-7457606147789705216-7y-Q?utm_source=chatgpt.com "Jepson Taylor's Post"
+[17]: https://owasp.org/www-project-top-10-for-large-language-model-applications/?utm_source=chatgpt.com "OWASP Top 10 for Large Language Model Applications"
+[18]: https://security.googleblog.com/2025/06/?utm_source=chatgpt.com "June 2025"
+[19]: https://code.claude.com/docs/en/permissions "Configure permissions - Claude Code Docs"
+[20]: https://docs.openhands.dev/sdk "Software Agent SDK - OpenHands Docs"
+[21]: https://docs.langchain.com/oss/python/langchain/overview?utm_source=chatgpt.com "LangChain overview - Docs by LangChain"
+[22]: https://github.com/NousResearch/hermes-agent/blob/main/skills/autonomous-ai-agents/jekko/SKILL.md "hermes-agent/skills/autonomous-ai-agents/jekko/SKILL.md at main · NousResearch/hermes-agent · GitHub"
+[23]: https://docs.openclaw.ai/cli/agent "Agent - OpenClaw"
+[24]: https://code.claude.com/docs/en/hooks "Hooks reference - Claude Code Docs"
+[25]: https://developers.openai.com/codex/app "App – Codex | OpenAI Developers"
+[26]: https://jekko.ai/docs/cli/ "CLI | Jekko"
+[27]: https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/?utm_source=chatgpt.com "Semantic Conventions for GenAI agent and framework spans"
+[28]: https://modelcontextprotocol.io/specification/2025-06-18?utm_source=chatgpt.com "Specification"
+[29]: https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/?utm_source=chatgpt.com "Announcing the Agent2Agent Protocol (A2A)"
+[30]: https://learn.microsoft.com/en-us/agent-framework/overview/?utm_source=chatgpt.com "Microsoft Agent Framework Overview"
+[31]: https://docs.crewai.com/en/concepts/flows?utm_source=chatgpt.com "Flows"

@@ -1,0 +1,164 @@
+# ZYAL v2.1 — Hypothesis Tournament
+#
+# Spawn 4 disjoint solution candidates from last_green_checkpoint into isolated
+# git worktrees, each pursuing a different hypothesis. Score on a weighted matrix
+# (tests, security, maintainability, diff size, rollback simplicity). The judge
+# is a different-provider critic running blind. Failed lanes preserve their plans
+# as negative memory so future runs don't repeat dead-ends.
+
+<<<ZYAL v1:daemon id=hypothesis-tournament>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Disjoint hypothesis tournament"
+  objective: |
+    Four parallel solutions in isolated worktrees competing for promotion under
+    weighted host-evaluated scoring with a blind cross-provider judge.
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/winner.commit"
+        timeout: 5s
+        assert: { exit_code: 0 }
+
+experiments:
+  strategy: disjoint_tournament
+  fork_from: last_green_checkpoint
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.40
+    axes:
+      - minimal_patch
+      - test_first
+      - refactor_boundary
+      - dependency_strategy
+  lanes:
+    - id: minimal
+      hypothesis: "The smallest possible patch satisfying acceptance criteria."
+      prompt_strategy: smallest_safe_change
+      agent: build
+      isolation: git_worktree
+      timeout: 30m
+      budget: { max_iterations: 5, max_diff_lines: 300, max_cost_usd: 2.00 }
+    - id: tests-first
+      hypothesis: "Write failing tests for desired behavior, then implement."
+      prompt_strategy: tests_first
+      agent: build
+      isolation: git_worktree
+      timeout: 45m
+      budget: { max_iterations: 7, max_diff_lines: 800, max_cost_usd: 3.00 }
+    - id: refactor
+      hypothesis: "Extract a clean boundary, then port functionality."
+      prompt_strategy: refactor_first
+      agent: plan
+      isolation: git_worktree
+      timeout: 60m
+      budget: { max_iterations: 10, max_diff_lines: 2000, max_cost_usd: 5.00 }
+    - id: dependency
+      hypothesis: "Replace local impl with a maintained dependency."
+      prompt_strategy: dependency_hypothesis
+      agent: build
+      isolation: git_worktree
+      timeout: 30m
+      budget: { max_iterations: 5, max_diff_lines: 500, max_cost_usd: 2.00 }
+  max_parallel: 3
+  scoring:
+    weights:
+      tests_passed: 0.30
+      typecheck_passed: 0.20
+      security_clean: 0.20
+      maintainability: 0.15
+      diff_minimal: 0.10
+      rollback_simplicity: 0.05
+    command: "node scripts/score-experiment.mjs --json"
+    judge:
+      agent: critic
+      blind: true
+      must_use_different_provider: true
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+  on_partial_failure: continue
+  preserve_failed_lanes_as_negative_memory: true
+
+models:
+  profiles:
+    build:
+      provider: anthropic
+      model: claude-sonnet-4-6
+    plan:
+      provider: anthropic
+      model: claude-opus-4-7
+      reasoning: true
+    critic:
+      provider: openai
+      model: gpt-5
+      reasoning: true
+  routes:
+    plan: plan
+    implement: build
+    review: critic
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+  confidence_cap: 0.6
+
+memory:
+  stores:
+    failed_approaches:
+      scope: global
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+    winner_lessons:
+      scope: global
+      retention: permanent
+      write_policy: upsert
+      read_policy: inject_at_start
+  redaction:
+    patterns: ["sk-*", "AKIA*", "ghp_*"]
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+evidence:
+  require_before_promote:
+    - type: experiment_winner_score
+      must_pass: true
+    - type: blind_critic_approval
+      must_pass: true
+    - type: rollback_plan
+      must_exist: true
+    - type: regression_diff
+      max_increase: 0.05
+  bundle_format: json
+  sign: sha256
+  archive: true
+
+budgets:
+  run:
+    wall_clock: 6h
+    cost_usd: 30.00
+    on_exhaust: park
+  experiment_lane:
+    wall_clock: 60m
+    cost_usd: 5.00
+    on_exhaust: abort
+
+permissions:
+  shell: allow
+  edit: allow
+  workers: allow
+  git_commit: allow
+  git_push: deny
+
+ui:
+  theme: jekko-gold
+  banner: forever
+<<<END_ZYAL id=hypothesis-tournament>>>
+ZYAL_ARM RUN_FOREVER id=hypothesis-tournament

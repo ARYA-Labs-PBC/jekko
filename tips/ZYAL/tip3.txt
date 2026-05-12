@@ -1,0 +1,347 @@
+I read ZYAL as a **host-enforced, declarative control plane for long-running agents**: the host owns lifecycle, budgets, stop/done conditions, approvals, evidence, write scopes, SQLite state, incubator passes, capabilities, experiments, rollback, and repo intelligence. That is the right center of gravity; ZYAL’s strongest idea is that the model can propose and act, but the host enforces control, state, safety, and promotion gates.
+
+I interpreted “LangChane” as **LangChain/LangGraph** and “Hermis” as **Hermes Agent**. I did not find a separate widely established “Hermis” protocol; the relevant current references are Hermes Agent docs and its agent-memory/skills/runtime patterns. For “OpenClaw,” the official docs show an ACP-based bridge for running external coding harnesses like Codex, Claude Code, Cursor, Gemini CLI, and Jekko, with background-task tracking and session binding; importantly, those docs also warn that ACP sessions currently run on the host rather than inside OpenClaw’s sandbox. ([OpenClaw][1])
+
+## Ecosystem baseline: what ZYAL should not reinvent
+
+The big current protocol split is fairly clear:
+
+**MCP** is the tool/context/data layer. Its spec defines hosts, clients, servers, resources, prompts, tools, sampling, roots, elicitation, progress, cancellation, error reporting, and logging. ZYAL should treat MCP as the default external capability bus, not create a competing tool protocol. ([Model Context Protocol][2])
+
+**A2A** is the remote agent-to-agent layer. The A2A spec has task lifecycle streaming, task/artifact updates, push notifications, agent discovery through Agent Cards, and even Agent Card signing/canonicalization. ZYAL’s multi-agent model should export/import A2A rather than invent a separate remote-agent contract. ([A2A Protocol][3])
+
+**AG-UI** is the agent-to-user/frontend event layer. Its docs position it as a lightweight, bidirectional, event-based protocol for connecting agentic backends to user-facing applications, including state, UI intents, and user interactions. ZYAL approvals, pause/resume, evidence review, diff review, and progress telemetry should map cleanly to AG-UI events. ([AG-UI][4])
+
+**ACP — Agent Client Protocol** is the editor/coding-agent interface. ACP standardizes communication between code editors/IDEs and coding agents, including local stdio and remote HTTP/WebSocket modes, and reuses MCP JSON representations where possible while adding coding UX concepts like diffs. ZYAL should use ACP for editor integration and coding-harness sessions. ([Agent Client Protocol][5])
+
+**LangGraph** already covers a lot of durable workflow ground: persistence, streaming, debugging, deployment, thread-scoped checkpoints, human-in-the-loop inspection/resume, time travel, fault tolerance, and long-term memory stores. ZYAL can learn from this but should remain a host-enforced contract rather than a Python framework clone. ([LangChain Docs][6])
+
+**Hermes Agent** shows useful pragmatic patterns: project context files like `AGENTS.md`, reusable skills for multi-step workflows, bounded memory files, compression, and a caveat that memory changes may not enter the active prompt until the next session. ZYAL’s memory layer should explicitly address that “writes now, visible when?” problem. ([Hermes Agent][7])
+
+**MemGPT/Letta** is the clearest memory-design reference. MemGPT’s core idea is virtual context management: hierarchical memory tiers that move information between “fast” context and slower external storage. Letta operationalizes this with always-visible memory blocks plus archival memory that is queried on demand. ([arXiv][8])
+
+## Main gaps and issues I see
+
+ZYAL is already unusually strong on host control, arming, budgets, approvals, and safety. The biggest gaps are not “more YAML blocks”; they are **formal semantics, interoperability, memory quality, evidence provenance, and distributed runtime correctness**.
+
+The **versioning surface is confusing**. The examples still use `<<<ZYAL v1:daemon>>>` while the document describes v2 and v2.1 blocks. That is understandable during design, but for adoption it needs `apiVersion`, `kind`, `metadata`, `spec`, and `status` style clarity, or an equivalent formal envelope. Kubernetes CRDs are a useful model: declarative resources plus controllers, schema, and status separation. ([Kubernetes][9])
+
+The **memory block is too shallow for long loops**. `stores`, `scope`, `retention`, `compression`, and provenance are a good start, but long-running agents fail because old context becomes stale, contradictory, poisoned, over-injected, or detached from current repo reality. ZYAL needs memory invalidation, contradiction resolution, source trust, freshness, retrieval tests, and an explicit context compiler.
+
+The **evidence system should become a proof graph**, not just a list of artifacts. “Tests passed” is not enough unless the evidence records git SHA, command, environment, dependency lock state, affected files, test count, logs hash, verifier identity, and replayability. SLSA’s provenance framing—verifiable information about where, when, and how an artifact was produced—is the right mental model. ([SLSA][10])
+
+The **security model needs taint tracking**. ZYAL has guardrails and command floors, but prompt injection, insecure output handling, supply-chain vulnerabilities, excessive agency, sensitive information disclosure, and insecure plugin design are all first-class LLM risks. ZYAL should track untrusted data sources through memory, tool calls, shell commands, approvals, and generated runbooks. ([OWASP Foundation][11])
+
+The **runtime durability model is underspecified**. SQLite as truth is good for local durability, but long-running, fleet-scale agent work needs idempotency keys, replay semantics, event-sourced receipts, state migrations, locking, resumability, “continue-as-new,” and distributed leases. Temporal’s model is a useful reference because it defines durable, reliable workflow execution that resumes from persisted state after failures. ([Temporal Docs][12])
+
+## Top 10 upgrades I would make
+
+### 1. Add an `interop` block that maps ZYAL to MCP, A2A, ACP, and AG-UI
+
+This is the most important “don’t reinvent the wheel” upgrade. ZYAL should become the **orchestration contract above existing protocols**, not a competing protocol.
+
+Example direction:
+
+```yaml
+interop:
+  mcp:
+    mode: client_and_server
+    expose:
+      resources: [run_state, evidence_bundle, task_capsules]
+      tools: [pause_run, approve_gate, promote_task]
+    consume_profiles: [readonly_repo, github, ci]
+  a2a:
+    expose_agent_card: true
+    sign_agent_card: true
+    task_mapping:
+      zyal_task: a2a_task
+      zyal_pass_output: a2a_artifact
+      zyal_event: a2a_status_update
+  acp:
+    editor_bridge: true
+    session_binding: thread_or_workspace
+    diff_streaming: true
+  ag_ui:
+    stream_events: [progress, diff, approval_request, evidence_ready, rollback_preview]
+```
+
+This makes ZYAL a portable control plane. MCP handles tools/context, A2A handles remote agents and task lifecycles, ACP handles coding-agent/editor UX, and AG-UI handles human-facing streams. ([Model Context Protocol][2])
+
+### 2. Replace simple memory stores with a **Memory OS + Context Compiler**
+
+ZYAL should model memory as separate tiers, each with different trust, visibility, retention, and retrieval behavior:
+
+```yaml
+memory:
+  context_compiler:
+    max_tokens: 24000
+    include:
+      - active_objective
+      - current_task_capsule
+      - last_verified_receipts
+      - unresolved_blockers
+      - relevant_memories
+    exclude:
+      - stale_memories
+      - untrusted_tool_output_without_summary
+      - superseded_plans
+  tiers:
+    working:
+      visibility: always
+      retention: iteration
+    core:
+      visibility: always
+      write_policy: host_review_for_global
+    episodic:
+      stores: tool_calls, decisions, failures, approvals
+      retrieval: similarity_and_recency
+    semantic:
+      stores: facts, repo_invariants, architecture
+      contradiction_policy: require_resolution
+    procedural:
+      stores: skills, recipes, runbooks
+      promotion: quarantine_then_review
+    negative:
+      stores: failed_hypotheses, dead_ends, bad_patches
+      retrieval: before_retry
+```
+
+This borrows the right lessons from MemGPT’s hierarchical memory and Letta’s distinction between always-visible core memory and query-on-demand archival memory. The key addition is **host-governed context compilation**: every iteration should receive a small, audited context pack, not an ever-growing transcript. ([arXiv][8])
+
+### 3. Turn `evidence` into a signed, queryable **Proof Graph**
+
+ZYAL already knows promotion should require host evidence. The upgrade is to make every claim explicit:
+
+```yaml
+evidence:
+  graph:
+    claims:
+      tests_pass:
+        verifier: shell
+        command: "bun test --timeout 30000"
+        captures: [exit_code, stdout_hash, test_count, duration, cwd, env_hash]
+      rollback_valid:
+        verifier: shell
+        command: "git apply --reverse --check rollback.patch"
+      no_test_deletion:
+        verifier: diff_policy
+    edges:
+      - claim: promote_ready
+        depends_on: [tests_pass, rollback_valid, affected_files_known, no_test_deletion]
+  attest:
+    format: in_toto
+    sign: sigstore_keyless
+    transparency_log: optional
+```
+
+For serious engineering agents, the output should be a **proof-carrying patch**: code diff plus evidence graph plus rollback plus provenance. SLSA and Sigstore are good patterns here: provenance describes where/when/how artifacts were produced, and Sigstore keyless signing ties signatures to identity and a transparency log. ([SLSA][10])
+
+### 4. Add deterministic durable execution semantics, not just persistence
+
+SQLite is a good local source of truth, but ZYAL needs a formal event model:
+
+```yaml
+runtime:
+  durability:
+    event_sourcing: true
+    idempotency_keys: required
+    effect_log: required
+    replay_mode: receipts_only
+    continue_as_new:
+      when_event_count_gte: 10000
+      preserve: [task_state, memory_summary, evidence_graph]
+  backend:
+    local: sqlite
+    optional_remote: temporal
+```
+
+The important distinction is this: **do not replay model reasoning; replay verified receipts and host decisions**. Temporal’s model of durable workflows, persisted state, replay, and recovery is a useful reference, while Argo’s DAGs, retries, and artifacts are useful for batch-style workflow shape. ([Temporal Docs][12])
+
+### 5. Add taint-aware information-flow control
+
+ZYAL’s current guardrails are pattern-based. That is necessary but insufficient. The protocol should label every input by origin and restrict where it can flow:
+
+```yaml
+security:
+  taint:
+    labels:
+      trusted_user: trusted
+      assistant_output: untrusted_control
+      issue_comment: untrusted_text
+      web_content: untrusted_text
+      mcp_resource: untrusted_data
+      tool_output: untrusted_data
+      memory: trust_by_provenance
+    rules:
+      - from: [assistant_output, tool_output, web_content, issue_comment]
+        forbid: [arming, approval, capability_escalation, secret_request]
+      - from: untrusted_text
+        to: shell_command
+        action: require_structured_argument_binding
+      - from: untrusted_data
+        to: memory.global
+        action: require_summarize_and_review
+```
+
+This addresses the real agentic failure mode: malicious or stale text gets treated as an instruction, enters memory, later influences a tool call, and causes unsafe action. OWASP’s LLM risk list explicitly calls out prompt injection, insecure output handling, insecure plugin design, excessive agency, and sensitive information disclosure, so ZYAL should make source-to-sink control structural. ([OWASP Foundation][11])
+
+### 6. Add signed capability, skill, and agent manifests
+
+The current `skills`, `capabilities`, and `models` blocks are powerful, but they need supply-chain discipline. Every skill, MCP server, remote A2A agent, ACP harness, model profile, and tool bundle should have a manifest, version, signer, permissions, test results, and historical reliability score.
+
+```yaml
+registry:
+  agents:
+    discovery: a2a_agent_cards
+    require_signed_cards: true
+  tools:
+    discovery: mcp
+    require_schema_hash: true
+  skills:
+    source: ".jekko/skills/**"
+    quarantine_new: true
+    promote_requires:
+      - human_review
+      - dry_run_success
+      - no_secret_access
+      - signed_manifest
+```
+
+A2A already has Agent Cards and signing guidance, while MCP already standardizes exposed tools/resources/prompts. ZYAL should use those descriptors, then add local governance: trust score, blast radius, required approvals, and revocation. ([A2A Protocol][3])
+
+### 7. Upgrade `experiments` into an adaptive solver/search engine
+
+The existing hypothesis tournament is one of ZYAL’s best ideas. Make it more central:
+
+```yaml
+search:
+  strategy: adaptive_hypothesis_search
+  require_root_cause_before_patch: true
+  novelty:
+    min_plan_distance: 0.35
+    forbid_repeating_failed_hypotheses: true
+  lanes:
+    generate: 5
+    run_parallel: 3
+    preserve_negative_memory: true
+  scoring:
+    evidence_weighted: true
+    prefer_minimal_verified_patch: true
+    penalize:
+      - diff_bloat
+      - test_weakening
+      - unresolved_risk
+      - repeated_failure_mode
+```
+
+The goal is to move from “loop until it works” to **scientific debugging**: reproduce, hypothesize, test, patch, verify, record negative results, and avoid repeating dead ends. This also makes memory more valuable because failed attempts become reusable negative memory.
+
+### 8. Standardize observability with OpenTelemetry GenAI spans
+
+ZYAL has an `observability` block, but it should be concrete and interoperable:
+
+```yaml
+observability:
+  opentelemetry:
+    enabled: true
+    spans:
+      - run
+      - workflow_state
+      - agent_call
+      - model_call
+      - tool_call
+      - mcp_call
+      - a2a_task
+      - acp_session
+      - approval_gate
+      - evidence_verifier
+      - memory_retrieval
+    redact:
+      prompts: policy
+      tool_outputs: policy
+      secrets: always
+  metrics:
+    - cost_usd
+    - tokens
+    - tool_latency
+    - memory_hit_rate
+    - stale_memory_used
+    - retries
+    - evidence_coverage
+```
+
+OpenTelemetry has GenAI agent/framework span conventions, and modern agent frameworks already treat tracing as core: OpenAI’s Agents SDK tracing, for example, records LLM generations, tool calls, handoffs, guardrails, and custom events. ZYAL should emit traces that are useful without exposing private chain-of-thought: receipts, actions, evidence, decisions, and artifacts are enough. ([OpenTelemetry][13])
+
+### 9. Make human governance a first-class UX protocol, not just approvals
+
+ZYAL approvals are good, but the human interface should be richer than approve/reject. Use AG-UI-style event streams for risk cards, diff previews, rollback previews, evidence bundles, blocked decisions, and “edit this plan” interactions.
+
+```yaml
+human:
+  ui_protocol: ag_ui
+  review_cards:
+    - risk_delta
+    - diff_summary
+    - evidence_status
+    - rollback_preview
+    - memory_changes
+  decisions:
+    plan_review:
+      options: [approve, reject, edit_plan, request_more_evidence, narrow_scope]
+      record_reason: required
+      expires: 24h
+```
+
+This matters because long-running agents need **supervision that scales**. Humans should not babysit every tool call, but when the agent reaches a gate, the host should present compact evidence and meaningful choices. AG-UI is the natural bridge for real-time agent-user interaction. ([AG-UI][4])
+
+### 10. Publish a formal spec, schema, canonicalizer, and conformance suite
+
+For ZYAL to become significant, it needs to become testable. I would define:
+
+```yaml
+apiVersion: zyal.dev/v2alpha1
+kind: AgentRunbook
+metadata:
+  name: fix-tests
+  id: fix-tests
+spec:
+  intent: daemon
+  job: ...
+status:
+  phase: Previewed | Armed | Running | Paused | Completed | Aborted
+```
+
+Then publish:
+
+1. a strict JSON Schema or OpenAPI-compatible schema;
+2. a canonical YAML subset with no ambiguous tags, anchors, merge keys, or parser-specific behavior unless explicitly allowed;
+3. semantic validation rules;
+4. conformance profiles: `ZYAL-Core`, `ZYAL-Memory`, `ZYAL-Interop`, `ZYAL-Secure`, `ZYAL-Enterprise`;
+5. adversarial test fixtures for arming spoofing, tainted input, memory poisoning, budget exhaustion, duplicate webhooks, failed retries, sandbox escapes, and evidence tampering.
+
+OpenAPI’s value is that a formal interface lets humans and machines understand a service without inspecting implementation details; Kubernetes CRDs show how declarative resources plus controllers become a durable ecosystem pattern. ZYAL needs the same level of specification discipline. ([OpenAPI Initiative Publications][14])
+
+## Highest-priority changes
+
+The three highest-leverage upgrades are:
+
+1. **Interop block** for MCP, A2A, ACP, and AG-UI.
+2. **Memory OS + context compiler** with freshness, provenance, contradiction handling, and negative memory.
+3. **Proof graph / proof-carrying patch** with signed evidence and replayable receipts.
+
+Those three turn ZYAL from a strong local daemon runbook into a serious, portable **agent operating contract**: interoperable with existing protocols, durable across long loops, safer against memory drift and prompt injection, and credible enough for real engineering governance.
+
+[1]: https://docs.openclaw.ai/tools/acp-agents "ACP Agents - OpenClaw"
+[2]: https://modelcontextprotocol.io/specification/2025-11-25 "Specification - Model Context Protocol"
+[3]: https://a2a-protocol.org/latest/specification/ "Overview - A2A Protocol"
+[4]: https://docs.ag-ui.com/introduction "AG-UI Overview - Agent User Interaction Protocol"
+[5]: https://agentclientprotocol.com/get-started/introduction "Introduction - Agent Client Protocol"
+[6]: https://docs.langchain.com/oss/python/langgraph/workflows-agents "Workflows and agents - Docs by LangChain"
+[7]: https://hermes-agent.nousresearch.com/docs/guides/tips "Tips & Best Practices | Hermes Agent"
+[8]: https://arxiv.org/abs/2310.08560 "[2310.08560] MemGPT: Towards LLMs as Operating Systems"
+[9]: https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/ "Custom Resources | Kubernetes"
+[10]: https://slsa.dev/provenance "SLSA • Provenance"
+[11]: https://owasp.org/www-project-top-10-for-large-language-model-applications/ "OWASP Top 10 for Large Language Model Applications | OWASP Foundation"
+[12]: https://docs.temporal.io/workflow-execution "Temporal Workflow Execution overview | Temporal Platform Documentation"
+[13]: https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/ "Semantic Conventions for GenAI agent and framework spans | OpenTelemetry"
+[14]: https://spec.openapis.org/oas/v3.2.0.html "OpenAPI Specification v3.2.0"

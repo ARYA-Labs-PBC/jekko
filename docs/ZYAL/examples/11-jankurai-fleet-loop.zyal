@@ -1,0 +1,169 @@
+# ZYAL v1 — Jankurai minimal fleet loop (10 parallel Jnoccio workers)
+#
+# Spins up 10 parallel build workers, each backed by jnoccio-fusion at
+# http://127.0.0.1:4317. Workers claim tasks from JANKURAI_TASKLIST.md,
+# fix one at a time, commit proof. Stops when jankurai reports 0 findings
+# and the worktree is clean.
+#
+# Prerequisites:
+#   1. jankurai CLI on $PATH
+#   2. jnoccio-fusion server running: `cargo run --release` from jnoccio-fusion/
+#      Health check: curl http://127.0.0.1:4317/v1/models
+#   3. JANKURAI_TASKLIST.md at repo root (touch it if missing)
+<<<ZYAL v1:daemon id=jankurai-min-loop>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai min loop"
+  objective: |
+    UNATTENDED JOB — never ask the user anything; make best-effort decisions always.
+    Loop cold: run jankurai audit, update JANKURAI_TASKLIST.md, move [x] rows to
+    JANKURAI_TASKLIST.md.completed, claim first [ ] as [~], finish exactly one task,
+    mark [x] with proof. Keep state in files, not chat; never paste full audit output.
+    If a task is blocked or ambiguous: skip it (Status: Blocked + reason) and claim next.
+
+    TOOL SCHEMA — jekko uses camelCase, every call must match exactly:
+    - bash:  {"command": "...", "description": "one-line summary"}
+    - read:  {"filePath": "/absolute/path"}             ← camelCase, absolute
+    - edit:  {"filePath": "...", "oldString": "...", "newString": "..."}
+    - write: {"filePath": "...", "content": "..."}
+    - task:  {"description": "3-5 words", "prompt": "...", "subagent_type": "..."}
+
+    Boot: read {"filePath": "<repo-root>/AGENTS.md"} then
+          read {"filePath": "<repo-root>/agent/JANKURAI_STANDARD.md"}.
+
+# ─── Interaction ──────────────────────────────────────────────────────────────
+# user: none  →  no human reads or responds during this run.
+# The ZYAL runtime injects system_inject into every agent turn and replaces
+# "ask" capability decisions with allow/deny per on_ambiguity.
+# Change to user: async (human may respond later) or user: present (interactive).
+interaction:
+  user: none
+  on_ambiguity: best_effort   # pick safest path; never wait for input
+  on_blocked: skip_and_next   # mark Blocked + reason; claim next pending task
+  system_inject: |
+    UNATTENDED ZYAL JOB (interaction.user=none).
+    Never ask the user a question. Never write "Should I…" or list choices.
+    When uncertain: make your best judgment and proceed.
+    When blocked: Status: Blocked + reason in JANKURAI_TASKLIST.md, then next task.
+
+    TOOL CALL SCHEMAS — jekko uses camelCase, every call must match:
+    - bash:  {"command":"...","description":"..."}
+    - read:  {"filePath":"/abs/path"}
+    - edit:  {"filePath":"/abs/path","oldString":"...","newString":"..."}
+    - write: {"filePath":"/abs/path","content":"..."}
+    - task:  {"description":"...","prompt":"...","subagent_type":"..."}
+
+# ─── Models ───────────────────────────────────────────────────────────────────
+# All 10 workers use jnoccio-fusion. fleet.jnoccio below handles load balancing
+# and connection registration for up to 10 simultaneous in-flight requests.
+models:
+  profiles:
+    build: { provider: jnoccio, model: jnoccio-fusion }
+  routes:
+    implement: build
+  fallback:
+    on_rate_limit: build   # jnoccio-fusion is the only provider; retry same
+    cooldown: 10s
+
+# ─── Workers ──────────────────────────────────────────────────────────────────
+# 10 parallel workers, each claiming a separate task from the tasklist.
+# isolation: git_worktree ensures no shared working-tree state between workers.
+agents:
+  workers:
+    - id: worker
+      count: 10             # ← 10 parallel agents
+      agent: build          # ← uses models.profiles.build (jnoccio-fusion)
+      isolation: git_worktree
+
+# ─── Fleet / Jnoccio connection pool ─────────────────────────────────────────
+# fleet.jnoccio wires all 10 workers to the local jnoccio-fusion server.
+# spawn_on_demand: true  →  Jekyll spawns the server if not yet running.
+# max_instances: 10      →  allows up to 10 concurrent API connections.
+# register_workers       →  each worker POSTs its ID to jnoccio heartbeat so
+#                            the server can track load and shed gracefully.
+fleet:
+  max_workers: 10
+  isolation: git_worktree
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    spawn_on_demand: true
+    max_instances: 10           # ← must equal agents.workers[*].count
+    register_workers: true
+    heartbeat_path: "/v1/jnoccio/agents/heartbeat"
+    heartbeat_interval: 30s
+    metrics_ws: "/v1/jnoccio/metrics/ws"
+  telemetry:
+    publish_to: jnoccio
+    headers:
+      x-jekko-run-id: "${run.id}"
+      x-jekko-session: "${session.id}"
+      x-jekko-process-role: worker
+
+loop:
+  policy: forever
+  sleep: 5s
+  # continue_on: everything that isn't a genuine security/integrity halt.
+  # RUN_FOREVER means errors are skipped, not fatal — the daemon retries the
+  # next task. Only `stop.all` conditions (0 findings + clean worktree) end the run.
+  continue_on:
+    - assistant_stop
+    - max_steps
+    - compaction
+    - permission_denied   # skip the blocked tool call; move to next task
+    - checkpoint_failed   # log failure; try next task rather than pausing
+    - error               # catch-all: log and continue
+  pause_on: []            # nothing pauses a RUN_FOREVER daemon
+  circuit_breaker:
+    max_consecutive_errors: 10   # higher threshold before tripping
+    on_trip: continue            # log the trip; do NOT pause
+
+context:
+  strategy: hard
+  hard_clear_every: 1
+  preserve: [objective, current_task_id]
+
+stop:
+  all:
+    - shell:
+        command: "jankurai audit . --mode advisory --json /tmp/jankurai-stop.json >/dev/null 2>&1 && jq -e '(.findings // []) | length == 0' /tmp/jankurai-stop.json"
+        timeout: 120s
+        assert: { exit_code: 0 }
+    - git_clean: { allow_untracked: false }
+
+tasks:
+  ledger: sqlite
+  discover:
+    - command: "grep -n 'Status: Pending' JANKURAI_TASKLIST.md 2>/dev/null | head -20"
+      timeout: 5s
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "just fast"
+      timeout: 300s
+      assert: { exit_code: 0 }
+  git:
+    add: ["."]
+    commit_message: "jankurai: verified task"
+    push: deny
+
+permissions:
+  shell: allow
+  edit: allow
+  read: allow
+  external_directory: allow
+  git_commit: allow
+  git_push: deny
+  workers: allow
+  mcp: allow
+
+ui:
+  theme: jekko-gold
+  banner: forever
+<<<END_ZYAL id=jankurai-min-loop>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-min-loop

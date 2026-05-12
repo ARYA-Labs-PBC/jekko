@@ -1,0 +1,3098 @@
+I studied the archive and built this as a standalone terminal dashboard that mirrors the existing React contract: it fetches `/v1/jnoccio/metrics`, subscribes to `/v1/jnoccio/metrics/ws`, handles `snapshot`, `model_updated`, `request_event`, and `heartbeat`, and recreates the five-pane dashboard in a keyboard-driven TUI.
+
+I pinned this to current crate docs for Ratatui `0.30.0`, Crossterm `0.29.0`, and tokio-tungstenite `0.29.0`; tokio-tungstenite’s docs show the `connect_async` API and the `rustls-tls-webpki-roots` feature used below. ([Docs.rs][1])
+
+I could not run a full `cargo check` inside this sandbox because crate index resolution is blocked here, but the code below is written against those current APIs.
+
+## `Cargo.toml`
+
+```toml
+[package]
+name = "jnoccio-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+crossterm = "0.29"
+futures-util = "0.3"
+ratatui = "0.30"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+```
+
+## `src/main.rs`
+
+```rust
+use anyhow::{anyhow, Context, Result};
+use chrono::{Local, TimeZone};
+use crossterm::{
+    cursor::{Hide, Show},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use futures_util::StreamExt;
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{
+        Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap,
+    },
+    Frame, Terminal,
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet, VecDeque},
+    env, io,
+    time::{Duration, Instant},
+};
+use tokio::sync::mpsc;
+use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+
+const DEFAULT_BASE_URL: &str = "http://127.0.0.1:4317";
+const MAX_EVENTS: usize = 300;
+const FLASH_TTL: Duration = Duration::from_millis(3_000);
+
+const GOLD: Color = Color::Rgb(245, 166, 35);
+const TEAL: Color = Color::Rgb(54, 215, 183);
+const RED: Color = Color::Rgb(255, 71, 87);
+const PURPLE: Color = Color::Rgb(168, 85, 247);
+const BLUE: Color = Color::Rgb(59, 130, 246);
+const GREEN: Color = Color::Rgb(80, 220, 120);
+const MUTED: Color = Color::Rgb(120, 126, 139);
+const DIM: Color = Color::Rgb(82, 88, 101);
+const SURFACE: Color = Color::Rgb(26, 29, 38);
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Args::parse()?;
+    if args.show_help {
+        println!("{}", Args::help());
+        return Ok(());
+    }
+
+    let mut terminal = TerminalGuard::enter()?;
+    let (net_tx, net_rx) = mpsc::channel::<NetEvent>(512);
+    let (ctrl_tx, ctrl_rx) = mpsc::channel::<ControlMsg>(16);
+    let (input_tx, input_rx) = mpsc::channel::<Event>(256);
+
+    spawn_input_reader(input_tx);
+    tokio::spawn(network_loop(
+        args.base_url.clone(),
+        args.poll_seconds,
+        net_tx,
+        ctrl_rx,
+    ));
+
+    let result = run_app(&mut terminal.terminal, args, net_rx, input_rx, ctrl_tx).await;
+    terminal.exit()?;
+    result
+}
+
+#[derive(Debug, Clone)]
+struct Args {
+    base_url: String,
+    poll_seconds: u64,
+    show_help: bool,
+}
+
+impl Args {
+    fn parse() -> Result<Self> {
+        let mut base_url =
+            env::var("JNOCCIO_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        let mut poll_seconds = 30;
+        let mut show_help = false;
+        let mut iter = env::args().skip(1).peekable();
+
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--base-url" | "-u" => {
+                    base_url = iter
+                        .next()
+                        .ok_or_else(|| anyhow!("--base-url requires a value"))?;
+                }
+                "--poll-seconds" => {
+                    let raw = iter
+                        .next()
+                        .ok_or_else(|| anyhow!("--poll-seconds requires a value"))?;
+                    poll_seconds = raw.parse::<u64>().context("parse --poll-seconds")?.max(5);
+                }
+                "--help" | "-h" => show_help = true,
+                value if !value.starts_with('-') => base_url = value.to_string(),
+                other => return Err(anyhow!("unknown argument: {other}")),
+            }
+        }
+
+        Ok(Self {
+            base_url: trim_base_url(&base_url),
+            poll_seconds,
+            show_help,
+        })
+    }
+
+    fn help() -> &'static str {
+        "jnoccio-tui\n\nUSAGE:\n  jnoccio-tui [--base-url http://127.0.0.1:4317] [--poll-seconds 30]\n\nENV:\n  JNOCCIO_BASE_URL=http://127.0.0.1:4317\n\nKEYS:\n  1-5 / h,l / ←,→   switch panes\n  ↑,↓ / k,j          move selection\n  Enter / d          open selected model details\n  s                  cycle leaderboard sort\n  /                  search/filter current pane\n  n                  cycle feed phase filter\n  c                  cycle context filter in Limits pane\n  r                  refetch metrics snapshot\n  R                  reconnect websocket\n  p                  pause/resume applying live updates\n  ?                  help overlay\n  Esc                close overlay/search\n  q                  quit"
+    }
+}
+
+struct TerminalGuard {
+    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    restored: bool,
+}
+
+impl TerminalGuard {
+    fn enter() -> Result<Self> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, Hide)?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.clear()?;
+        Ok(Self {
+            terminal,
+            restored: false,
+        })
+    }
+
+    fn exit(&mut self) -> Result<()> {
+        if !self.restored {
+            disable_raw_mode()?;
+            execute!(self.terminal.backend_mut(), Show, LeaveAlternateScreen)?;
+            self.terminal.show_cursor()?;
+            self.restored = true;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = self.exit();
+    }
+}
+
+fn spawn_input_reader(tx: mpsc::Sender<Event>) {
+    std::thread::spawn(move || loop {
+        match event::poll(Duration::from_millis(100)) {
+            Ok(true) => match event::read() {
+                Ok(ev) => {
+                    if tx.blocking_send(ev).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            },
+            Ok(false) => {}
+            Err(_) => break,
+        }
+    });
+}
+
+async fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    args: Args,
+    mut net_rx: mpsc::Receiver<NetEvent>,
+    mut input_rx: mpsc::Receiver<Event>,
+    ctrl_tx: mpsc::Sender<ControlMsg>,
+) -> Result<()> {
+    let mut app = App::new(args.base_url.clone());
+    let mut tick = tokio::time::interval(Duration::from_millis(150));
+
+    loop {
+        terminal.draw(|frame| render(frame, &mut app))?;
+
+        tokio::select! {
+            _ = tick.tick() => {
+                app.on_tick();
+            }
+            maybe_event = input_rx.recv() => {
+                if let Some(Event::Key(key)) = maybe_event {
+                    if handle_key(&mut app, key, &ctrl_tx).await? {
+                        let _ = ctrl_tx.send(ControlMsg::Shutdown).await;
+                        break;
+                    }
+                }
+            }
+            maybe_net = net_rx.recv() => {
+                if let Some(event) = maybe_net {
+                    app.apply_net_event(event);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum ControlMsg {
+    Refetch,
+    Reconnect,
+    Shutdown,
+}
+
+#[derive(Debug)]
+enum NetEvent {
+    Connection(ConnectionMode, String),
+    Snapshot(DashboardSnapshot),
+    Socket(SocketMessage),
+    Error(String),
+    Log(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionMode {
+    Loading,
+    Connecting,
+    Live,
+    Reconnecting,
+    Error,
+}
+
+async fn network_loop(
+    base_url: String,
+    poll_seconds: u64,
+    tx: mpsc::Sender<NetEvent>,
+    mut ctrl_rx: mpsc::Receiver<ControlMsg>,
+) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            let _ = tx.send(NetEvent::Error(format!("build HTTP client: {err}"))).await;
+            return;
+        }
+    };
+
+    let mut backoff = 1u64;
+
+    'outer: loop {
+        let _ = tx
+            .send(NetEvent::Connection(
+                ConnectionMode::Loading,
+                "fetching snapshot".to_string(),
+            ))
+            .await;
+
+        match fetch_snapshot(&client, &base_url).await {
+            Ok(snapshot) => {
+                backoff = 1;
+                let _ = tx.send(NetEvent::Snapshot(snapshot)).await;
+            }
+            Err(err) => {
+                let _ = tx
+                    .send(NetEvent::Error(format!("snapshot fetch failed: {err}")))
+                    .await;
+            }
+        }
+
+        let ws_url = websocket_url(&base_url);
+        let _ = tx
+            .send(NetEvent::Connection(
+                ConnectionMode::Connecting,
+                format!("connecting {ws_url}"),
+            ))
+            .await;
+
+        match connect_async(&ws_url).await {
+            Ok((mut ws, _)) => {
+                backoff = 1;
+                let _ = tx
+                    .send(NetEvent::Connection(
+                        ConnectionMode::Live,
+                        "websocket live".to_string(),
+                    ))
+                    .await;
+
+                let mut fallback_poll =
+                    tokio::time::interval(Duration::from_secs(poll_seconds.max(5)));
+
+                loop {
+                    tokio::select! {
+                        msg = ws.next() => {
+                            match msg {
+                                Some(Ok(WsMessage::Text(text))) => {
+                                    let text = text.to_string();
+                                    match serde_json::from_str::<SocketMessage>(&text) {
+                                        Ok(parsed) => { let _ = tx.send(NetEvent::Socket(parsed)).await; }
+                                        Err(err) => { let _ = tx.send(NetEvent::Error(format!("bad websocket json: {err}"))).await; }
+                                    }
+                                }
+                                Some(Ok(WsMessage::Binary(bytes))) => {
+                                    let text = String::from_utf8_lossy(bytes.as_ref()).to_string();
+                                    match serde_json::from_str::<SocketMessage>(&text) {
+                                        Ok(parsed) => { let _ = tx.send(NetEvent::Socket(parsed)).await; }
+                                        Err(err) => { let _ = tx.send(NetEvent::Error(format!("bad websocket binary json: {err}"))).await; }
+                                    }
+                                }
+                                Some(Ok(WsMessage::Close(_))) | None => {
+                                    let _ = tx.send(NetEvent::Connection(ConnectionMode::Reconnecting, "websocket closed".to_string())).await;
+                                    break;
+                                }
+                                Some(Ok(_)) => {}
+                                Some(Err(err)) => {
+                                    let _ = tx.send(NetEvent::Error(format!("websocket error: {err}"))).await;
+                                    break;
+                                }
+                            }
+                        }
+                        _ = fallback_poll.tick() => {
+                            if let Ok(snapshot) = fetch_snapshot(&client, &base_url).await {
+                                let _ = tx.send(NetEvent::Snapshot(snapshot)).await;
+                            }
+                        }
+                        ctrl = ctrl_rx.recv() => {
+                            match ctrl {
+                                Some(ControlMsg::Refetch) => {
+                                    match fetch_snapshot(&client, &base_url).await {
+                                        Ok(snapshot) => { let _ = tx.send(NetEvent::Snapshot(snapshot)).await; }
+                                        Err(err) => { let _ = tx.send(NetEvent::Error(format!("manual refetch failed: {err}"))).await; }
+                                    }
+                                }
+                                Some(ControlMsg::Reconnect) => {
+                                    let _ = tx.send(NetEvent::Connection(ConnectionMode::Reconnecting, "manual reconnect".to_string())).await;
+                                    break;
+                                }
+                                Some(ControlMsg::Shutdown) | None => break 'outer,
+                            }
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                let _ = tx
+                    .send(NetEvent::Error(format!("websocket connect failed: {err}")))
+                    .await;
+            }
+        }
+
+        let wait = backoff.min(10);
+        backoff = (backoff * 2).min(10);
+
+        let _ = tx
+            .send(NetEvent::Connection(
+                ConnectionMode::Reconnecting,
+                format!("retrying in {wait}s"),
+            ))
+            .await;
+
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(wait)) => {}
+            ctrl = ctrl_rx.recv() => {
+                match ctrl {
+                    Some(ControlMsg::Shutdown) | None => break,
+                    Some(ControlMsg::Refetch) | Some(ControlMsg::Reconnect) => continue,
+                }
+            }
+        }
+    }
+
+    let _ = tx
+        .send(NetEvent::Connection(
+            ConnectionMode::Error,
+            "network task stopped".to_string(),
+        ))
+        .await;
+}
+
+async fn fetch_snapshot(client: &reqwest::Client, base_url: &str) -> Result<DashboardSnapshot> {
+    let url = format!("{}/v1/jnoccio/metrics", trim_base_url(base_url));
+    let response = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()
+        .context("metrics endpoint returned error")?;
+    let snapshot = response.json::<DashboardSnapshot>().await?;
+    Ok(snapshot.normalized())
+}
+
+fn trim_base_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
+
+fn websocket_url(base_url: &str) -> String {
+    let base = trim_base_url(base_url);
+    let ws = if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        format!("ws://{base}")
+    };
+    format!("{ws}/v1/jnoccio/metrics/ws")
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct DashboardSnapshot {
+    totals: DashboardTotals,
+    token_rate: TokenRateEstimate,
+    capacity: CapacitySummary,
+    context: ContextDashboard,
+    models: Vec<DashboardModel>,
+    recent_events: Vec<MetricEvent>,
+    agent_count: usize,
+    max_agents: usize,
+    active_agents: Vec<AgentActivity>,
+    instance_count: usize,
+    max_instances: usize,
+    available_instance_slots: usize,
+    instance_role: String,
+    worker_threads: usize,
+}
+
+impl DashboardSnapshot {
+    fn normalized(mut self) -> Self {
+        if self.agent_count == 0 {
+            self.agent_count = 1;
+        }
+        if self.max_agents == 0 {
+            self.max_agents = 20;
+        }
+        if self.instance_count == 0 {
+            self.instance_count = 1;
+        }
+        if self.max_instances == 0 {
+            self.max_instances = 20;
+        }
+        if self.instance_role.is_empty() {
+            self.instance_role = "main".to_string();
+        }
+
+        let mut seen = HashSet::new();
+        self.recent_events.retain(|event| seen.insert(event.id));
+        self.recent_events.sort_by(|a, b| b.id.cmp(&a.id));
+
+        if self.available_instance_slots == 0 && self.max_instances > self.instance_count {
+            self.available_instance_slots = self.max_instances - self.instance_count;
+        }
+
+        self
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct DashboardTotals {
+    total_models: u64,
+    enabled_models: u64,
+    calls: u64,
+    successes: u64,
+    failures: u64,
+    wins: u64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    average_latency_ms: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+struct TokenRateEstimate {
+    median_m_tokens_per_24h: f64,
+    max_m_tokens_per_24h: f64,
+    sample_minutes: u64,
+    window_minutes: u64,
+    smoothing_minutes: u64,
+}
+
+impl Default for TokenRateEstimate {
+    fn default() -> Self {
+        Self {
+            median_m_tokens_per_24h: 0.0,
+            max_m_tokens_per_24h: 0.0,
+            sample_minutes: 0,
+            window_minutes: 1440,
+            smoothing_minutes: 10,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct ContextDashboard {
+    estimates: Vec<ModelLimitEstimate>,
+    histogram: Vec<ContextHistogramBucket>,
+    recent_events: Vec<ModelContextEvent>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct ModelLimitEstimate {
+    model_id: String,
+    provider: String,
+    configured_context_window: u64,
+    learned_context_window: Option<u64>,
+    learned_request_token_limit: Option<u64>,
+    learned_tpm_limit: Option<u64>,
+    safe_context_window: u64,
+    largest_success_prompt_tokens: u64,
+    largest_success_total_tokens: u64,
+    smallest_overrun_requested_tokens: Option<u64>,
+    context_overrun_count: u64,
+    rate_limit_count: u64,
+    last_limit_error_kind: Option<String>,
+    last_limit_error_message: Option<String>,
+    last_limit_error_at: Option<i64>,
+    updated_at: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct ContextHistogramBucket {
+    bucket_start: u64,
+    bucket_end: u64,
+    success_count: u64,
+    failure_count: u64,
+    overrun_count: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct ModelContextEvent {
+    request_id: String,
+    phase: String,
+    model_id: String,
+    provider: String,
+    status: String,
+    approx_prompt_tokens: u64,
+    requested_output_tokens: u64,
+    estimated_total_tokens: u64,
+    observed_prompt_tokens: Option<u64>,
+    observed_total_tokens: Option<u64>,
+    learned_limit: Option<u64>,
+    overrun_requested_tokens: Option<u64>,
+    error_kind: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct AgentActivity {
+    agent_id: String,
+    agent_client: Option<String>,
+    agent_session_id: Option<String>,
+    process_role: Option<String>,
+    pid: Option<i64>,
+    version: Option<String>,
+    user_agent: Option<String>,
+    first_seen: i64,
+    last_seen: i64,
+    request_count: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct DashboardModel {
+    id: String,
+    provider: String,
+    display_name: String,
+    upstream_model: String,
+    roles: Vec<String>,
+    enabled: bool,
+    status: String,
+    cooldown_until: Option<i64>,
+    capacity_known: bool,
+    hourly_capacity: Option<u64>,
+    hourly_used: u64,
+    configured_context_window: u64,
+    safe_context_window: u64,
+    learned_context_window: Option<u64>,
+    learned_request_token_limit: Option<u64>,
+    context_overrun_count: u64,
+    smallest_overrun_requested_tokens: Option<u64>,
+    call_count: u64,
+    success_count: u64,
+    failure_count: u64,
+    win_count: u64,
+    win_rate: f64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    avg_latency_ms: Option<f64>,
+    last_latency_ms: Option<u64>,
+    min_latency_ms: Option<u64>,
+    max_latency_ms: Option<u64>,
+    last_error_kind: Option<String>,
+    last_error_message: Option<String>,
+    updated_at: i64,
+}
+
+impl DashboardModel {
+    fn label(&self) -> &str {
+        if self.display_name.is_empty() {
+            &self.id
+        } else {
+            &self.display_name
+        }
+    }
+
+    fn success_rate(&self) -> f64 {
+        if self.call_count == 0 {
+            0.0
+        } else {
+            self.success_count as f64 / self.call_count as f64
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct MetricEvent {
+    id: i64,
+    request_id: String,
+    phase: String,
+    model_id: String,
+    provider: String,
+    status: String,
+    error_kind: Option<String>,
+    latency_ms: Option<u64>,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    route_mode: Option<String>,
+    backup_rank: Option<u64>,
+    complexity_tier: Option<String>,
+    sampled: Option<bool>,
+    winner_model_id: Option<String>,
+    capacity_known: Option<bool>,
+    agent_id: Option<String>,
+    agent_client: Option<String>,
+    agent_session_id: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct CapacitySummary {
+    known_limit_per_hour: u64,
+    known_used: u64,
+    known_remaining: u64,
+    percent_used: f64,
+    models: Vec<ModelCapacity>,
+    unknown_models: Vec<UnknownCapacity>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct ModelCapacity {
+    model_id: String,
+    provider: String,
+    display_name: String,
+    status: String,
+    limit_per_hour: u64,
+    used: u64,
+    remaining: u64,
+    percent_used: f64,
+    limit_kind: String,
+    credit_tier: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct UnknownCapacity {
+    model_id: String,
+    provider: String,
+    display_name: String,
+    status: String,
+    used: u64,
+    successes: u64,
+    failures: u64,
+    wins: u64,
+    average_latency_ms: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SocketMessage {
+    Snapshot { snapshot: DashboardSnapshot },
+    ModelUpdated { model: DashboardModel },
+    RequestEvent { event: MetricEvent },
+    Heartbeat { timestamp: i64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tab {
+    Leaderboard,
+    Latency,
+    Tokens,
+    Limits,
+    Feed,
+}
+
+impl Tab {
+    const ALL: [Tab; 5] = [
+        Tab::Leaderboard,
+        Tab::Latency,
+        Tab::Tokens,
+        Tab::Limits,
+        Tab::Feed,
+    ];
+
+    fn idx(self) -> usize {
+        match self {
+            Tab::Leaderboard => 0,
+            Tab::Latency => 1,
+            Tab::Tokens => 2,
+            Tab::Limits => 3,
+            Tab::Feed => 4,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Tab::Leaderboard => "🏆 Board",
+            Tab::Latency => "⚡ Speed",
+            Tab::Tokens => "💰 Vault",
+            Tab::Limits => "🔒 Limits",
+            Tab::Feed => "📡 Feed",
+        }
+    }
+
+    fn next(self) -> Self {
+        Tab::ALL[(self.idx() + 1) % Tab::ALL.len()]
+    }
+
+    fn prev(self) -> Self {
+        Tab::ALL[(self.idx() + Tab::ALL.len() - 1) % Tab::ALL.len()]
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SortMode {
+    Latest,
+    Wins,
+    WinRate,
+    SuccessRate,
+}
+
+impl SortMode {
+    fn next(self) -> Self {
+        match self {
+            SortMode::Latest => SortMode::Wins,
+            SortMode::Wins => SortMode::WinRate,
+            SortMode::WinRate => SortMode::SuccessRate,
+            SortMode::SuccessRate => SortMode::Latest,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            SortMode::Latest => "Latest active",
+            SortMode::Wins => "Wins",
+            SortMode::WinRate => "Win rate",
+            SortMode::SuccessRate => "Success rate",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FlashEvent {
+    model_id: String,
+    agent_id: Option<String>,
+    at: Instant,
+}
+
+struct App {
+    base_url: String,
+    snapshot: DashboardSnapshot,
+    tab: Tab,
+    sort: SortMode,
+    selected: usize,
+    details_model_id: Option<String>,
+    help_open: bool,
+    search_open: bool,
+    search: String,
+    feed_phase_idx: usize,
+    context_filter_idx: usize,
+    paused: bool,
+    pending_events: VecDeque<NetEvent>,
+    flashes: Vec<FlashEvent>,
+    logs: VecDeque<String>,
+    seen_events: HashSet<i64>,
+    connection: ConnectionMode,
+    connection_text: String,
+    last_heartbeat: Option<i64>,
+    last_snapshot_at: Option<Instant>,
+    tick: u64,
+}
+
+impl App {
+    fn new(base_url: String) -> Self {
+        Self {
+            base_url,
+            snapshot: DashboardSnapshot::default(),
+            tab: Tab::Leaderboard,
+            sort: SortMode::Latest,
+            selected: 0,
+            details_model_id: None,
+            help_open: false,
+            search_open: false,
+            search: String::new(),
+            feed_phase_idx: 0,
+            context_filter_idx: 0,
+            paused: false,
+            pending_events: VecDeque::new(),
+            flashes: Vec::new(),
+            logs: VecDeque::new(),
+            seen_events: HashSet::new(),
+            connection: ConnectionMode::Loading,
+            connection_text: "starting".to_string(),
+            last_heartbeat: None,
+            last_snapshot_at: None,
+            tick: 0,
+        }
+    }
+
+    fn on_tick(&mut self) {
+        self.tick = self.tick.wrapping_add(1);
+        self.flashes.retain(|flash| flash.at.elapsed() <= FLASH_TTL);
+
+        while self.logs.len() > 7 {
+            self.logs.pop_front();
+        }
+
+        if !self.paused {
+            while let Some(event) = self.pending_events.pop_front() {
+                self.apply_net_event_now(event);
+            }
+        }
+    }
+
+    fn apply_net_event(&mut self, event: NetEvent) {
+        if self.paused {
+            match event {
+                NetEvent::Connection(..) | NetEvent::Error(_) | NetEvent::Log(_) => {
+                    self.apply_net_event_now(event)
+                }
+                other => self.pending_events.push_back(other),
+            }
+        } else {
+            self.apply_net_event_now(event);
+        }
+    }
+
+    fn apply_net_event_now(&mut self, event: NetEvent) {
+        match event {
+            NetEvent::Connection(mode, text) => {
+                self.connection = mode;
+                self.connection_text = text;
+            }
+            NetEvent::Snapshot(snapshot) => {
+                self.snapshot = snapshot.normalized();
+                self.seen_events.clear();
+                for event in &self.snapshot.recent_events {
+                    self.seen_events.insert(event.id);
+                }
+                self.last_snapshot_at = Some(Instant::now());
+                self.clamp_selection();
+            }
+            NetEvent::Socket(message) => self.apply_socket_message(message),
+            NetEvent::Error(text) => {
+                self.connection = ConnectionMode::Error;
+                self.connection_text = text.clone();
+                self.push_log(format!("ERR {text}"));
+            }
+            NetEvent::Log(text) => self.push_log(text),
+        }
+    }
+
+    fn apply_socket_message(&mut self, message: SocketMessage) {
+        match message {
+            SocketMessage::Snapshot { snapshot } => {
+                self.apply_net_event_now(NetEvent::Snapshot(snapshot))
+            }
+            SocketMessage::ModelUpdated { model } => {
+                self.flash_model(&model.id, Some("model".to_string()));
+
+                if let Some(slot) = self.snapshot.models.iter_mut().find(|m| m.id == model.id) {
+                    *slot = model;
+                } else {
+                    self.snapshot.models.push(model);
+                }
+
+                self.snapshot.totals = totals_from_models(&self.snapshot.models);
+                self.clamp_selection();
+            }
+            SocketMessage::RequestEvent { event } => {
+                if self.seen_events.insert(event.id) {
+                    self.flash_model(
+                        &event.model_id,
+                        event.agent_id.clone().or_else(|| Some(event.request_id.clone())),
+                    );
+                    self.snapshot.recent_events.insert(0, event);
+                    self.snapshot.recent_events.truncate(MAX_EVENTS);
+
+                    if self.tab == Tab::Feed && self.selected > 0 {
+                        self.selected += 1;
+                    }
+
+                    self.clamp_selection();
+                }
+            }
+            SocketMessage::Heartbeat { timestamp } => {
+                self.connection = ConnectionMode::Live;
+                self.connection_text = "heartbeat".to_string();
+                self.last_heartbeat = Some(timestamp);
+            }
+        }
+    }
+
+    fn flash_model(&mut self, model_id: &str, agent_id: Option<String>) {
+        self.flashes.push(FlashEvent {
+            model_id: model_id.to_string(),
+            agent_id,
+            at: Instant::now(),
+        });
+    }
+
+    fn push_log(&mut self, text: String) {
+        self.logs.push_back(format!("{}  {}", local_now(), text));
+        while self.logs.len() > 7 {
+            self.logs.pop_front();
+        }
+    }
+
+    fn set_tab(&mut self, tab: Tab) {
+        if self.tab != tab {
+            self.tab = tab;
+            self.selected = 0;
+            self.clamp_selection();
+        }
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        let len = self.visible_len();
+        if len == 0 {
+            self.selected = 0;
+            return;
+        }
+
+        let next =
+            (self.selected as isize + delta).clamp(0, len.saturating_sub(1) as isize) as usize;
+        self.selected = next;
+    }
+
+    fn clamp_selection(&mut self) {
+        let len = self.visible_len();
+        if len == 0 {
+            self.selected = 0;
+        } else if self.selected >= len {
+            self.selected = len - 1;
+        }
+    }
+
+    fn visible_len(&self) -> usize {
+        match self.tab {
+            Tab::Leaderboard => self.leaderboard_models().len(),
+            Tab::Latency => self.latency_models().len(),
+            Tab::Tokens => self.token_models().len(),
+            Tab::Limits => self.limit_rows().len(),
+            Tab::Feed => self.feed_events().len(),
+        }
+    }
+
+    fn selected_model_id(&self) -> Option<String> {
+        match self.tab {
+            Tab::Leaderboard => self.leaderboard_models().get(self.selected).map(|m| m.id.clone()),
+            Tab::Latency => self.latency_models().get(self.selected).map(|m| m.id.clone()),
+            Tab::Tokens => self.token_models().get(self.selected).map(|m| m.id.clone()),
+            Tab::Feed => self
+                .feed_events()
+                .get(self.selected)
+                .map(|event| event.model_id.clone()),
+            Tab::Limits => match self.limit_rows().get(self.selected) {
+                Some(LimitRow::Known(item)) => Some(item.model_id.clone()),
+                Some(LimitRow::Unknown(item)) => Some(item.model_id.clone()),
+                Some(LimitRow::Error(model)) => Some(model.id.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    fn open_details(&mut self) {
+        if let Some(model_id) = self.selected_model_id() {
+            if self.snapshot.models.iter().any(|m| m.id == model_id.as_str()) {
+                self.details_model_id = Some(model_id);
+            }
+        }
+    }
+
+    fn query(&self) -> String {
+        self.search.trim().to_lowercase()
+    }
+
+    fn model_matches_query(&self, model: &DashboardModel) -> bool {
+        let query = self.query();
+        if query.is_empty() {
+            return true;
+        }
+
+        [
+            model.id.as_str(),
+            model.display_name.as_str(),
+            model.provider.as_str(),
+            model.upstream_model.as_str(),
+            model.status.as_str(),
+        ]
+        .join(" ")
+        .to_lowercase()
+        .contains(&query)
+    }
+
+    fn leaderboard_models(&self) -> Vec<&DashboardModel> {
+        let mut models = self
+            .snapshot
+            .models
+            .iter()
+            .filter(|model| model.call_count > 0)
+            .filter(|model| self.model_matches_query(model))
+            .collect::<Vec<_>>();
+
+        models.sort_by(|a, b| match self.sort {
+            SortMode::Latest => {
+                let af = self
+                    .latest_flash_ms(&a.id)
+                    .unwrap_or(a.updated_at.saturating_mul(1000));
+                let bf = self
+                    .latest_flash_ms(&b.id)
+                    .unwrap_or(b.updated_at.saturating_mul(1000));
+                bf.cmp(&af)
+            }
+            SortMode::Wins => b.win_count.cmp(&a.win_count),
+            SortMode::WinRate => cmp_f64(b.win_rate, a.win_rate),
+            SortMode::SuccessRate => cmp_f64(b.success_rate(), a.success_rate()),
+        });
+
+        models
+    }
+
+    fn latency_models(&self) -> Vec<&DashboardModel> {
+        let mut models = self
+            .snapshot
+            .models
+            .iter()
+            .filter(|model| model.avg_latency_ms.is_some())
+            .filter(|model| self.model_matches_query(model))
+            .collect::<Vec<_>>();
+
+        models.sort_by(|a, b| {
+            cmp_f64(
+                a.avg_latency_ms.unwrap_or(0.0),
+                b.avg_latency_ms.unwrap_or(0.0),
+            )
+        });
+
+        models
+    }
+
+    fn token_models(&self) -> Vec<&DashboardModel> {
+        let mut models = self
+            .snapshot
+            .models
+            .iter()
+            .filter(|model| model.total_tokens > 0)
+            .filter(|model| self.model_matches_query(model))
+            .collect::<Vec<_>>();
+
+        models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+
+        models
+    }
+
+    fn feed_events(&self) -> Vec<&MetricEvent> {
+        let phases = self.feed_phases();
+        let phase = phases
+            .get(self.feed_phase_idx)
+            .map(|s| s.as_str())
+            .unwrap_or("all");
+        let query = self.query();
+
+        self.snapshot
+            .recent_events
+            .iter()
+            .filter(|event| phase == "all" || event.phase == phase)
+            .filter(|event| {
+                if query.is_empty() {
+                    true
+                } else {
+                    [
+                        event.model_id.as_str(),
+                        event.provider.as_str(),
+                        event.phase.as_str(),
+                        event.status.as_str(),
+                        event.error_kind.as_deref().unwrap_or_default(),
+                        event.agent_id.as_deref().unwrap_or_default(),
+                    ]
+                    .join(" ")
+                    .to_lowercase()
+                    .contains(&query)
+                }
+            })
+            .take(150)
+            .collect()
+    }
+
+    fn feed_phases(&self) -> Vec<String> {
+        let mut phases = self
+            .snapshot
+            .recent_events
+            .iter()
+            .map(|event| event.phase.clone())
+            .filter(|phase| !phase.is_empty())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        phases.sort();
+        phases.insert(0, "all".to_string());
+        phases
+    }
+
+    fn context_filters(&self) -> Vec<ContextFilter> {
+        let mut filters = vec![ContextFilter::All];
+
+        let mut providers = self
+            .snapshot
+            .models
+            .iter()
+            .map(|model| model.provider.clone())
+            .filter(|provider| !provider.is_empty())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        providers.sort();
+
+        filters.extend(providers.into_iter().map(ContextFilter::Provider));
+        filters.extend(
+            self.snapshot
+                .models
+                .iter()
+                .map(|model| ContextFilter::Model(model.id.clone(), model.label().to_string())),
+        );
+
+        filters
+    }
+
+    fn selected_context_filter(&self) -> ContextFilter {
+        let filters = self.context_filters();
+        filters
+            .get(self.context_filter_idx)
+            .cloned()
+            .unwrap_or(ContextFilter::All)
+    }
+
+    fn context_events_for_filter(&self) -> Vec<&ModelContextEvent> {
+        let filter = self.selected_context_filter();
+
+        self.snapshot
+            .context
+            .recent_events
+            .iter()
+            .filter(|event| match &filter {
+                ContextFilter::All => true,
+                ContextFilter::Provider(provider) => &event.provider == provider,
+                ContextFilter::Model(model_id, _) => &event.model_id == model_id,
+            })
+            .collect()
+    }
+
+    fn context_histogram_for_filter(&self) -> Vec<ContextHistogramBucket> {
+        let events = self.context_events_for_filter();
+        if matches!(self.selected_context_filter(), ContextFilter::All) && events.is_empty() {
+            return self.snapshot.context.histogram.clone();
+        }
+        buckets_from_context_events(events)
+    }
+
+    fn context_marker(&self) -> Option<u64> {
+        match self.selected_context_filter() {
+            ContextFilter::Model(model_id, _) => {
+                let estimate = self
+                    .snapshot
+                    .context
+                    .estimates
+                    .iter()
+                    .find(|estimate| estimate.model_id == model_id);
+                let model = self.snapshot.models.iter().find(|model| model.id == model_id);
+
+                estimate
+                    .map(|estimate| estimate.safe_context_window)
+                    .or_else(|| model.map(|model| model.safe_context_window))
+            }
+            _ => None,
+        }
+    }
+
+    fn limit_rows(&self) -> Vec<LimitRow<'_>> {
+        let mut rows = Vec::new();
+
+        rows.push(LimitRow::Section("Known capacity"));
+        for item in &self.snapshot.capacity.models {
+            rows.push(LimitRow::Known(item));
+        }
+
+        rows.push(LimitRow::Section("Inferred limits"));
+        let mut unknown = self
+            .snapshot
+            .capacity
+            .unknown_models
+            .iter()
+            .filter(|item| item.used > 0)
+            .collect::<Vec<_>>();
+        unknown.sort_by(|a, b| b.successes.cmp(&a.successes));
+        for item in unknown {
+            rows.push(LimitRow::Unknown(item));
+        }
+
+        rows.push(LimitRow::Section("Recent error patterns"));
+        let mut errors = self
+            .snapshot
+            .models
+            .iter()
+            .filter(|model| model.last_error_kind.is_some())
+            .filter(|model| self.model_matches_query(model))
+            .collect::<Vec<_>>();
+        errors.sort_by(|a, b| b.failure_count.cmp(&a.failure_count));
+        for model in errors.into_iter().take(15) {
+            rows.push(LimitRow::Error(model));
+        }
+
+        rows
+    }
+
+    fn latest_flash_ms(&self, model_id: &str) -> Option<i64> {
+        self.flashes
+            .iter()
+            .filter(|flash| flash.model_id == model_id)
+            .map(|flash| {
+                let age_ms = flash.at.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                chrono::Utc::now().timestamp_millis().saturating_sub(age_ms)
+            })
+            .max()
+    }
+
+    fn flashes_for_model(&self, model_id: &str) -> Vec<&FlashEvent> {
+        self.flashes
+            .iter()
+            .filter(|flash| flash.model_id == model_id)
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ContextFilter {
+    All,
+    Provider(String),
+    Model(String, String),
+}
+
+impl ContextFilter {
+    fn label(&self) -> String {
+        match self {
+            ContextFilter::All => "All models".to_string(),
+            ContextFilter::Provider(provider) => format!("Provider: {provider}"),
+            ContextFilter::Model(_, label) => label.clone(),
+        }
+    }
+}
+
+enum LimitRow<'a> {
+    Section(&'static str),
+    Known(&'a ModelCapacity),
+    Unknown(&'a UnknownCapacity),
+    Error(&'a DashboardModel),
+}
+
+fn totals_from_models(models: &[DashboardModel]) -> DashboardTotals {
+    let (lat_total, lat_count) = models.iter().fold((0.0, 0u64), |(total, count), model| {
+        if let Some(avg) = model.avg_latency_ms {
+            let weight = model.call_count.max(1);
+            (total + avg * weight as f64, count + weight)
+        } else {
+            (total, count)
+        }
+    });
+
+    DashboardTotals {
+        total_models: models.len() as u64,
+        enabled_models: models.iter().filter(|model| model.enabled).count() as u64,
+        calls: models.iter().map(|model| model.call_count).sum(),
+        successes: models.iter().map(|model| model.success_count).sum(),
+        failures: models.iter().map(|model| model.failure_count).sum(),
+        wins: models.iter().map(|model| model.win_count).sum(),
+        prompt_tokens: models.iter().map(|model| model.prompt_tokens).sum(),
+        completion_tokens: models.iter().map(|model| model.completion_tokens).sum(),
+        total_tokens: models.iter().map(|model| model.total_tokens).sum(),
+        average_latency_ms: if lat_count == 0 {
+            None
+        } else {
+            Some(lat_total / lat_count as f64)
+        },
+    }
+}
+
+async fn handle_key(
+    app: &mut App,
+    key: KeyEvent,
+    ctrl_tx: &mpsc::Sender<ControlMsg>,
+) -> Result<bool> {
+    if app.search_open {
+        match key.code {
+            KeyCode::Esc => {
+                app.search_open = false;
+                app.clamp_selection();
+            }
+            KeyCode::Enter => {
+                app.search_open = false;
+                app.clamp_selection();
+            }
+            KeyCode::Backspace => {
+                app.search.pop();
+                app.selected = 0;
+                app.clamp_selection();
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.search.push(c);
+                app.selected = 0;
+                app.clamp_selection();
+            }
+            _ => {}
+        }
+        return Ok(false);
+    }
+
+    if app.help_open {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Enter => app.help_open = false,
+            KeyCode::Char('q') => return Ok(true),
+            _ => {}
+        }
+        return Ok(false);
+    }
+
+    if app.details_model_id.is_some() {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('d') | KeyCode::Enter => app.details_model_id = None,
+            KeyCode::Char('q') => return Ok(true),
+            _ => {}
+        }
+        return Ok(false);
+    }
+
+    match key.code {
+        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('?') => app.help_open = true,
+        KeyCode::Char('/') => app.search_open = true,
+        KeyCode::Esc => {
+            app.search.clear();
+            app.selected = 0;
+            app.clamp_selection();
+        }
+        KeyCode::Char('1') => app.set_tab(Tab::Leaderboard),
+        KeyCode::Char('2') => app.set_tab(Tab::Latency),
+        KeyCode::Char('3') => app.set_tab(Tab::Tokens),
+        KeyCode::Char('4') => app.set_tab(Tab::Limits),
+        KeyCode::Char('5') => app.set_tab(Tab::Feed),
+        KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => app.set_tab(app.tab.next()),
+        KeyCode::Left | KeyCode::BackTab | KeyCode::Char('h') => app.set_tab(app.tab.prev()),
+        KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
+        KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
+        KeyCode::PageDown => app.move_selection(10),
+        KeyCode::PageUp => app.move_selection(-10),
+        KeyCode::Home => app.selected = 0,
+        KeyCode::End => app.selected = app.visible_len().saturating_sub(1),
+        KeyCode::Enter | KeyCode::Char('d') => app.open_details(),
+        KeyCode::Char('s') => {
+            if app.tab == Tab::Leaderboard {
+                app.sort = app.sort.next();
+                app.selected = 0;
+            }
+        }
+        KeyCode::Char('n') => {
+            if app.tab == Tab::Feed {
+                let len = app.feed_phases().len().max(1);
+                app.feed_phase_idx = (app.feed_phase_idx + 1) % len;
+                app.selected = 0;
+            }
+        }
+        KeyCode::Char('c') => {
+            if app.tab == Tab::Limits {
+                let len = app.context_filters().len().max(1);
+                app.context_filter_idx = (app.context_filter_idx + 1) % len;
+            }
+        }
+        KeyCode::Char('r') => {
+            let _ = ctrl_tx.send(ControlMsg::Refetch).await;
+            app.push_log("manual snapshot refetch requested".to_string());
+        }
+        KeyCode::Char('R') => {
+            let _ = ctrl_tx.send(ControlMsg::Reconnect).await;
+            app.push_log("manual websocket reconnect requested".to_string());
+        }
+        KeyCode::Char('p') => {
+            app.paused = !app.paused;
+            if !app.paused {
+                app.push_log(format!(
+                    "resumed; applying {} queued updates",
+                    app.pending_events.len()
+                ));
+            } else {
+                app.push_log("paused live snapshot/event application".to_string());
+            }
+        }
+        _ => {}
+    }
+
+    app.clamp_selection();
+    Ok(false)
+}
+
+fn render(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(7),
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(2),
+        ])
+        .split(area);
+
+    render_header(frame, app, vertical[0]);
+    render_tabs(frame, app, vertical[1]);
+
+    match app.tab {
+        Tab::Leaderboard => render_leaderboard(frame, app, vertical[2]),
+        Tab::Latency => render_latency(frame, app, vertical[2]),
+        Tab::Tokens => render_tokens(frame, app, vertical[2]),
+        Tab::Limits => render_limits(frame, app, vertical[2]),
+        Tab::Feed => render_feed(frame, app, vertical[2]),
+    }
+
+    render_footer(frame, app, vertical[3]);
+
+    if app.details_model_id.is_some() {
+        render_model_details(frame, app, centered_rect(84, 84, area));
+    }
+
+    if app.help_open {
+        render_help(frame, centered_rect(76, 72, area));
+    }
+
+    if app.search_open {
+        render_search_box(frame, app, centered_rect(68, 18, area));
+    }
+}
+
+fn render_header(frame: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(32),
+            Constraint::Min(55),
+            Constraint::Length(24),
+        ])
+        .split(area);
+
+    let title = Text::from(vec![
+        Line::from(vec![
+            Span::styled(
+                "Jnoccio ",
+                Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Fusion TUI",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled(
+            format!(
+                "{} / {} routable · {} models",
+                fmt_n(app.snapshot.totals.enabled_models),
+                fmt_n(app.snapshot.totals.total_models),
+                app.snapshot.models.len()
+            ),
+            Style::default().fg(MUTED),
+        )),
+        Line::from(Span::styled(
+            format!("base {}", app.base_url),
+            Style::default().fg(DIM),
+        )),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(title)
+            .block(panel_block(" gateway ", GOLD))
+            .wrap(Wrap { trim: true }),
+        chunks[0],
+    );
+
+    let kpi_rows = vec![
+        Line::from(vec![
+            kpi_span("calls", fmt_n(app.snapshot.totals.calls), BLUE),
+            Span::raw("  "),
+            kpi_span("wins", fmt_n(app.snapshot.totals.wins), GOLD),
+            Span::raw("  "),
+            kpi_span("fail", fmt_n(app.snapshot.totals.failures), RED),
+            Span::raw("  "),
+            kpi_span("tokens", fmt_n(app.snapshot.totals.total_tokens), PURPLE),
+        ]),
+        Line::from(vec![
+            kpi_span(
+                "tok/24h",
+                format!(
+                    "{}M",
+                    fmt_m(app.snapshot.token_rate.median_m_tokens_per_24h)
+                ),
+                TEAL,
+            ),
+            Span::raw("  "),
+            kpi_span(
+                "max10m",
+                format!("{}M", fmt_m(app.snapshot.token_rate.max_m_tokens_per_24h)),
+                TEAL,
+            ),
+            Span::raw("  "),
+            kpi_span(
+                "lat",
+                fmt_ms_f64(app.snapshot.totals.average_latency_ms),
+                BLUE,
+            ),
+            Span::raw("  "),
+            kpi_span(
+                "cap",
+                format!(
+                    "{}/{}",
+                    fmt_n(app.snapshot.capacity.known_remaining),
+                    fmt_n(app.snapshot.capacity.known_limit_per_hour)
+                ),
+                capacity_color(app.snapshot.capacity.percent_used * 100.0),
+            ),
+        ]),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(Text::from(kpi_rows))
+            .block(panel_block(" live metrics ", BLUE))
+            .wrap(Wrap { trim: true }),
+        chunks[1],
+    );
+
+    let spin = spinner(app.tick);
+    let hb = app
+        .last_heartbeat
+        .map(fmt_time)
+        .unwrap_or_else(|| "—".to_string());
+    let status_style = conn_style(app.connection);
+
+    let side = Text::from(vec![
+        Line::from(vec![
+            Span::styled(spin, status_style.add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(
+                conn_label(app.connection),
+                status_style.add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled(
+            format!(
+                "agents {}/{} · gateways x{}",
+                app.snapshot.agent_count, app.snapshot.max_agents, app.snapshot.instance_count
+            ),
+            Style::default().fg(if app.snapshot.agent_count > 1 {
+                GOLD
+            } else {
+                MUTED
+            }),
+        )),
+        Line::from(Span::styled(
+            format!("hb {hb} · {} queued", app.pending_events.len()),
+            Style::default().fg(if app.paused { GOLD } else { DIM }),
+        )),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(side)
+            .block(panel_block(" connection ", conn_color(app.connection)))
+            .wrap(Wrap { trim: true }),
+        chunks[2],
+    );
+}
+
+fn render_tabs(frame: &mut Frame, app: &App, area: Rect) {
+    let titles = Tab::ALL
+        .iter()
+        .map(|tab| Line::from(Span::styled(tab.label(), Style::default().fg(Color::White))))
+        .collect::<Vec<_>>();
+
+    let tabs = Tabs::new(titles)
+        .select(app.tab.idx())
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(DIM)),
+        )
+        .highlight_style(Style::default().fg(GOLD).add_modifier(Modifier::BOLD))
+        .divider(Line::from(Span::styled(" │ ", Style::default().fg(DIM))));
+
+    frame.render_widget(tabs, area);
+}
+
+fn render_leaderboard(frame: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(5), Constraint::Min(8)])
+        .split(area);
+
+    let models = app.leaderboard_models();
+    render_activity_skyline(frame, app, chunks[0]);
+
+    let max_val = models
+        .iter()
+        .map(|m| match app.sort {
+            SortMode::Latest | SortMode::Wins => m.win_count as f64,
+            SortMode::WinRate => m.win_rate,
+            SortMode::SuccessRate => m.success_rate(),
+        })
+        .fold(1.0, f64::max);
+
+    let mut rows = Vec::new();
+    let width = chunks[1].width.saturating_sub(72).max(10) as usize;
+
+    for model in models {
+        let value = match app.sort {
+            SortMode::Latest | SortMode::Wins => model.win_count as f64,
+            SortMode::WinRate => model.win_rate,
+            SortMode::SuccessRate => model.success_rate(),
+        };
+        let pct = if max_val == 0.0 { 0.0 } else { value / max_val };
+        let flashes = app.flashes_for_model(&model.id);
+
+        let mut spans = vec![
+            status_span(&model.status),
+            Span::raw(" "),
+            Span::styled(
+                fixed(model.label(), 28),
+                Style::default()
+                    .fg(if !flashes.is_empty() { GOLD } else { Color::White })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(fixed(&model.provider, 12), Style::default().fg(MUTED)),
+            Span::styled(
+                format!("{:>6} calls ", compact_n(model.call_count)),
+                Style::default().fg(MUTED),
+            ),
+        ];
+
+        spans.extend(progress_spans(pct, width, GOLD, Color::Rgb(45, 39, 25)));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            match app.sort {
+                SortMode::Latest | SortMode::Wins => fmt_n(model.win_count),
+                SortMode::WinRate => fmt_pct(model.win_rate),
+                SortMode::SuccessRate => fmt_pct(model.success_rate()),
+            },
+            Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+        ));
+
+        if !flashes.is_empty() {
+            spans.push(Span::raw(" "));
+            for flash in flashes.iter().take(4) {
+                spans.push(Span::styled(
+                    "●",
+                    Style::default().fg(agent_color(flash.agent_id.as_deref().unwrap_or("model"))),
+                ));
+            }
+        }
+
+        rows.push(ListItem::new(Line::from(spans)));
+    }
+
+    if rows.is_empty() {
+        rows.push(empty_item(
+            "No models with calls yet. Send traffic through /v1/chat/completions and watch this board ignite.",
+        ));
+    }
+
+    render_selectable_list(
+        frame,
+        chunks[1],
+        rows,
+        app.selected,
+        &format!(" leaderboard · sort: {} · press s to cycle ", app.sort.label()),
+        GOLD,
+    );
+}
+
+fn render_activity_skyline(frame: &mut Frame, app: &App, area: Rect) {
+    let mut models = app
+        .snapshot
+        .models
+        .iter()
+        .filter(|model| model.call_count > 0)
+        .collect::<Vec<_>>();
+
+    models.sort_by(|a, b| b.call_count.cmp(&a.call_count));
+    models.truncate(area.width.saturating_sub(6).max(1) as usize / 4);
+
+    let max_calls = models
+        .iter()
+        .map(|m| m.call_count)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    let bars = models
+        .iter()
+        .map(|model| {
+            let glyph = bar_glyph(model.call_count as f64 / max_calls as f64);
+            let has_flash = !app.flashes_for_model(&model.id).is_empty();
+
+            Span::styled(
+                format!("{glyph} "),
+                Style::default()
+                    .fg(if has_flash { GOLD } else { BLUE })
+                    .add_modifier(if has_flash {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let labels = models
+        .iter()
+        .take(12)
+        .map(|model| {
+            Span::styled(
+                format!("{}:{}  ", trunc(model.label(), 9), compact_n(model.call_count)),
+                Style::default().fg(MUTED),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let text = if models.is_empty() {
+        Text::from(Line::from(Span::styled(
+            "No activity yet",
+            Style::default().fg(DIM),
+        )))
+    } else {
+        Text::from(vec![Line::from(bars), Line::from(labels)])
+    };
+
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(panel_block(
+                " activity skyline · blue=calls gold=recent wins/live flashes ",
+                BLUE,
+            ))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn render_latency(frame: &mut Frame, app: &App, area: Rect) {
+    let models = app.latency_models();
+    let max_latency = models
+        .iter()
+        .filter_map(|model| model.avg_latency_ms)
+        .fold(1.0, f64::max);
+    let width = area.width.saturating_sub(76).max(10) as usize;
+
+    let mut rows = Vec::new();
+
+    for model in models {
+        let latency = model.avg_latency_ms.unwrap_or(0.0);
+        let color = latency_color(latency);
+
+        let mut spans = vec![
+            Span::styled(format!("{} ", latency_tier(latency)), Style::default().fg(color)),
+            Span::styled(
+                fixed(model.label(), 30),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(fixed(&model.provider, 12), Style::default().fg(MUTED)),
+            Span::styled(
+                format!(
+                    "min {} max {} ",
+                    fixed(&fmt_ms_u64(model.min_latency_ms), 9),
+                    fixed(&fmt_ms_u64(model.max_latency_ms), 9)
+                ),
+                Style::default().fg(MUTED),
+            ),
+        ];
+
+        spans.extend(progress_spans(
+            latency / max_latency,
+            width,
+            color,
+            Color::Rgb(32, 39, 45),
+        ));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            fmt_ms_f64(Some(latency)),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+
+        rows.push(ListItem::new(Line::from(spans)));
+    }
+
+    if rows.is_empty() {
+        rows.push(empty_item("No latency data yet."));
+    }
+
+    render_selectable_list(frame, area, rows, app.selected, " latency arena · fastest at top ", BLUE);
+}
+
+fn render_tokens(frame: &mut Frame, app: &App, area: Rect) {
+    let models = app.token_models();
+    let max_tokens = models
+        .iter()
+        .map(|model| model.total_tokens)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let total_tokens: u64 = models.iter().map(|model| model.total_tokens).sum();
+    let width = area.width.saturating_sub(82).max(10) as usize;
+    let mut rows = Vec::new();
+
+    for model in models {
+        let prompt_pct = model.prompt_tokens as f64 / max_tokens as f64;
+        let completion_pct = model.completion_tokens as f64 / max_tokens as f64;
+        let efficiency = if model.success_count == 0 {
+            0
+        } else {
+            model.total_tokens / model.success_count.max(1)
+        };
+
+        let mut spans = vec![
+            Span::styled("◆ ", Style::default().fg(PURPLE)),
+            Span::styled(
+                fixed(model.label(), 30),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{:>8} tok/call ", compact_n(efficiency)),
+                Style::default().fg(MUTED),
+            ),
+        ];
+
+        spans.extend(stacked_bar_spans(prompt_pct, completion_pct, width));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("{} total", compact_n(model.total_tokens)),
+            Style::default().fg(PURPLE).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(
+                "  p:{} c:{}",
+                compact_n(model.prompt_tokens),
+                compact_n(model.completion_tokens)
+            ),
+            Style::default().fg(MUTED),
+        ));
+
+        rows.push(ListItem::new(Line::from(spans)));
+    }
+
+    if rows.is_empty() {
+        rows.push(empty_item("No token usage yet."));
+    }
+
+    render_selectable_list(
+        frame,
+        area,
+        rows,
+        app.selected,
+        &format!(" token vault · {} tokens observed ", fmt_n(total_tokens)),
+        PURPLE,
+    );
+}
+
+fn render_limits(frame: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Min(8)])
+        .split(area);
+
+    render_context_panel(frame, app, chunks[0]);
+
+    let rows_data = app.limit_rows();
+    let max_unknown = app
+        .snapshot
+        .capacity
+        .unknown_models
+        .iter()
+        .map(|item| item.successes)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let max_fail = app
+        .snapshot
+        .models
+        .iter()
+        .map(|model| model.failure_count)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let width = chunks[1].width.saturating_sub(82).max(10) as usize;
+
+    let mut rows = Vec::new();
+
+    for row in rows_data {
+        match row {
+            LimitRow::Section(label) => rows.push(ListItem::new(Line::from(Span::styled(
+                format!("── {label} "),
+                Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+            )))),
+            LimitRow::Known(item) => {
+                let pct = if item.limit_per_hour == 0 {
+                    0.0
+                } else {
+                    item.used as f64 / item.limit_per_hour as f64
+                };
+
+                let mut spans = vec![
+                    status_span(&item.status),
+                    Span::raw(" "),
+                    Span::styled(
+                        fixed(display_or_id(&item.display_name, &item.model_id), 28),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(fixed(&item.provider, 12), Style::default().fg(MUTED)),
+                    Span::styled(fixed(&item.limit_kind, 16), Style::default().fg(MUTED)),
+                ];
+
+                spans.extend(progress_spans(
+                    pct,
+                    width,
+                    capacity_color(pct * 100.0),
+                    Color::Rgb(45, 36, 35),
+                ));
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(
+                    format!("{}/{}", compact_n(item.used), compact_n(item.limit_per_hour)),
+                    Style::default()
+                        .fg(capacity_color(pct * 100.0))
+                        .add_modifier(Modifier::BOLD),
+                ));
+
+                rows.push(ListItem::new(Line::from(spans)));
+            }
+            LimitRow::Unknown(item) => {
+                let pct = item.successes as f64 / max_unknown as f64;
+                let fail_rate = if item.used == 0 {
+                    0.0
+                } else {
+                    item.failures as f64 / item.used as f64
+                };
+
+                let mut spans = vec![
+                    status_span(&item.status),
+                    Span::raw(" "),
+                    Span::styled(
+                        fixed(display_or_id(&item.display_name, &item.model_id), 28),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{} attempts ", fixed(&compact_n(item.used), 8)),
+                        Style::default().fg(MUTED),
+                    ),
+                ];
+
+                spans.extend(progress_spans(pct, width, GREEN, Color::Rgb(25, 45, 30)));
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(
+                    format!("~{}/hr ", compact_n(item.successes)),
+                    Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(
+                    format!("{} fail", fmt_pct(fail_rate)),
+                    Style::default().fg(if fail_rate > 0.1 { RED } else { MUTED }),
+                ));
+
+                rows.push(ListItem::new(Line::from(spans)));
+            }
+            LimitRow::Error(model) => {
+                let pct = model.failure_count as f64 / max_fail as f64;
+
+                let mut spans = vec![
+                    Span::styled("! ", Style::default().fg(RED).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        fixed(model.label(), 28),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        fixed(model.last_error_kind.as_deref().unwrap_or("error"), 18),
+                        Style::default().fg(RED),
+                    ),
+                    Span::styled(
+                        fixed(model.last_error_message.as_deref().unwrap_or(""), 28),
+                        Style::default().fg(MUTED),
+                    ),
+                ];
+
+                spans.extend(progress_spans(pct, width, RED, Color::Rgb(45, 25, 30)));
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(
+                    fmt_n(model.failure_count),
+                    Style::default().fg(RED).add_modifier(Modifier::BOLD),
+                ));
+
+                rows.push(ListItem::new(Line::from(spans)));
+            }
+        }
+    }
+
+    if rows.is_empty() {
+        rows.push(empty_item("No capacity or error data yet."));
+    }
+
+    render_selectable_list(
+        frame,
+        chunks[1],
+        rows,
+        app.selected,
+        &format!(
+            " rate-limit observatory · {} / {} remaining/hr ",
+            fmt_n(app.snapshot.capacity.known_remaining),
+            fmt_n(app.snapshot.capacity.known_limit_per_hour)
+        ),
+        TEAL,
+    );
+}
+
+fn render_context_panel(frame: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(40), Constraint::Length(32)])
+        .split(area);
+
+    let buckets = app.context_histogram_for_filter();
+    let marker = app.context_marker();
+    let max_total = buckets
+        .iter()
+        .map(|bucket| bucket.success_count + bucket.failure_count)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let max_bucket = buckets
+        .iter()
+        .map(|bucket| bucket.bucket_end)
+        .max()
+        .unwrap_or(1)
+        .max(marker.unwrap_or(0))
+        .max(1);
+    let chart_width = chunks[0].width.saturating_sub(4).max(10) as usize;
+
+    let mut bar_spans = Vec::new();
+
+    for bucket in buckets.iter().take(chart_width) {
+        let total = bucket.success_count + bucket.failure_count;
+        let intensity = total as f64 / max_total as f64;
+        let color = if bucket.overrun_count > 0 || bucket.failure_count > bucket.success_count {
+            RED
+        } else {
+            TEAL
+        };
+        bar_spans.push(Span::styled(bar_glyph(intensity), Style::default().fg(color)));
+    }
+
+    if bar_spans.is_empty() {
+        bar_spans.push(Span::styled(
+            "No context runs recorded yet",
+            Style::default().fg(DIM),
+        ));
+    }
+
+    let marker_line = if let Some(marker) = marker {
+        let marker_pos = ((marker as f64 / max_bucket as f64) * chart_width as f64).round() as usize;
+        let mut chars = vec![' '; chart_width.max(1)];
+        let idx = marker_pos.min(chars.len().saturating_sub(1));
+        chars[idx] = '▲';
+        Line::from(Span::styled(
+            chars.into_iter().collect::<String>(),
+            Style::default().fg(GOLD),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "safe-context marker: —",
+            Style::default().fg(DIM),
+        ))
+    };
+
+    frame.render_widget(
+        Paragraph::new(Text::from(vec![
+            Line::from(bar_spans),
+            marker_line,
+            Line::from(Span::styled(
+                format!(
+                    "filter: {} · press c to cycle",
+                    app.selected_context_filter().label()
+                ),
+                Style::default().fg(MUTED),
+            )),
+        ]))
+        .block(panel_block(" context runs histogram ", TEAL)),
+        chunks[0],
+    );
+
+    let filtered_events = app.context_events_for_filter();
+    let overruns = filtered_events
+        .iter()
+        .filter(|event| event.error_kind.as_deref() == Some("ContextOverflow"))
+        .count();
+    let learned = app
+        .snapshot
+        .context
+        .estimates
+        .iter()
+        .filter(|item| {
+            item.learned_context_window.is_some() || item.learned_request_token_limit.is_some()
+        })
+        .count();
+
+    let configured = match app.selected_context_filter() {
+        ContextFilter::Model(model_id, _) => app
+            .snapshot
+            .models
+            .iter()
+            .find(|model| model.id == model_id)
+            .map(|model| model.configured_context_window)
+            .unwrap_or_default(),
+        _ => app
+            .snapshot
+            .models
+            .iter()
+            .map(|model| model.configured_context_window)
+            .max()
+            .unwrap_or_default(),
+    };
+    let safe = marker.map(fmt_n).unwrap_or_else(|| "—".to_string());
+
+    let stats = Text::from(vec![
+        Line::from(vec![
+            Span::styled("configured ", Style::default().fg(MUTED)),
+            Span::styled(fmt_n(configured), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("safe       ", Style::default().fg(MUTED)),
+            Span::styled(safe, Style::default().fg(GOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("learned    ", Style::default().fg(MUTED)),
+            Span::styled(fmt_n(learned as u64), Style::default().fg(TEAL)),
+        ]),
+        Line::from(vec![
+            Span::styled("overruns   ", Style::default().fg(MUTED)),
+            Span::styled(
+                fmt_n(overruns as u64),
+                Style::default().fg(if overruns > 0 { RED } else { GREEN }),
+            ),
+        ]),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(stats).block(panel_block(" context stats ", GOLD)),
+        chunks[1],
+    );
+}
+
+fn render_feed(frame: &mut Frame, app: &App, area: Rect) {
+    let phases = app.feed_phases();
+    let phase = phases
+        .get(app.feed_phase_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("all");
+    let events = app.feed_events();
+    let width_model = 34usize;
+    let mut rows = Vec::new();
+
+    for event in events {
+        let status_color = event_color(&event.status, event.error_kind.as_deref());
+
+        let mut spans = vec![
+            Span::styled(
+                format!(
+                    "{} ",
+                    event_status_glyph(&event.status, event.error_kind.as_deref())
+                ),
+                Style::default().fg(status_color),
+            ),
+            Span::styled(
+                fixed(&event.phase, 12),
+                Style::default().fg(phase_color(&event.phase)),
+            ),
+        ];
+
+        if let Some(agent) = &event.agent_id {
+            spans.push(Span::styled("● ", Style::default().fg(agent_color(agent))));
+        } else {
+            spans.push(Span::raw("  "));
+        }
+
+        spans.push(Span::styled(
+            fixed(&event.model_id, width_model),
+            Style::default().fg(Color::White),
+        ));
+        spans.push(Span::styled(
+            fixed(&event.provider, 12),
+            Style::default().fg(MUTED),
+        ));
+        spans.push(Span::styled(
+            fixed(&event.status, 9),
+            Style::default().fg(status_color),
+        ));
+
+        let latency_or_error = event
+            .error_kind
+            .clone()
+            .unwrap_or_else(|| fmt_ms_u64(event.latency_ms));
+
+        spans.push(Span::styled(
+            fixed(&latency_or_error, 24),
+            Style::default().fg(if event.error_kind.is_some() { RED } else { BLUE }),
+        ));
+        spans.push(Span::styled(
+            format!("{} tok ", compact_n(event.total_tokens)),
+            Style::default().fg(PURPLE),
+        ));
+        spans.push(Span::styled(
+            fmt_time(event.created_at),
+            Style::default().fg(DIM),
+        ));
+
+        rows.push(ListItem::new(Line::from(spans)));
+    }
+
+    if rows.is_empty() {
+        rows.push(empty_item("No events match the current filter."));
+    }
+
+    render_selectable_list(
+        frame,
+        area,
+        rows,
+        app.selected,
+        &format!(
+            " live heist feed · {} events · phase: {} · press n to cycle ",
+            app.snapshot.recent_events.len(),
+            phase
+        ),
+        BLUE,
+    );
+}
+
+fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let search = if app.search.is_empty() {
+        "".to_string()
+    } else {
+        format!(" · filter: /{}", app.search)
+    };
+    let paused = if app.paused { " · PAUSED" } else { "" };
+    let msg = if let Some(last) = app.logs.back() {
+        last.as_str()
+    } else {
+        "Ready"
+    };
+
+    let text = Line::from(vec![
+        Span::styled(" q ", key_style()),
+        Span::raw("quit  "),
+        Span::styled(" ? ", key_style()),
+        Span::raw("help  "),
+        Span::styled(" / ", key_style()),
+        Span::raw("filter  "),
+        Span::styled(" r/R ", key_style()),
+        Span::raw("refetch/reconnect  "),
+        Span::styled(format!("{paused}{search}"), Style::default().fg(GOLD)),
+        Span::styled(format!("   {msg}"), Style::default().fg(DIM)),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(text).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(DIM)),
+        ),
+        area,
+    );
+}
+
+fn render_model_details(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(model_id) = app.details_model_id.as_deref() else {
+        return;
+    };
+    let Some(model) = app.snapshot.models.iter().find(|m| m.id == model_id) else {
+        return;
+    };
+
+    frame.render_widget(Clear, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(5), Constraint::Length(9), Constraint::Min(8)])
+        .split(area);
+
+    let title = Text::from(vec![
+        Line::from(vec![
+            status_span(&model.status),
+            Span::raw(" "),
+            Span::styled(
+                model.label().to_string(),
+                Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}  {}", model.provider, model.upstream_model),
+                Style::default().fg(MUTED),
+            ),
+        ]),
+        Line::from(Span::styled(
+            format!(
+                "id: {} · roles: {}",
+                model.id,
+                if model.roles.is_empty() {
+                    "—".to_string()
+                } else {
+                    model.roles.join(", ")
+                }
+            ),
+            Style::default().fg(MUTED),
+        )),
+        Line::from(Span::styled(
+            "Enter/Esc/d closes",
+            Style::default().fg(DIM),
+        )),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(title).block(panel_block(" model detail ", GOLD)),
+        chunks[0],
+    );
+
+    let stat_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+        ])
+        .split(chunks[1]);
+
+    render_stat_block(
+        frame,
+        stat_cols[0],
+        "routing",
+        vec![
+            ("status", model.status.clone(), status_color(&model.status)),
+            (
+                "enabled",
+                model.enabled.to_string(),
+                if model.enabled { GREEN } else { RED },
+            ),
+            ("calls", fmt_n(model.call_count), BLUE),
+            ("wins", fmt_n(model.win_count), GOLD),
+        ],
+        BLUE,
+    );
+
+    render_stat_block(
+        frame,
+        stat_cols[1],
+        "quality",
+        vec![
+            ("success", fmt_n(model.success_count), TEAL),
+            ("failures", fmt_n(model.failure_count), RED),
+            ("win rate", fmt_pct(model.win_rate), GOLD),
+            ("success rate", fmt_pct(model.success_rate()), TEAL),
+        ],
+        TEAL,
+    );
+
+    render_stat_block(
+        frame,
+        stat_cols[2],
+        "latency",
+        vec![
+            ("avg", fmt_ms_f64(model.avg_latency_ms), BLUE),
+            ("last", fmt_ms_u64(model.last_latency_ms), BLUE),
+            ("min", fmt_ms_u64(model.min_latency_ms), TEAL),
+            ("max", fmt_ms_u64(model.max_latency_ms), RED),
+        ],
+        BLUE,
+    );
+
+    render_stat_block(
+        frame,
+        stat_cols[3],
+        "tokens/context",
+        vec![
+            ("tokens", fmt_n(model.total_tokens), PURPLE),
+            ("prompt", fmt_n(model.prompt_tokens), TEAL),
+            ("completion", fmt_n(model.completion_tokens), PURPLE),
+            ("safe ctx", fmt_n(model.safe_context_window), GOLD),
+        ],
+        PURPLE,
+    );
+
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(44), Constraint::Percentage(56)])
+        .split(chunks[2]);
+
+    let mut left_lines = Vec::new();
+
+    if let (true, Some(cap)) = (model.capacity_known, model.hourly_capacity) {
+        let pct = if cap == 0 {
+            0.0
+        } else {
+            model.hourly_used as f64 / cap as f64
+        };
+        left_lines.push(Line::from(vec![Span::styled(
+            "Hourly capacity",
+            Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+        )]));
+        left_lines.push(Line::from(progress_spans(
+            pct,
+            bottom[0].width.saturating_sub(4) as usize,
+            capacity_color(pct * 100.0),
+            Color::Rgb(45, 36, 35),
+        )));
+        left_lines.push(Line::from(Span::styled(
+            format!("{} / {} used this hour", fmt_n(model.hourly_used), fmt_n(cap)),
+            Style::default().fg(MUTED),
+        )));
+        left_lines.push(Line::raw(""));
+    }
+
+    if model.context_overrun_count > 0 || model.smallest_overrun_requested_tokens.is_some() {
+        left_lines.push(Line::from(Span::styled(
+            "Context learning",
+            Style::default().fg(TEAL).add_modifier(Modifier::BOLD),
+        )));
+        left_lines.push(Line::from(Span::styled(
+            format!("overruns: {}", fmt_n(model.context_overrun_count)),
+            Style::default().fg(if model.context_overrun_count > 0 { RED } else { MUTED }),
+        )));
+        left_lines.push(Line::from(Span::styled(
+            format!("learned ctx: {}", opt_n(model.learned_context_window)),
+            Style::default().fg(MUTED),
+        )));
+        left_lines.push(Line::from(Span::styled(
+            format!("req limit: {}", opt_n(model.learned_request_token_limit)),
+            Style::default().fg(MUTED),
+        )));
+        left_lines.push(Line::from(Span::styled(
+            format!(
+                "smallest overrun: {}",
+                opt_n(model.smallest_overrun_requested_tokens)
+            ),
+            Style::default().fg(MUTED),
+        )));
+        left_lines.push(Line::raw(""));
+    }
+
+    if let Some(kind) = &model.last_error_kind {
+        left_lines.push(Line::from(Span::styled(
+            "Last error",
+            Style::default().fg(RED).add_modifier(Modifier::BOLD),
+        )));
+        left_lines.push(Line::from(Span::styled(
+            kind.clone(),
+            Style::default().fg(RED),
+        )));
+        left_lines.push(Line::from(Span::styled(
+            model.last_error_message.clone().unwrap_or_default(),
+            Style::default().fg(MUTED),
+        )));
+    }
+
+    if left_lines.is_empty() {
+        left_lines.push(Line::from(Span::styled(
+            "No capacity/context/error detail yet.",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    frame.render_widget(
+        Paragraph::new(Text::from(left_lines))
+            .block(panel_block(" model telemetry ", TEAL))
+            .wrap(Wrap { trim: true }),
+        bottom[0],
+    );
+
+    let events = app
+        .snapshot
+        .recent_events
+        .iter()
+        .filter(|event| event.model_id == model.id)
+        .take(12)
+        .collect::<Vec<_>>();
+    let mut event_items = Vec::new();
+
+    for event in events {
+        let color = event_color(&event.status, event.error_kind.as_deref());
+        event_items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                format!(
+                    "{} ",
+                    event_status_glyph(&event.status, event.error_kind.as_deref())
+                ),
+                Style::default().fg(color),
+            ),
+            Span::styled(
+                fixed(&event.phase, 12),
+                Style::default().fg(phase_color(&event.phase)),
+            ),
+            Span::styled(fixed(&event.status, 9), Style::default().fg(color)),
+            Span::styled(
+                fixed(
+                    &event
+                        .error_kind
+                        .clone()
+                        .unwrap_or_else(|| fmt_ms_u64(event.latency_ms)),
+                    24,
+                ),
+                Style::default().fg(if event.error_kind.is_some() { RED } else { BLUE }),
+            ),
+            Span::styled(
+                format!("{} tok ", compact_n(event.total_tokens)),
+                Style::default().fg(PURPLE),
+            ),
+            Span::styled(fmt_time(event.created_at), Style::default().fg(DIM)),
+        ])));
+    }
+
+    if event_items.is_empty() {
+        event_items.push(empty_item("No recent events for this model."));
+    }
+
+    frame.render_widget(
+        List::new(event_items).block(panel_block(" recent events ", BLUE)),
+        bottom[1],
+    );
+}
+
+fn render_stat_block(
+    frame: &mut Frame,
+    area: Rect,
+    title: &'static str,
+    rows: Vec<(&'static str, String, Color)>,
+    color: Color,
+) {
+    let lines = rows
+        .into_iter()
+        .map(|(label, value, value_color)| {
+            Line::from(vec![
+                Span::styled(fixed(label, 12), Style::default().fg(MUTED)),
+                Span::styled(
+                    value,
+                    Style::default()
+                        .fg(value_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).block(panel_block(title, color)),
+        area,
+    );
+}
+
+fn render_help(frame: &mut Frame, area: Rect) {
+    frame.render_widget(Clear, area);
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "Jnoccio Fusion TUI Controls",
+            Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        help_line("1-5 / h,l / ←,→", "switch panes"),
+        help_line("↑,↓ / k,j / PgUp/PgDn", "move selection"),
+        help_line("Enter / d", "open model details"),
+        help_line("s", "cycle leaderboard sort"),
+        help_line("/", "search/filter current pane; Esc clears when closed"),
+        help_line("n", "cycle feed phase"),
+        help_line("c", "cycle context filter in Limits"),
+        help_line("r", "refetch /v1/jnoccio/metrics"),
+        help_line("R", "drop and reconnect websocket"),
+        help_line("p", "pause/resume applying snapshot/event updates"),
+        help_line("?", "toggle this help"),
+        help_line("q", "quit"),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Visual language: gold=wins/recent activity, teal=healthy/success, blue=latency/calls, purple=tokens, red=failures/overruns.",
+            Style::default().fg(MUTED),
+        )),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .block(panel_block(" help ", GOLD))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn render_search_box(frame: &mut Frame, app: &App, area: Rect) {
+    frame.render_widget(Clear, area);
+
+    let prompt = Text::from(vec![
+        Line::from(Span::styled(
+            "Filter",
+            Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("/", Style::default().fg(GOLD)),
+            Span::styled(app.search.clone(), Style::default().fg(Color::White)),
+            Span::styled("█", Style::default().fg(GOLD)),
+        ]),
+        Line::from(Span::styled(
+            "Enter applies · Esc closes · Backspace edits",
+            Style::default().fg(MUTED),
+        )),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(prompt).block(panel_block(" search ", GOLD)),
+        area,
+    );
+}
+
+fn render_selectable_list(
+    frame: &mut Frame,
+    area: Rect,
+    rows: Vec<ListItem<'static>>,
+    selected: usize,
+    title: &str,
+    color: Color,
+) {
+    let mut state = ListState::default();
+    if !rows.is_empty() {
+        state.select(Some(selected.min(rows.len().saturating_sub(1))));
+    }
+
+    let list = List::new(rows)
+        .block(panel_block(title, color))
+        .highlight_symbol("▸ ")
+        .highlight_style(
+            Style::default()
+                .bg(SURFACE)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn panel_block(title: impl Into<String>, color: Color) -> Block<'static> {
+    Block::default()
+        .title(Span::styled(
+            title.into(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(color))
+}
+
+fn kpi_span(label: &str, value: String, color: Color) -> Span<'static> {
+    Span::styled(
+        format!("{label} {value}"),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn progress_spans(pct: f64, width: usize, fg: Color, bg: Color) -> Vec<Span<'static>> {
+    let width = width.max(1);
+    let pct = pct.clamp(0.0, 1.0);
+    let filled = ((pct * width as f64).round() as usize).clamp(0, width);
+    let empty = width.saturating_sub(filled);
+
+    vec![
+        Span::styled("█".repeat(filled), Style::default().fg(fg)),
+        Span::styled("░".repeat(empty), Style::default().fg(bg)),
+    ]
+}
+
+fn stacked_bar_spans(prompt_pct: f64, completion_pct: f64, width: usize) -> Vec<Span<'static>> {
+    let width = width.max(1);
+    let prompt = (prompt_pct.clamp(0.0, 1.0) * width as f64).round() as usize;
+    let completion = (completion_pct.clamp(0.0, 1.0) * width as f64).round() as usize;
+    let used = (prompt + completion).min(width);
+    let prompt = prompt.min(width);
+    let completion = completion.min(width.saturating_sub(prompt));
+    let empty = width.saturating_sub(used);
+
+    vec![
+        Span::styled("█".repeat(prompt), Style::default().fg(TEAL)),
+        Span::styled("█".repeat(completion), Style::default().fg(PURPLE)),
+        Span::styled("░".repeat(empty), Style::default().fg(Color::Rgb(38, 34, 45))),
+    ]
+}
+
+fn empty_item(text: &'static str) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(text, Style::default().fg(DIM))))
+}
+
+fn status_span(status: &str) -> Span<'static> {
+    Span::styled("●", Style::default().fg(status_color(status)))
+}
+
+fn status_color(status: &str) -> Color {
+    let s = status.to_lowercase();
+
+    if s.contains("ready") || s.contains("success") || s.contains("ok") {
+        TEAL
+    } else if s.contains("cool") || s.contains("rate") || s.contains("warn") {
+        GOLD
+    } else if s.contains("fail")
+        || s.contains("error")
+        || s.contains("missing")
+        || s.contains("disabled")
+        || s.contains("incomplete")
+    {
+        RED
+    } else {
+        MUTED
+    }
+}
+
+fn event_color(status: &str, error: Option<&str>) -> Color {
+    if error.is_some() {
+        RED
+    } else {
+        status_color(status)
+    }
+}
+
+fn event_status_glyph(status: &str, error: Option<&str>) -> &'static str {
+    if error.is_some() {
+        "✕"
+    } else if status.eq_ignore_ascii_case("success") {
+        "✓"
+    } else if status.eq_ignore_ascii_case("failure") {
+        "✕"
+    } else {
+        "•"
+    }
+}
+
+fn phase_color(phase: &str) -> Color {
+    let p = phase.to_lowercase();
+
+    if p.contains("winner") || p.contains("win") {
+        GOLD
+    } else if p.contains("draft") || p.contains("route") {
+        BLUE
+    } else if p.contains("fusion") {
+        PURPLE
+    } else if p.contains("fail") || p.contains("error") {
+        RED
+    } else {
+        TEAL
+    }
+}
+
+fn latency_color(ms: f64) -> Color {
+    if ms < 1_000.0 {
+        TEAL
+    } else if ms < 5_000.0 {
+        BLUE
+    } else if ms < 15_000.0 {
+        GOLD
+    } else {
+        RED
+    }
+}
+
+fn latency_tier(ms: f64) -> &'static str {
+    if ms < 1_000.0 {
+        "⚡"
+    } else if ms < 5_000.0 {
+        "●"
+    } else if ms < 15_000.0 {
+        "▲"
+    } else {
+        "■"
+    }
+}
+
+fn capacity_color(pct: f64) -> Color {
+    if pct < 50.0 {
+        TEAL
+    } else if pct < 80.0 {
+        GOLD
+    } else {
+        RED
+    }
+}
+
+fn conn_style(mode: ConnectionMode) -> Style {
+    Style::default().fg(conn_color(mode))
+}
+
+fn conn_color(mode: ConnectionMode) -> Color {
+    match mode {
+        ConnectionMode::Loading | ConnectionMode::Connecting => BLUE,
+        ConnectionMode::Live => TEAL,
+        ConnectionMode::Reconnecting => GOLD,
+        ConnectionMode::Error => RED,
+    }
+}
+
+fn conn_label(mode: ConnectionMode) -> &'static str {
+    match mode {
+        ConnectionMode::Loading => "loading",
+        ConnectionMode::Connecting => "connecting",
+        ConnectionMode::Live => "live",
+        ConnectionMode::Reconnecting => "reconnecting",
+        ConnectionMode::Error => "error",
+    }
+}
+
+fn agent_color(agent_id: &str) -> Color {
+    let mut hash: u32 = 0;
+    for byte in agent_id.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+    }
+
+    match hash % 12 {
+        0 => Color::Rgb(255, 99, 132),
+        1 => Color::Rgb(255, 159, 64),
+        2 => Color::Rgb(255, 205, 86),
+        3 => Color::Rgb(75, 192, 192),
+        4 => Color::Rgb(54, 162, 235),
+        5 => Color::Rgb(153, 102, 255),
+        6 => Color::Rgb(201, 203, 207),
+        7 => Color::Rgb(54, 215, 183),
+        8 => Color::Rgb(245, 166, 35),
+        9 => Color::Rgb(168, 85, 247),
+        10 => Color::Rgb(59, 130, 246),
+        _ => Color::Rgb(255, 71, 87),
+    }
+}
+
+fn bar_glyph(pct: f64) -> &'static str {
+    match (pct.clamp(0.0, 1.0) * 8.0).ceil() as u8 {
+        0 | 1 => "▁",
+        2 => "▂",
+        3 => "▃",
+        4 => "▄",
+        5 => "▅",
+        6 => "▆",
+        7 => "▇",
+        _ => "█",
+    }
+}
+
+fn spinner(tick: u64) -> &'static str {
+    const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    SPIN[(tick as usize) % SPIN.len()]
+}
+
+fn key_style() -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(GOLD)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn help_line(key: &'static str, text: &'static str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            fixed(key, 24),
+            Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(text, Style::default().fg(Color::White)),
+    ])
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn buckets_from_context_events(events: Vec<&ModelContextEvent>) -> Vec<ContextHistogramBucket> {
+    let mut map = HashMap::<u64, ContextHistogramBucket>::new();
+
+    for event in events {
+        let bucket_start = (event.estimated_total_tokens / 8_000) * 8_000;
+        let bucket = map.entry(bucket_start).or_insert(ContextHistogramBucket {
+            bucket_start,
+            bucket_end: bucket_start + 8_000,
+            success_count: 0,
+            failure_count: 0,
+            overrun_count: 0,
+        });
+
+        if event.status == "success" {
+            bucket.success_count += 1;
+        }
+        if event.status == "failure" {
+            bucket.failure_count += 1;
+        }
+        if event.error_kind.as_deref() == Some("ContextOverflow") {
+            bucket.overrun_count += 1;
+        }
+    }
+
+    let mut buckets = map.into_values().collect::<Vec<_>>();
+    buckets.sort_by(|a, b| a.bucket_start.cmp(&b.bucket_start));
+    buckets
+}
+
+fn cmp_f64(a: f64, b: f64) -> Ordering {
+    a.partial_cmp(&b).unwrap_or(Ordering::Equal)
+}
+
+fn fmt_n<N: Into<u64>>(value: N) -> String {
+    let mut n = value.into();
+
+    if n == 0 {
+        return "0".to_string();
+    }
+
+    let mut parts = Vec::new();
+    while n >= 1000 {
+        parts.push(format!("{:03}", n % 1000));
+        n /= 1000;
+    }
+    parts.push(n.to_string());
+    parts.reverse();
+    parts.join(",")
+}
+
+fn compact_n<N: Into<u64>>(value: N) -> String {
+    let value = value.into();
+
+    if value >= 1_000_000_000 {
+        format!("{:.1}B", value as f64 / 1_000_000_000.0)
+    } else if value >= 1_000_000 {
+        format!("{:.1}M", value as f64 / 1_000_000.0)
+    } else if value >= 1_000 {
+        format!("{:.1}k", value as f64 / 1_000.0)
+    } else {
+        value.to_string()
+    }
+}
+
+fn fmt_m(value: f64) -> String {
+    if !value.is_finite() || value <= 0.0 {
+        "0.0".to_string()
+    } else if value < 10.0 {
+        format!("{value:.2}")
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+fn fmt_pct(value: f64) -> String {
+    format!("{}%", (value * 100.0).round() as i64)
+}
+
+fn fmt_ms_f64(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{} ms", v.round() as u64))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn fmt_ms_u64(value: Option<u64>) -> String {
+    value
+        .map(|v| format!("{v} ms"))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn fmt_time(timestamp: i64) -> String {
+    match Local.timestamp_opt(timestamp, 0).single() {
+        Some(dt) => dt.format("%H:%M:%S").to_string(),
+        None => "—".to_string(),
+    }
+}
+
+fn local_now() -> String {
+    Local::now().format("%H:%M:%S").to_string()
+}
+
+fn opt_n(value: Option<u64>) -> String {
+    value.map(fmt_n).unwrap_or_else(|| "—".to_string())
+}
+
+fn trunc(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+
+    let keep = max_chars.saturating_sub(1);
+    format!("{}…", value.chars().take(keep).collect::<String>())
+}
+
+fn fixed(value: &str, width: usize) -> String {
+    let shortened = trunc(value, width);
+    let len = shortened.chars().count();
+
+    if len >= width {
+        shortened
+    } else {
+        format!("{shortened:<width$}")
+    }
+}
+
+fn display_or_id<'a>(display: &'a str, id: &'a str) -> &'a str {
+    if display.is_empty() {
+        id
+    } else {
+        display
+    }
+}
+```
+
+[1]: https://docs.rs/ratatui/latest/ratatui/ "ratatui - Rust"

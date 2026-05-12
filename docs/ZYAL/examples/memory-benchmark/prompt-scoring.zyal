@@ -1,0 +1,387 @@
+# ZYAL v2.5 - Memory benchmark Prompt Scoring
+#
+# AutoResearch / judge population run for the memory benchmark prompt-set.
+# It snapshots the tracked benchmark corpus, fans out 20 workers, keeps the population
+# ledger append-only, and reduces votes into deterministic score artifacts.
+
+<<<ZYAL v1:daemon id=memory-benchmark-prompt-scoring>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Memory benchmark prompt scoring"
+  objective: |
+    Produce qualitative, non-primary prompt diagnostics for the memory benchmark
+    prompt population against a 100-point rubric
+    covering correctness, provenance, bitemporal recall, contradiction
+    handling, math and science, English discourse and coreference, privacy
+    redaction, procedural skill, feedback adaptation, and determinism.
+    Persist population memory as append-only evidence so future runs can skip
+    already-settled critiques.
+  risk:
+    - Population scoring is secondary diagnostics only; primary score is executable Rust oracle scoring
+    - Population scoring is read-heavy but must stay deterministic
+    - Prompt reduction must preserve evidence caps and disagreement traces
+    - Corpus checks must not mutate the tracked benchmark corpus
+
+loop:
+  policy: once
+  sleep: 0s
+
+context:
+  strategy: hard
+  compact_every: 1
+  hard_clear_every: 1
+  preserve:
+    - objective
+    - corpus_hash
+    - population_cursor
+    - ledger_path
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/reports/prompt-score.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/reports/prompt-score.md"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/reports/reference-ranking.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark/memory/population-ledger.jsonl"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+hooks:
+  on_start:
+    - run: "mkdir -p .jekko/daemon/memory-benchmark/reports .jekko/daemon/memory-benchmark/memory"
+      timeout: 30s
+      on_fail: warn
+    - run: "test -f crates/memory-benchmark/Cargo.toml"
+      timeout: 10s
+      on_fail: warn
+  before_iteration:
+    - run: "cargo fmt --manifest-path crates/memory-benchmark/Cargo.toml -- --check"
+      timeout: 120s
+      on_fail: pause
+    - run: "cargo test --manifest-path crates/memory-benchmark/Cargo.toml"
+      timeout: 240s
+      on_fail: pause
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin generate_suite -- --split public-dev --seed public-dev-0001 --fixtures 500 --out .jekko/daemon/memory-benchmark/reports/generated-public-dev.json"
+      timeout: 180s
+      on_fail: pause
+  after_iteration:
+    - run: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin prompt_reduce -- --votes .jekko/daemon/memory-benchmark/reports/population-votes.jsonl --out .jekko/daemon/memory-benchmark/reports/prompt-score.json --markdown .jekko/daemon/memory-benchmark/reports/prompt-score.md --ranking .jekko/daemon/memory-benchmark/reports/reference-ranking.json --disagreement .jekko/daemon/memory-benchmark/reports/population-disagreement.json"
+      timeout: 240s
+      on_fail: pause
+  on_stop:
+    - run: "printf '%s\n' 'Memory benchmark prompt scoring stopped'"
+      on_fail: warn
+
+fan_out:
+  strategy: scatter_gather
+  split:
+    shell: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin dump_tasks -- prompt --population 20 --out .jekko/daemon/memory-benchmark/reports/population-tasks.jsonl"
+  worker:
+    agent: judge
+    isolation: same_session
+    timeout: 30m
+    max_parallel: 20
+  reduce:
+    strategy: custom_shell
+    command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin prompt_reduce -- --votes .jekko/daemon/memory-benchmark/reports/population-votes.jsonl --out .jekko/daemon/memory-benchmark/reports/prompt-score.json --markdown .jekko/daemon/memory-benchmark/reports/prompt-score.md --ranking .jekko/daemon/memory-benchmark/reports/reference-ranking.json --disagreement .jekko/daemon/memory-benchmark/reports/population-disagreement.json"
+  on_partial_failure: continue
+
+fleet:
+  max_workers: 20
+  isolation: same_session
+
+experiments:
+  strategy: portfolio_search
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.25
+    axes:
+      - science
+      - math
+      - english
+      - privacy
+      - procedure
+  lanes:
+    - id: science
+      hypothesis: "A science-specialist judge catches source conflicts and dataset drift."
+      prompt_strategy: science_slice
+      agent: judge
+      model: critic
+      isolation: same_session
+      timeout: 15m
+      budget:
+        max_iterations: 4
+        max_cost_usd: 1.00
+    - id: math
+      hypothesis: "A math-specialist judge catches equation and unit mistakes."
+      prompt_strategy: math_slice
+      agent: judge
+      model: critic
+      isolation: same_session
+      timeout: 15m
+      budget:
+        max_iterations: 4
+        max_cost_usd: 1.00
+    - id: english
+      hypothesis: "A discourse-specialist judge catches coreference and ambiguity failures."
+      prompt_strategy: english_slice
+      agent: judge
+      model: critic
+      isolation: same_session
+      timeout: 15m
+      budget:
+        max_iterations: 4
+        max_cost_usd: 1.00
+    - id: privacy
+      hypothesis: "A privacy-specialist judge catches canary leakage and trace redaction issues."
+      prompt_strategy: privacy_slice
+      agent: judge
+      model: critic
+      isolation: same_session
+      timeout: 15m
+      budget:
+        max_iterations: 4
+        max_cost_usd: 1.00
+    - id: procedure
+      hypothesis: "A procedural-specialist judge catches workflow and verification errors."
+      prompt_strategy: procedure_slice
+      agent: judge
+      model: critic
+      isolation: same_session
+      timeout: 15m
+      budget:
+        max_iterations: 4
+        max_cost_usd: 1.00
+  fork_from: current_head
+  max_parallel: 20
+  scoring:
+    weights:
+      correctness: 20
+      provenance: 12
+      bitemporal_recall: 10
+      contradiction: 10
+      math_science: 12
+      english_discourse_coreference: 8
+      privacy_redaction: 8
+      procedural_skill: 8
+      feedback_adaptation: 6
+      determinism_rebuild: 6
+    judge:
+      agent: critic
+      blind: true
+      must_use_different_provider: true
+  reduce:
+    strategy: vote
+    require_final_verification: true
+  on_partial_failure: continue
+  preserve_failed_lanes_as_negative_memory: true
+
+models:
+  profiles:
+    builder:
+      provider: openai
+      model: gpt-5.5
+      reasoning: true
+    critic:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      reasoning: true
+    reporter:
+      provider: openai
+      model: gpt-5.4-mini
+  routes:
+    build: builder
+    judge: critic
+    report: reporter
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+  confidence_cap: 0.72
+
+memory:
+  stores:
+    population_findings:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+    population_ledger:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+    curriculum_proposals:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: inject_at_start
+      searchable: true
+  redaction:
+    patterns:
+      - "MEMORY_BENCH_CANARY_[A-Z0-9]+"
+      - "vault-canary-[A-Za-z0-9_-]+"
+      - "sk-[A-Za-z0-9]+"
+      - "AKIA[A-Z0-9]+"
+      - "ghp_[A-Za-z0-9]+"
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+evidence:
+  require_before_promote:
+    - type: population_task_bundle
+      must_exist: true
+    - type: vote_matrix
+      must_pass: true
+    - type: prompt_score
+      must_exist: true
+    - type: reference_ranking
+      must_exist: true
+    - type: disagreement_report
+      must_exist: true
+    - type: population_ledger
+      must_exist: true
+  bundle_format: json
+  sign: sha256
+  archive: true
+
+sandbox:
+  paths:
+    - path: ".jekko/daemon/memory-benchmark"
+      access: write
+    - path: "docs/ZYAL/examples/memory-benchmark"
+      access: read
+    - path: "."
+      access: read
+  network:
+    outbound: deny
+  resources:
+    max_file_size: 8MiB
+    max_total_disk: 1GiB
+    max_memory: 4GiB
+    max_processes: 32
+
+security:
+  trust_zones:
+    bench:
+      paths:
+        - ".jekko/daemon/memory-benchmark"
+      require_approval: false
+      max_risk_score: 0.8
+    specs:
+      paths:
+        - "crates/memory-benchmark"
+      require_approval: false
+      max_risk_score: 0.5
+  injection:
+    scan_inputs: true
+    scan_outputs: true
+    deny_patterns:
+      - "ignore previous instructions"
+      - "disregard the system prompt"
+      - "you are now"
+    on_detect: pause
+  secrets:
+    redact_from_logs: true
+    rotate_after: 7d
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+    include_model_calls: false
+  metrics:
+    - name: prompt_population_tasks
+      type: counter
+      source: .jekko/daemon/memory-benchmark/reports/population-tasks.jsonl
+    - name: prompt_population_votes
+      type: counter
+      source: .jekko/daemon/memory-benchmark/reports/population-votes.jsonl
+    - name: prompt_population_disagreements
+      type: gauge
+      source: .jekko/daemon/memory-benchmark/reports/population-disagreement.json
+  cost:
+    budget: 12.00
+    currency: USD
+    alert_at_percent: 80
+    on_budget_exceeded: warn
+  report:
+    format: markdown
+    on_complete: true
+    on_checkpoint: true
+    include:
+      - prompt-score.json
+      - prompt-score.md
+      - reference-ranking.json
+      - population-disagreement.json
+      - population-ledger.jsonl
+
+budgets:
+  run:
+    wall_clock: 300s
+    tool_calls: 1200
+    cost_usd: 12.00
+    on_exhaust: park
+  task:
+    wall_clock: 20m
+    tool_calls: 120
+    cost_usd: 1.00
+    on_exhaust: park
+  iteration:
+    wall_clock: 5m
+    tool_calls: 60
+    cost_usd: 0.50
+    on_exhaust: pause
+  experiment_lane:
+    wall_clock: 15m
+    cost_usd: 1.00
+    on_exhaust: abort
+
+permissions:
+  read: allow
+  list: allow
+  glob: allow
+  grep: allow
+  external_directory: deny
+  shell: allow
+  edit: allow
+  git_commit: deny
+  git_push: deny
+  workers: allow
+  mcp: deny
+  research: deny
+  websearch: deny
+  webfetch: deny
+
+done:
+  require:
+    - population_score_written
+    - reference_ranking_written
+    - disagreement_report_written
+    - population_ledger_persisted
+    - deterministic_reduction_verified
+  forbid:
+    - unredacted_canary
+    - non_deterministic_hash
+    - non_rust_harness_tools
+
+ui:
+  theme: jekko-gold
+  banner: memory-benchmark
+<<<END_ZYAL id=memory-benchmark-prompt-scoring>>>
+ZYAL_ARM RUN_FOREVER id=memory-benchmark-prompt-scoring

@@ -1,0 +1,364 @@
+## My best recommendation
+
+**Do not use `/tmp` by itself, and do not rely on Git by itself.** For an agent that can run shell commands, write files, install packages, or execute arbitrary code, the best practical pattern is:
+
+**disposable workspace + OS/process sandbox + explicit logging + narrow permissions.**
+
+For OpenCode specifically, I would treat OpenCode’s permission system as a **UI/approval layer**, not a containment boundary. OpenCode supports granular permissions and a configurable shell, but its own docs say most permissions default to `"allow"`, and a recent OpenCode issue explicitly calls out the problem that allowed `bash` commands can bypass edit/path restrictions through Python, Node, redirects, `cp`, `mv`, etc. ([OpenCode][1])
+
+So the answer is:
+
+**Best non-Docker solution:** disposable clone/worktree + `bubblewrap` command runner on Linux.
+**Best high-safety solution:** Docker Sandboxes / microVM, or a real VM.
+**Best “lighter than Docker but container-ish” solution:** rootless Podman.
+**Best minimal solution:** Git worktree + strict cleanup, but only for trusted commands.
+
+---
+
+## The key distinction
+
+There are three different problems people lump together:
+
+| Layer                         | Solves                                                        | Does not solve                                                          |
+| ----------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `/tmp` / `mktemp` scratch dir | File organization, automatic cleanup                          | Does not stop the agent from writing elsewhere                          |
+| Git worktree / clone          | Keeps source edits away from your main tree                   | Does not isolate processes, network, secrets, `$HOME`, package managers |
+| OS sandbox / container / VM   | Actually limits filesystem, process, network, resource access | More setup; may need toolchain mounting or images                       |
+
+`mktemp -d` is good for unique scratch directories because it safely creates a temporary directory, but it is not a sandbox. ([Linux Die][2]) Git worktrees are excellent for separate branches and experiments; Git’s docs explicitly describe throwaway detached worktrees for testing without disturbing current development. ([Git][3]) But the moment the agent can run shell commands, Git is not enough.
+
+---
+
+## Recommended architecture
+
+Create a per-agent directory like:
+
+```text
+~/.cache/agent-sandboxes/
+  20260511-142233-auth-refactor/
+    repo/          # disposable checkout the agent can edit
+    scratch/       # tmp, home, cache, data
+    logs/          # stdout/stderr/exit code per command
+    artifacts/     # reports, generated data, screenshots, etc.
+    seed.patch     # optional patch from your main dirty tree
+    result.patch   # final diff to review/apply
+```
+
+Then run the agent with:
+
+```text
+WORKDIR = ~/.cache/agent-sandboxes/<id>/repo
+TMPDIR  = ~/.cache/agent-sandboxes/<id>/scratch/tmp
+HOME    = ~/.cache/agent-sandboxes/<id>/scratch/home
+CACHE   = ~/.cache/agent-sandboxes/<id>/scratch/cache
+```
+
+That gives the agent useful feedback through normal stdout/stderr while keeping its writes, package caches, temp files, and generated data out of your real tree.
+
+---
+
+## Git: worktree or clone?
+
+Use **Git worktree** when you mainly want to keep edits away from your main checkout:
+
+```bash
+id="$(date +%Y%m%d-%H%M%S)-agent"
+root="$HOME/.cache/agent-sandboxes/$id"
+mkdir -p "$root"
+
+git worktree add -b "agent/$id" "$root/repo" HEAD
+mkdir -p "$root"/{scratch/tmp,scratch/home,scratch/cache,logs,artifacts}
+```
+
+Use **a full disposable clone** when you plan to put a filesystem sandbox around it:
+
+```bash
+id="$(date +%Y%m%d-%H%M%S)-agent"
+root="$HOME/.cache/agent-sandboxes/$id"
+mkdir -p "$root"
+
+git clone --no-hardlinks "$PWD" "$root/repo"
+mkdir -p "$root"/{scratch/tmp,scratch/home,scratch/cache,logs,artifacts}
+```
+
+Why clone for stronger sandboxing? A Git worktree’s `.git` is not a self-contained `.git` directory; it points back to the parent repository metadata. That can confuse sandboxes that only mount the workspace, and it may require exposing parent Git metadata. Docker Sandbox users have run into this exact issue: a manually created worktree inside a sandbox may not be able to commit because it cannot access the parent Git repository. ([Andrew Lock | .NET Escapades][4]) Also avoid `--shared` or hardlink-heavy local clone optimizations for untrusted agent sandboxes; Git’s docs note `--no-hardlinks` copies objects instead of hardlinking, and warn that shared/alternate object clones can be dangerous if you do not understand the dependency. ([Git][5])
+
+If you need to seed the sandbox with your current uncommitted changes:
+
+```bash
+git diff > "$root/seed.patch"
+git -C "$root/repo" apply "$root/seed.patch"
+```
+
+Then later:
+
+```bash
+git -C "$root/repo" diff > "$root/result.patch"
+git apply --check "$root/result.patch"
+git apply "$root/result.patch"
+```
+
+---
+
+## Best non-Docker Linux setup: Git clone + bubblewrap shell runner
+
+`bubblewrap` is a strong fit here because it creates a new mount namespace and lets you decide exactly what parts of the filesystem are visible; it can also use PID, IPC, UTS, network namespaces, and seccomp-style restrictions depending on how you configure it. ([GitHub][6])
+
+Create a wrapper such as `~/bin/agent-bash`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${AGENT_WORKSPACE:?Set AGENT_WORKSPACE to the disposable repo path}"
+: "${AGENT_SCRATCH:?Set AGENT_SCRATCH to the disposable scratch path}"
+: "${AGENT_LOGS:=$AGENT_SCRATCH/../logs}"
+
+mkdir -p \
+  "$AGENT_SCRATCH/tmp" \
+  "$AGENT_SCRATCH/home" \
+  "$AGENT_SCRATCH/cache" \
+  "$AGENT_LOGS"
+
+ts="$(date +%Y%m%d-%H%M%S)"
+log="$AGENT_LOGS/cmd-$ts-$$"
+
+net_args=()
+# Default: no network for code execution.
+# Set AGENT_NET=1 only for explicit install/fetch phases.
+if [[ "${AGENT_NET:-0}" != "1" ]]; then
+  net_args+=(--unshare-net)
+fi
+
+set +e
+
+bwrap \
+  --die-with-parent \
+  --new-session \
+  --unshare-pid \
+  --unshare-ipc \
+  --unshare-uts \
+  "${net_args[@]}" \
+  --proc /proc \
+  --dev /dev \
+  --ro-bind /usr /usr \
+  --ro-bind-try /bin /bin \
+  --ro-bind-try /lib /lib \
+  --ro-bind-try /lib64 /lib64 \
+  --ro-bind-try /etc/ssl /etc/ssl \
+  --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
+  --ro-bind-try /etc/resolv.conf /etc/resolv.conf \
+  --ro-bind-try /etc/hosts /etc/hosts \
+  --dir /home \
+  --bind "$AGENT_SCRATCH/home" /home/agent \
+  --bind "$AGENT_WORKSPACE" /work \
+  --bind "$AGENT_SCRATCH/tmp" /tmp \
+  --setenv HOME /home/agent \
+  --setenv TMPDIR /tmp \
+  --setenv XDG_CACHE_HOME /home/agent/.cache \
+  --chdir /work \
+  /bin/bash "$@" \
+  > >(tee "$log.stdout") \
+  2> >(tee "$log.stderr" >&2)
+
+rc=$?
+echo "$rc" > "$log.exit"
+exit "$rc"
+```
+
+Then run OpenCode from the disposable repo and point its shell at the wrapper:
+
+```bash
+root="$HOME/.cache/agent-sandboxes/20260511-142233-agent"
+
+export AGENT_WORKSPACE="$root/repo"
+export AGENT_SCRATCH="$root/scratch"
+export AGENT_LOGS="$root/logs"
+
+cd "$AGENT_WORKSPACE"
+opencode
+```
+
+Example project `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "shell": "/home/YOUR_USER/bin/agent-bash",
+  "share": "disabled",
+  "permission": {
+    "*": "ask",
+    "external_directory": "deny",
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    },
+    "edit": "allow",
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "grep *": "allow",
+      "rg *": "allow",
+      "pytest*": "allow",
+      "npm test*": "allow",
+      "pnpm test*": "allow",
+      "rm *": "deny",
+      "sudo *": "deny",
+      "git push*": "deny"
+    },
+    "webfetch": "ask",
+    "websearch": "ask"
+  }
+}
+```
+
+OpenCode’s config supports setting the shell used by the interactive terminal and agent tool calls, and its permission model supports rules for `bash`, `edit`, `external_directory`, `webfetch`, and related tools. ([OpenCode][7])
+
+This setup gives the agent normal stdout, stderr, tracebacks, test failures, and exit codes, while its shell commands see only `/work`, `/tmp`, a fake home, and selected system runtime directories.
+
+---
+
+## Where `/tmp` belongs
+
+Use `/tmp` or `mktemp -d` for **per-command scratch**, not for the whole agent project. Better:
+
+```bash
+root="$HOME/.cache/agent-sandboxes/$id"
+tmp="$root/scratch/tmp"
+export TMPDIR="$tmp"
+```
+
+This makes temp output reviewable and easy to clean. A raw `/tmp/opencode-sandbox` is easy to forget, collide with, or have cleaned by the OS. Also, a process running in `/tmp` can still write to your real tree unless you add actual filesystem isolation.
+
+---
+
+## When Docker or a microVM is actually best
+
+If the agent may install packages, run `docker compose`, start services, execute unknown scripts, or perform multi-step builds, **a VM/microVM sandbox is the cleanest answer**.
+
+Docker’s new Sandboxes are built specifically for AI coding agents: each sandbox gets an isolated microVM, its own filesystem, its own network, and its own Docker daemon, so the agent can install packages or build containers without touching the host. ([Docker Documentation][8]) Docker’s isolation docs also say each sandbox has its own Linux kernel, only the workspace is shared with the host, network traffic is policy-controlled, raw TCP/UDP/ICMP are blocked, and credentials can be injected by a host-side proxy rather than being stored inside the VM. ([Docker Documentation][9])
+
+For OpenCode, Docker even documents:
+
+```bash
+sbx run opencode ~/my-project
+```
+
+with provider secrets managed through the sandbox tooling. ([Docker Documentation][10])
+
+That is probably the **best high-safety answer** if you are willing to use it.
+
+---
+
+## Lighter container compromise: rootless Podman
+
+Rootless Podman is a good middle ground if Docker feels too heavy. Podman is daemonless and most commands can run as a regular user without extra privileges. ([Podman Documentation][11]) Its rootless user namespace modes can avoid mapping your host UID into the container; Red Hat notes that modes like `auto`/`nomap` can prevent the container from accessing files owned by your host UID except through normal world permissions. ([Red Hat][12])
+
+Example:
+
+```bash
+podman run --rm -it \
+  --userns=keep-id \
+  --network=none \
+  --cap-drop=all \
+  --security-opt=no-new-privileges \
+  --pids-limit=512 \
+  --memory=4g \
+  --cpus=2 \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+  -v "$root/repo:/work:rw,Z" \
+  -v "$root/scratch/home:/home/agent:rw,Z" \
+  -w /work \
+  docker.io/library/python:3.12 \
+  bash
+```
+
+Use this when you need a real language runtime but do not want a full Docker Desktop / Docker daemon workflow.
+
+---
+
+## Add resource controls
+
+Even if you trust the agent, prevent runaway processes:
+
+```bash
+timeout 120s your-command
+```
+
+For Linux, `systemd-run` is useful for transient services/scopes and resource accounting; the docs describe it as creating transient service or scope units, and resource-control options are backed by cgroups. ([Arch Manual Pages][13])
+
+Example:
+
+```bash
+systemd-run --user --scope \
+  -p MemoryMax=4G \
+  -p TasksMax=512 \
+  -p CPUQuota=200% \
+  -- \
+  opencode
+```
+
+I would use `systemd-run` mainly for **resource limits and lifecycle management**, and `bubblewrap`/Podman/VM for **filesystem isolation**.
+
+---
+
+## What I would not do
+
+I would not run a coding agent in your real repo with broad `bash` access and hope that prompt permissions catch everything. OpenCode permissions are helpful, but the path/tool policy is not the same as OS containment.
+
+I would not use a fixed `/tmp/agent` directory. Use unique per-run directories.
+
+I would not mount your real `$HOME`, `~/.ssh`, `~/.aws`, `~/.config`, shell history, or `.env` files into the execution sandbox. OpenCode denies `.env` reads by default, but the safer rule is that secrets should not exist in the sandboxed process environment at all. ([OpenCode][1])
+
+I would not mount the host Docker socket into an agent environment. Docker Sandboxes avoid this by giving the sandbox its own Docker Engine; that is exactly the right design. ([Docker Documentation][9])
+
+On macOS, I would not build a serious agent isolation workflow around `sandbox-exec`; the man page says it is deprecated and recommends App Sandbox for app developers. ([manp.gs — man pages][14]) Use Docker Sandboxes, a VM, or a container VM layer instead.
+
+---
+
+## My ranking
+
+1. **Best overall safety:** Docker Sandboxes / microVM per agent.
+   Use this if the agent can install packages, run services, or use Docker/Compose.
+
+2. **Best no-Docker Linux setup:** disposable full clone + `bubblewrap` shell runner + fake `$HOME` + no network by default.
+   This is the solution I would personally start with if avoiding Docker.
+
+3. **Best lightweight container setup:** rootless Podman with `--network=none`, resource limits, read-only root FS, and only the disposable repo mounted.
+
+4. **Best simple workflow for trusted work:** Git worktree per task, plus OpenCode permissions, plus `TMPDIR` pointed at a task scratch dir.
+
+5. **Only for throwaway scratch:** `/tmp` / `mktemp -d`.
+
+The practical sweet spot is:
+
+```text
+OpenCode controller outside the sandbox
+  → shell/tool execution through sandbox wrapper
+  → disposable clone/worktree
+  → fake HOME/TMP/cache
+  → no network by default
+  → stdout/stderr/exit code streamed back and logged
+  → final diff reviewed before applying
+```
+
+That gives agents the feedback they need—exceptions, test output, logs, generated artifacts—without giving them your real tree, home directory, credentials, package caches, or host services.
+
+[1]: https://opencode.ai/docs/permissions/ "Permissions | OpenCode"
+[2]: https://linux.die.net/man/1/mktemp?utm_source=chatgpt.com "mktemp(1): create temporary file/directory - Linux man page"
+[3]: https://git-scm.com/docs/git-worktree "Git - git-worktree Documentation"
+[4]: https://andrewlock.net/running-ai-agents-safely-in-a-microvm-using-docker-sandbox/ "Running AI agents safely in a microVM using docker sandbox"
+[5]: https://git-scm.com/docs/git-clone?utm_source=chatgpt.com "Git - git-clone Documentation"
+[6]: https://github.com/containers/bubblewrap "GitHub - containers/bubblewrap: Low-level unprivileged sandboxing tool used by Flatpak and similar projects · GitHub"
+[7]: https://opencode.ai/docs/config/ "Config | OpenCode"
+[8]: https://docs.docker.com/ai/sandboxes/ "Docker Sandboxes | Docker Docs"
+[9]: https://docs.docker.com/ai/sandboxes/security/isolation/ "Isolation layers | Docker Docs"
+[10]: https://docs.docker.com/ai/sandboxes/agents/opencode/ "OpenCode | Docker Docs"
+[11]: https://docs.podman.io/en/stable/markdown/podman.1.html?utm_source=chatgpt.com "containers.conf"
+[12]: https://www.redhat.com/en/blog/rootless-podman-user-namespace-modes?utm_source=chatgpt.com "Understanding rootless Podman's user namespace modes"
+[13]: https://man.archlinux.org/man/systemd-run.1.en?utm_source=chatgpt.com "systemd-run(1) - Arch manual pages"
+[14]: https://manp.gs/mac/1/sandbox-exec?utm_source=chatgpt.com "SANDBOX-EXEC(1) - manp.gs — man pages"

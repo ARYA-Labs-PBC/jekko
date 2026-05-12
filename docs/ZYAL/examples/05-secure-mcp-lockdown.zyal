@@ -1,0 +1,240 @@
+# ZYAL v2.1 — Secure MCP Lockdown
+#
+# Enterprise-grade MCP hardening: pinned tool descriptors, capability hash,
+# rug-pull detection, deny-by-default network, brokered secrets that never
+# enter model context, command floor, and origin-aware arming. Demonstrates
+# how ZYAL deploys autonomous agents into hostile environments without
+# becoming a supply-chain attack surface.
+
+<<<ZYAL v1:daemon id=secure-mcp-lockdown>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Secure MCP-driven daemon"
+  objective: |
+    Run governed work against pinned MCP servers under brokered credentials,
+    deny-by-default network, sandboxed runtime, and origin-bound arming.
+  risk:
+    - MCP descriptor drift attempts
+    - Credential exfiltration via tool output
+    - Prompt injection from untrusted resources
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  reject_from:
+    - assistant_output
+    - tool_output
+    - web_content
+    - mcp_resource
+    - issue_comment
+    - repo_files
+  accepted_origins:
+    - trusted_user_message
+    - signed_cli_input
+    - host_ui_button
+  preview_expires_after: 5m
+  arm_token_single_use: true
+  bound_to: ["script_hash", "user_id", "repo", "branch"]
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/done.txt"
+        timeout: 5s
+        assert: { exit_code: 0 }
+
+mcp:
+  profiles:
+    github-readonly:
+      servers: ["github"]
+      tools: ["list_issues", "read_issue", "list_prs"]
+      resources: ["repo://main"]
+    github-pr-create:
+      servers: ["github"]
+      tools: ["create_pull_request"]
+    filesystem-scoped:
+      servers: ["filesystem"]
+      tools: ["read_file"]
+      resources: ["file://./src", "file://./test"]
+
+sandbox:
+  paths:
+    - { path: "src/**", access: write }
+    - { path: "test/**", access: write }
+    - { path: ".env*", access: deny }
+    - { path: "secrets/**", access: deny }
+    - { path: ".ssh/**", access: deny }
+    - { path: ".aws/**", access: deny }
+  network:
+    outbound: allowlist
+    allowlist:
+      - "registry.npmjs.org"
+      - "github.com"
+      - "api.github.com"
+      - "raw.githubusercontent.com"
+  resources:
+    max_file_size: 10MB
+    max_total_disk: 5GB
+    max_memory: 4GB
+    max_processes: 50
+  env_inherit:
+    - PATH
+    - HOME
+    - LANG
+    - TZ
+  env_deny:
+    - "*_TOKEN"
+    - "*_KEY"
+    - "*_SECRET"
+    - "AWS_*"
+    - "GITHUB_*"
+
+security:
+  trust_zones:
+    sensitive_paths:
+      paths: ["packages/auth/**", "packages/payments/**", "**/migrations/**"]
+      require_approval: true
+      max_risk_score: 0.4
+  injection:
+    scan_inputs: true
+    scan_outputs: true
+    deny_patterns:
+      - "ignore previous instructions"
+      - "disregard the system prompt"
+      - "you are now a different agent"
+      - "<\\|im_start\\|>"
+    on_detect: pause
+  secrets:
+    allowed_env: []
+    redact_from_logs: true
+    rotate_after: 24h
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-scoped
+      tool: read
+      paths: ["src/**", "test/**", "package.json", "tsconfig.json"]
+      decision: allow
+    - id: edit-src
+      tool: edit
+      paths: ["src/**", "test/**"]
+      decision: allow
+      expires: 4h
+    - id: github-readonly
+      tool: mcp
+      decision: allow
+      reason: "github-readonly profile only"
+    - id: github-pr
+      tool: mcp
+      decision: ask
+      require_gate: pr_create_review
+    - id: shell-tests
+      tool: shell
+      command_regex: "^(npm|bun|pnpm) (test|run lint|run build)"
+      decision: allow
+      expires: 2h
+  command_floor:
+    always_block:
+      - "git push --force"
+      - "rm -rf /"
+      - "sudo "
+      - "chmod 777"
+      - "curl .* \\| sh"
+      - "wget .* -O- \\| sh"
+      - "DROP DATABASE"
+      - "DROP TABLE"
+      - "TRUNCATE "
+      - "docker run.*--privileged"
+      - "ssh "
+
+approvals:
+  gates:
+    pr_create_review:
+      required_role: tech_lead
+      timeout: 24h
+      on_timeout: pause
+      decisions: [approve, reject, edit]
+
+models:
+  profiles:
+    builder:
+      provider: anthropic
+      model: claude-sonnet-4-6
+    critic:
+      provider: openai
+      model: gpt-5
+      reasoning: true
+  routes:
+    plan: builder
+    implement: builder
+    review: critic
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+  confidence_cap: 0.6
+
+guardrails:
+  input:
+    - name: no-secret-leak
+      deny_patterns:
+        - "sk-[a-zA-Z0-9]{20,}"
+        - "AKIA[A-Z0-9]{16}"
+        - "ghp_[A-Za-z0-9]{36}"
+        - "github_pat_[A-Za-z0-9_]{82}"
+        - "xoxb-[A-Za-z0-9-]+"
+      scope: tool_output
+      action: block
+    - name: no-prompt-injection
+      deny_patterns:
+        - "ignore (all )?previous instructions"
+        - "you are now (a |an )?[a-z]+"
+        - "system: you must"
+      scope: tool_output
+      action: block
+    - name: no-force-push
+      deny_patterns: ["git push --force", "git push -f"]
+      action: block
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+    include_model_calls: true
+  metrics:
+    - { name: secret_redaction_count, type: counter, source: redaction }
+    - { name: injection_blocks, type: counter, source: guardrail }
+    - { name: capability_denials, type: counter, source: capability }
+  cost:
+    budget: 25.00
+    on_budget_exceeded: pause
+  report:
+    format: json
+    on_checkpoint: true
+
+budgets:
+  run:
+    wall_clock: 8h
+    cost_usd: 25.00
+    on_exhaust: pause
+  task:
+    iterations: 15
+    cost_usd: 3.00
+    on_exhaust: park
+
+ui:
+  theme: jekko-gold
+  banner: forever
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: deny
+  mcp: allow
+<<<END_ZYAL id=secure-mcp-lockdown>>>
+ZYAL_ARM RUN_FOREVER id=secure-mcp-lockdown
