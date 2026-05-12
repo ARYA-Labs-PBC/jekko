@@ -8,6 +8,7 @@ import * as Power from "./schema-power"
 import * as Research from "./schema-research"
 import * as PreviewBlocks from "./schema-preview-blocks"
 import * as Jankurai from "./schema-jankurai"
+import * as Dispatch from "./schema-dispatch"
 import { ZYAL_RUNTIME_SENTINEL_VERSION } from "./version"
 
 const DaemonAction = Schema.Literal("daemon")
@@ -38,6 +39,7 @@ export const ZyalSpec = Schema.Struct({
   ui: Schema.optional(Primitives.ZyalUi),
   on: Schema.optional(Schema.Array(Routing.ZyalOnHandler)),
   fan_out: Schema.optional(Routing.ZyalFanOut),
+  dispatch: Schema.optional(Dispatch.ZyalDispatch),
   guardrails: Schema.optional(Routing.ZyalGuardrails),
   assertions: Schema.optional(Routing.ZyalAssertions),
   retry: Schema.optional(Routing.ZyalRetry),

@@ -38,6 +38,7 @@ const SUPPORTED_FEATURE_KEYS = new Set([
   "ui",
   "on",
   "fan_out",
+  "dispatch",
   "guardrails",
   "assertions",
   "retry",
@@ -492,6 +493,7 @@ function assertZyalNestedKeys(input: Record<string, unknown>) {
   assertFleetNestedKeys(input)
   assertResearchNestedKeys(input)
   assertJankuraiNestedKeys(input)
+  assertDispatchNestedKeys(input)
   // v2.3 taint
   assertTaintNestedKeys(input)
 
@@ -661,7 +663,7 @@ function assertMemoryNestedKeys(input: Record<string, unknown>) {
       const record = expectRecord(store, `memory.stores.${storeName}`)
       assertKeys(`memory.stores.${storeName}`, record, [
         "scope", "retention", "max_entries", "compression",
-        "write_policy", "read_policy", "searchable",
+        "write_policy", "read_policy", "searchable", "path",
       ])
     }
   }
@@ -1789,6 +1791,7 @@ function assertJankuraiNestedKeys(input: Record<string, unknown>) {
   assertKeys("jankurai", jankurai, [
     "enabled",
     "root",
+    "bootstrap",
     "audit",
     "repair_plan",
     "task_source",
@@ -1796,6 +1799,16 @@ function assertJankuraiNestedKeys(input: Record<string, unknown>) {
     "regression",
     "verification",
   ])
+  if (jankurai.bootstrap !== undefined) {
+    assertKeys("jankurai.bootstrap", expectRecord(jankurai.bootstrap, "jankurai.bootstrap"), [
+      "run_update_on_start",
+      "ensure_init",
+      "ensure_canonical",
+      "yes",
+      "strict",
+      "dry_run",
+    ])
+  }
   if (jankurai.audit !== undefined) {
     assertKeys("jankurai.audit", expectRecord(jankurai.audit, "jankurai.audit"), [
       "mode",
@@ -1852,6 +1865,39 @@ function assertJankuraiNestedKeys(input: Record<string, unknown>) {
     if (verification.commands !== undefined && !Array.isArray(verification.commands)) {
       throw new ZyalParseError("jankurai.verification.commands must be a list")
     }
+  }
+}
+
+// ─── general: dispatch nested-key validator ──────────────────────────────
+// `dispatch` is a workflow-agnostic classify-then-route primitive. jankurai's
+// finding triage is one consumer; the schema and validator stay general so
+// other consumers (CI failure routing, issue triage, experiment lanes) can
+// adopt the same block without per-consumer plumbing.
+function assertDispatchNestedKeys(input: Record<string, unknown>) {
+  if (input.dispatch === undefined) return
+  const dispatch = expectRecord(input.dispatch, "dispatch")
+  assertKeys("dispatch", dispatch, [
+    "enabled",
+    "classifier",
+    "lanes",
+    "default_lane",
+    "on_no_match",
+  ])
+  if (dispatch.classifier !== undefined) {
+    assertKeys("dispatch.classifier", expectRecord(dispatch.classifier, "dispatch.classifier"), [
+      "command",
+      "timeout",
+      "write_to",
+    ])
+  }
+  if (dispatch.lanes !== undefined) {
+    if (!Array.isArray(dispatch.lanes)) {
+      throw new ZyalParseError("dispatch.lanes must be a list")
+    }
+    dispatch.lanes.forEach((lane, index) => {
+      const record = expectRecord(lane, `dispatch.lanes[${index}]`)
+      assertKeys(`dispatch.lanes[${index}]`, record, ["id", "dispatch_to", "description"])
+    })
   }
 }
 

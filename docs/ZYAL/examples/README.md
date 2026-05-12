@@ -1,6 +1,6 @@
 # ZYAL Powerful Examples
 
-Seventeen flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
+Eighteen flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
 
 | File | Demonstrates | Power blocks |
 |---|---|---|
@@ -16,6 +16,7 @@ Seventeen flagship runbooks that show what ZYAL v2.6 makes possible. Each is a c
 | [`10-jankurai-master-loop.zyal`](10-jankurai-master-loop.zyal) | Advanced host-enforced jankurai repair and porting loop with repair-plan ingestion, incubator routing, rollback, branch/main regression, taint, memory, evidence, and metrics | `jankurai`, `taint`, `fleet.jnoccio`, `incubator`, `experiments`, `memory`, `evidence`, `rollback`, `done`, `observability` |
 | [`12-jankurai-min-loop.zyal`](12-jankurai-min-loop.zyal) | Minimal host-enforced jankurai continuous repair loop for ten low-risk workers, verification, checkpoint commit, and push | `jankurai`, `fleet`, `checkpoint`, `observability` |
 | [`13-advanced-research-loop.zyal`](13-advanced-research-loop.zyal) | Evidence-first external research loop with parallel cited search and extraction controls; powers the README demo asset | `research`, `permissions`, `evidence`, `budgets` |
+| [`14-jankurai-autoport-basic.zyal`](14-jankurai-autoport-basic.zyal) | Entry-level forever loop for a fresh repo: self-bootstraps jankurai, audits, drives caps and high/medium findings to zero with a single worker, commits on green, stops at score ≥ 90 with three consecutive clean runs | `jankurai.bootstrap`, `hooks`, `quality`, `done` |
 | [`memory-benchmark/prompt-scoring.zyal`](memory-benchmark/prompt-scoring.zyal) | Judge-population prompt scoring for the tracked memory benchmark corpus | `fan_out`, `memory`, `evidence`, `security`, `observability` |
 | [`memory-benchmark/autoresearch-basic.zyal`](memory-benchmark/autoresearch-basic.zyal) | Basic sandboxed AutoResearch memory benchmark with four workers and best-verified-patch reduction | `fan_out`, `experiments`, `memory`, `sandbox`, `observability` |
 | [`memory-benchmark/executable-benchmark.zyal`](memory-benchmark/executable-benchmark.zyal) | Deterministic Rust harness scoring for baseline, candidate, and reference memory systems | `fan_out`, `experiments`, `evidence`, `sandbox`, `observability` |

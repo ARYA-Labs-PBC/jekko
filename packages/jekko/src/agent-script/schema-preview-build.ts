@@ -126,6 +126,30 @@ export function buildZyalPreview(input: { spec: ZyalScript; arm?: ZyalArm }): Zy
         `max_score_drop:${jankurai.regression.max_score_drop ?? 0}`,
       ].join(" ")
     : undefined
+  const jankuraiBootstrap = jankurai?.bootstrap
+    ? [
+        jankurai.bootstrap.run_update_on_start ? "update_on_start" : null,
+        jankurai.bootstrap.ensure_init ? "ensure_init" : null,
+        jankurai.bootstrap.ensure_canonical ? "ensure_canonical" : null,
+        jankurai.bootstrap.yes ? "yes" : null,
+        jankurai.bootstrap.strict ? "strict" : null,
+        jankurai.bootstrap.dry_run ? "dry_run" : null,
+      ]
+        .filter(Boolean)
+        .join(" ") || "configured"
+    : undefined
+  const dispatch = input.spec.dispatch
+  const dispatchSummary = dispatch
+    ? [
+        dispatch.enabled === false ? "disabled" : "enabled",
+        dispatch.classifier?.command ? "classifier:shell" : null,
+        dispatch.lanes?.length ? `lanes:${dispatch.lanes.length}` : null,
+        dispatch.default_lane ? `default:${dispatch.default_lane}` : null,
+        dispatch.on_no_match ? `on_no_match:${dispatch.on_no_match}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : undefined
 
   return {
     id: input.spec.id,
@@ -363,6 +387,10 @@ export function buildZyalPreview(input: { spec: ZyalScript; arm?: ZyalArm }): Zy
     jankurai_max_risk: jankurai ? jankuraiMaxRisk : undefined,
     jankurai_verification_summary: jankuraiVerification,
     jankurai_regression_summary: jankuraiRegression,
+    jankurai_bootstrap_summary: jankuraiBootstrap,
+    dispatch_enabled: dispatch !== undefined && dispatch.enabled !== false,
+    dispatch_lane_count: dispatch?.lanes?.length ?? 0,
+    dispatch_summary: dispatchSummary,
     taint_enabled: input.spec.taint !== undefined,
     taint_label_count: input.spec.taint ? Object.keys(input.spec.taint.labels).length : 0,
     taint_forbid_count: input.spec.taint?.forbid?.length ?? 0,

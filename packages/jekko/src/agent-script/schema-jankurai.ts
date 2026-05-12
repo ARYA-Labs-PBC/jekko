@@ -87,9 +87,23 @@ export const ZyalJankuraiVerification = Schema.Struct({
 })
 export type ZyalJankuraiVerification = Schema.Schema.Type<typeof ZyalJankuraiVerification>
 
+// Self-bootstrap policy for repos that may not yet have jankurai configured.
+// Consumed by the daemon at run-start and by the `jekko zyal jankurai bootstrap`
+// CLI subcommand.
+export const ZyalJankuraiBootstrap = Schema.Struct({
+  run_update_on_start: Schema.optional(Schema.Boolean),
+  ensure_init: Schema.optional(Schema.Boolean),
+  ensure_canonical: Schema.optional(Schema.Boolean),
+  yes: Schema.optional(Schema.Boolean),
+  strict: Schema.optional(Schema.Boolean),
+  dry_run: Schema.optional(Schema.Boolean),
+})
+export type ZyalJankuraiBootstrap = Schema.Schema.Type<typeof ZyalJankuraiBootstrap>
+
 export const ZyalJankurai = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   root: Schema.optional(Schema.String),
+  bootstrap: Schema.optional(ZyalJankuraiBootstrap),
   audit: Schema.optional(ZyalJankuraiAudit),
   repair_plan: Schema.optional(ZyalJankuraiRepairPlan),
   task_source: Schema.optional(ZyalJankuraiTaskSource),

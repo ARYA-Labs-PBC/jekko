@@ -1,0 +1,146 @@
+# Entry-level jankurai auto-port loop. For a fresh repo that just installed
+# jankurai (or one that has never run `jankurai init`): detects scaffolding,
+# scaffolds defaults if missing, runs the audit, drives low + medium severity
+# findings to zero with a single worker, commits each verified change, and
+# stops when the score is at least 90 with zero caps for three consecutive
+# audit runs. No fleet, no incubator, no concept memory — the smallest viable
+# forever-loop.
+<<<ZYAL v1:daemon id=jankurai-autoport-basic>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai auto-port (entry-level)"
+  objective: |
+    Bootstrap jankurai if needed, audit, drive caps and high/medium severity
+    findings to zero with a single worker, commit on green, stop when score
+    is at least 90 AND caps == 0 AND three consecutive clean runs.
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  reject_from: [assistant_output, tool_output, web_content, mcp_resource]
+  accepted_origins: [trusted_user_message, host_ui_button]
+
+loop:
+  policy: forever
+  sleep: 10s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+context:
+  strategy: hybrid
+  compact_every: 6
+  hard_clear_every: 18
+  preserve:
+    - objective
+    - current_task_id
+    - clean_streak
+
+agents:
+  workers:
+    - id: auto-porter
+      count: 1
+      agent: build
+      isolation: same_session
+
+jankurai:
+  enabled: true
+  root: "."
+  bootstrap:
+    run_update_on_start: true
+    ensure_init: true
+    ensure_canonical: true
+    yes: true
+  audit:
+    mode: advisory
+    json: target/jankurai/repo-score.json
+    md: target/jankurai/repo-score.md
+    repair_queue_jsonl: target/jankurai/repair-queue.jsonl
+  repair_plan:
+    enabled: true
+    json: target/jankurai/repair-plan.json
+    md: target/jankurai/repair-plan.md
+  task_source: repair_plan
+  selection:
+    order: severity_first
+    randomize_ties: true
+    max_risk: medium
+    skip_human_review_required: true
+  regression:
+    main_ref: origin/main
+    compare_every_iterations: 5
+    max_new_hard_findings: 0
+  verification:
+    require_clean_start: true
+    require_clean_after_checkpoint: true
+    commands:
+      - "just fast"
+    audit_delta: no_new_findings
+    rollback_unverified: true
+
+hooks:
+  on_start:
+    - run: 'test -f agent/JANKURAI_STANDARD.md || jankurai init --no-prompt'
+      on_fail: abort
+  after_checkpoint:
+    - run: 'mkdir -p .jekko/daemon && date +%s >> .jekko/daemon/clean-streak'
+
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_ts_ignore: true
+    block_silent_catch: true
+
+stop:
+  all:
+    - shell:
+        command: "jq -e '.score >= 90' target/jankurai/repo-score.json"
+        timeout: 5s
+    - shell:
+        command: "jq -e '(.caps_applied // []) | length == 0' target/jankurai/repo-score.json"
+        timeout: 5s
+    - shell:
+        command: "test $(wc -l < .jekko/daemon/clean-streak 2>/dev/null || echo 0) -ge 3"
+        timeout: 5s
+    - git_clean:
+        allow_untracked: false
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "just fast"
+      timeout: 10m
+  git:
+    add: ["."]
+    commit_message: "jankurai: autoport ${task.id}"
+    push: deny
+
+done:
+  require:
+    - stop_conditions_met
+    - no_unresolved_critical_objections
+    - git_clean
+  forbid:
+    - model_only_claim
+    - tests_not_run
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: deny
+
+ui:
+  theme: jekko-gold
+  banner: forever
+<<<END_ZYAL id=jankurai-autoport-basic>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-autoport-basic

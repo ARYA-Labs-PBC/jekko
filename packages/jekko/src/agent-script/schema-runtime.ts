@@ -28,6 +28,11 @@ export const ZyalMemoryStore = Schema.Struct({
     Schema.Literal("search"),
   ])),
   searchable: Schema.optional(Schema.Boolean),
+  // Filesystem path that backs the store. Use for cross-repo / cross-session
+  // stores (e.g. `~/.jankurai/concepts/`). Contents loaded at start; entries
+  // tagged with taint label `external_repo` when path is outside the working
+  // tree. Tilde expands. Parser/preview-only — runtime mount lands later.
+  path: Schema.optional(Schema.String),
 })
 export type ZyalMemoryStore = Schema.Schema.Type<typeof ZyalMemoryStore>
 

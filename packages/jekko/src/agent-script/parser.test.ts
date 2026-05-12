@@ -356,6 +356,7 @@ ZYAL_ARM RUN_FOREVER id=one`
       "11-jankurai-fleet-loop.zyal",
       "12-jankurai-min-loop.zyal",
       "13-advanced-research-loop.zyal",
+      "14-jankurai-autoport-basic.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
       "memory-benchmark/executable-benchmark.zyal",
@@ -1856,5 +1857,102 @@ unsupported_feature_policy:
   on_missing: reject`)
     const parsed = await Effect.runPromise(parseZyal(text))
     expect(parsed.preview.jankurai_enabled).toBe(true)
+  })
+
+  test("accepts jankurai.bootstrap block and surfaces summary in preview", async () => {
+    const text = makeZyal(`
+jankurai:
+  enabled: true
+  bootstrap:
+    run_update_on_start: true
+    ensure_init: true
+    ensure_canonical: true
+    yes: true`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.jankurai?.bootstrap?.ensure_init).toBe(true)
+    expect(parsed.preview.jankurai_bootstrap_summary).toContain("update_on_start")
+    expect(parsed.preview.jankurai_bootstrap_summary).toContain("ensure_init")
+    expect(parsed.preview.jankurai_bootstrap_summary).toContain("yes")
+  })
+
+  test("rejects unknown jankurai.bootstrap keys", async () => {
+    const text = makeZyal(`
+jankurai:
+  enabled: true
+  bootstrap:
+    ensure_init: true
+    unexpected: 1`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+})
+
+describe("ZYAL parser dispatch block", () => {
+  test("accepts a dispatch block with classifier + lanes", async () => {
+    const text = makeZyal(`
+dispatch:
+  enabled: true
+  classifier:
+    command: "node scripts/router.mjs"
+    timeout: 30s
+    write_to: target/dispatch/route.json
+  lanes:
+    - id: simple_parallel_batch
+      dispatch_to: fan_out
+    - id: cap_incubator
+      dispatch_to: incubator
+    - id: human_required
+      dispatch_to: approvals.gates.human_review
+  default_lane: simple_parallel_batch
+  on_no_match: default`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.dispatch?.enabled).toBe(true)
+    expect(parsed.spec.dispatch?.lanes?.length).toBe(3)
+    expect(parsed.spec.dispatch?.default_lane).toBe("simple_parallel_batch")
+    expect(parsed.preview.dispatch_enabled).toBe(true)
+    expect(parsed.preview.dispatch_lane_count).toBe(3)
+    expect(parsed.preview.dispatch_summary).toContain("classifier:shell")
+    expect(parsed.preview.dispatch_summary).toContain("lanes:3")
+    expect(parsed.preview.dispatch_summary).toContain("on_no_match:default")
+  })
+
+  test("dispatch is omittable (preview reports disabled)", async () => {
+    const text = makeZyal("")
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.dispatch).toBeUndefined()
+    expect(parsed.preview.dispatch_enabled).toBe(false)
+    expect(parsed.preview.dispatch_lane_count).toBe(0)
+  })
+
+  test("rejects unknown dispatch keys", async () => {
+    const text = makeZyal(`
+dispatch:
+  enabled: true
+  surprise: 1`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+
+  test("rejects unknown on_no_match values", async () => {
+    const text = makeZyal(`
+dispatch:
+  on_no_match: explode`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+})
+
+describe("ZYAL parser memory.stores.path", () => {
+  test("accepts a path on a memory store entry", async () => {
+    const text = makeZyal(`
+memory:
+  stores:
+    global_concepts:
+      scope: global
+      retention: permanent
+      write_policy: upsert
+      read_policy: search
+      searchable: true
+      path: "~/.jankurai/concepts/"`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.memory?.stores?.global_concepts?.path).toBe("~/.jankurai/concepts/")
+    expect(parsed.preview.memory_store_count).toBe(1)
   })
 })
