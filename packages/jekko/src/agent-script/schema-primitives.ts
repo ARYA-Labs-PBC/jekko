@@ -120,6 +120,11 @@ export const ZyalIncubatorPassType = Schema.Union([
   Schema.Literal("critic"),
   Schema.Literal("synthesize"),
   Schema.Literal("prototype"),
+  // Structured "what are we missing" reviewer that slots between `prototype`
+  // and `promotion_review`. Evaluates the `jankurai.reviewer.checklist` and
+  // may block promotion when any item resolves to severity `blocker`.
+  // Daemon runtime handler lands in PR4.
+  Schema.Literal("critical_reviewer"),
   Schema.Literal("promotion_review"),
   Schema.Literal("compress"),
 ])
@@ -243,6 +248,15 @@ export const ZyalWorkerSpec = Schema.Struct({
   count: Schema.Number,
   agent: Schema.String,
   isolation: Schema.optional(Schema.Union([Schema.Literal("git_worktree"), Schema.Literal("same_session")])),
+  // Worker-pool semantics. Mirror of the fields on `jankurai.pool`; declared
+  // inline on a worker entry so a runbook can opt one worker into pooled
+  // execution without configuring `jankurai.pool` globally. Resolution order:
+  // worker.pool_size > jankurai.pool.size > runtime default. Parser/preview
+  // only at PR2.
+  pool_size: Schema.optional(Schema.Number),
+  commit_on_green: Schema.optional(Schema.Boolean),
+  integration_branch: Schema.optional(Schema.String),
+  branch_prefix: Schema.optional(Schema.String),
 })
 
 export type ZyalWorkerSpec = Schema.Schema.Type<typeof ZyalWorkerSpec>

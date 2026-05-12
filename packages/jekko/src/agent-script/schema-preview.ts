@@ -90,6 +90,8 @@ export const ZyalPreview = Schema.Struct({
   jankurai_verification_summary: Schema.optional(Schema.String),
   jankurai_regression_summary: Schema.optional(Schema.String),
   jankurai_bootstrap_summary: Schema.optional(Schema.String),
+  jankurai_pool_summary: Schema.optional(Schema.String),
+  jankurai_reviewer_summary: Schema.optional(Schema.String),
   dispatch_enabled: Schema.Boolean,
   dispatch_lane_count: Schema.Number,
   dispatch_summary: Schema.optional(Schema.String),

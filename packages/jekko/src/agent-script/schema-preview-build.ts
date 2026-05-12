@@ -138,6 +138,26 @@ export function buildZyalPreview(input: { spec: ZyalScript; arm?: ZyalArm }): Zy
         .filter(Boolean)
         .join(" ") || "configured"
     : undefined
+  const jankuraiPool = jankurai?.pool
+    ? [
+        jankurai.pool.size !== undefined ? `size:${jankurai.pool.size}` : null,
+        jankurai.pool.hard_cap !== undefined ? `cap:${jankurai.pool.hard_cap}` : null,
+        jankurai.pool.branch_prefix ? `prefix:${jankurai.pool.branch_prefix}` : null,
+        jankurai.pool.integration_branch ? `integ:${jankurai.pool.integration_branch}` : null,
+        jankurai.pool.commit_on_green === false ? "commit_on_green:off" : "commit_on_green:on",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : undefined
+  const jankuraiReviewer = jankurai?.reviewer
+    ? [
+        jankurai.reviewer.enabled === false ? "disabled" : "enabled",
+        jankurai.reviewer.block_promotion === false ? "block_promotion:off" : "block_promotion:on",
+        jankurai.reviewer.checklist?.length ? `checks:${jankurai.reviewer.checklist.length}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : undefined
   const dispatch = input.spec.dispatch
   const dispatchSummary = dispatch
     ? [
@@ -388,6 +408,8 @@ export function buildZyalPreview(input: { spec: ZyalScript; arm?: ZyalArm }): Zy
     jankurai_verification_summary: jankuraiVerification,
     jankurai_regression_summary: jankuraiRegression,
     jankurai_bootstrap_summary: jankuraiBootstrap,
+    jankurai_pool_summary: jankuraiPool,
+    jankurai_reviewer_summary: jankuraiReviewer,
     dispatch_enabled: dispatch !== undefined && dispatch.enabled !== false,
     dispatch_lane_count: dispatch?.lanes?.length ?? 0,
     dispatch_summary: dispatchSummary,

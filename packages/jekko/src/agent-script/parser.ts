@@ -299,7 +299,16 @@ function assertZyalNestedKeys(input: Record<string, unknown>) {
       if (!Array.isArray(agents.workers)) throw new ZyalParseError("agents.workers must be a list")
       agents.workers.forEach((worker, index) => {
         const record = expectRecord(worker, `agents.workers[${index}]`)
-        assertKeys(`agents.workers[${index}]`, record, ["id", "count", "agent", "isolation"])
+        assertKeys(`agents.workers[${index}]`, record, [
+          "id",
+          "count",
+          "agent",
+          "isolation",
+          "pool_size",
+          "commit_on_green",
+          "integration_branch",
+          "branch_prefix",
+        ])
       })
     }
   }
@@ -1792,6 +1801,8 @@ function assertJankuraiNestedKeys(input: Record<string, unknown>) {
     "enabled",
     "root",
     "bootstrap",
+    "pool",
+    "reviewer",
     "audit",
     "repair_plan",
     "task_source",
@@ -1808,6 +1819,28 @@ function assertJankuraiNestedKeys(input: Record<string, unknown>) {
       "strict",
       "dry_run",
     ])
+  }
+  if (jankurai.pool !== undefined) {
+    assertKeys("jankurai.pool", expectRecord(jankurai.pool, "jankurai.pool"), [
+      "size",
+      "hard_cap",
+      "branch_prefix",
+      "integration_branch",
+      "commit_on_green",
+    ])
+  }
+  if (jankurai.reviewer !== undefined) {
+    const reviewer = expectRecord(jankurai.reviewer, "jankurai.reviewer")
+    assertKeys("jankurai.reviewer", reviewer, ["enabled", "block_promotion", "checklist"])
+    if (reviewer.checklist !== undefined) {
+      if (!Array.isArray(reviewer.checklist)) {
+        throw new ZyalParseError("jankurai.reviewer.checklist must be a list")
+      }
+      reviewer.checklist.forEach((item, index) => {
+        const record = expectRecord(item, `jankurai.reviewer.checklist[${index}]`)
+        assertKeys(`jankurai.reviewer.checklist[${index}]`, record, ["id", "prompt", "severity"])
+      })
+    }
   }
   if (jankurai.audit !== undefined) {
     assertKeys("jankurai.audit", expectRecord(jankurai.audit, "jankurai.audit"), [

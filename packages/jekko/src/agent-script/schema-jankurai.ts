@@ -100,10 +100,59 @@ export const ZyalJankuraiBootstrap = Schema.Struct({
 })
 export type ZyalJankuraiBootstrap = Schema.Schema.Type<typeof ZyalJankuraiBootstrap>
 
+// Worker pool semantics for jankurai forever-runs. Parser/preview only at
+// PR2; runtime evaluator lands in the jankurai-runner Rust crate (PR3) and
+// the daemon-side worker pool (PR4). Defaults are documented here and applied
+// at start by the runtime, not enforced by the schema.
+export const ZyalJankuraiPool = Schema.Struct({
+  // Concurrent worker slots. Resolved at runtime to
+  // `min(size ?? 5, hard_cap ?? 20, jnoccio.spawn_batch_limit)`.
+  size: Schema.optional(Schema.Number),
+  // Absolute upper bound on slots. Defaults to 20 to match jnoccio.
+  hard_cap: Schema.optional(Schema.Number),
+  // Worker branch namespace. Default `"zyal"`. Branches end up as
+  // `<branch_prefix>/<run_id>/<worker_id>/<finding_id>`.
+  branch_prefix: Schema.optional(Schema.String),
+  // Branch that worker branches rebase onto + push to. Defaults to
+  // `<branch_prefix>/<run_id>/integration`. Main is never touched.
+  integration_branch: Schema.optional(Schema.String),
+  // Auto-commit verified worker output. Default true.
+  commit_on_green: Schema.optional(Schema.Boolean),
+})
+export type ZyalJankuraiPool = Schema.Schema.Type<typeof ZyalJankuraiPool>
+
+export const ZyalJankuraiReviewerSeverity = Schema.Union([
+  Schema.Literal("info"),
+  Schema.Literal("warning"),
+  Schema.Literal("blocker"),
+])
+export type ZyalJankuraiReviewerSeverity = Schema.Schema.Type<typeof ZyalJankuraiReviewerSeverity>
+
+export const ZyalJankuraiReviewerChecklistItem = Schema.Struct({
+  id: Schema.String,
+  prompt: Schema.optional(Schema.String),
+  severity: Schema.optional(ZyalJankuraiReviewerSeverity),
+})
+export type ZyalJankuraiReviewerChecklistItem = Schema.Schema.Type<typeof ZyalJankuraiReviewerChecklistItem>
+
+// Critical reviewer ("what are we missing") pass spec. Lives between
+// `prototype` and `promotion_review` in the incubator chain when the new
+// `critical_reviewer` pass type is used. Parser/preview only at PR2.
+export const ZyalJankuraiReviewer = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean),
+  // Block promotion when any checklist item resolves to severity `blocker`.
+  // Default true.
+  block_promotion: Schema.optional(Schema.Boolean),
+  checklist: Schema.optional(Schema.Array(ZyalJankuraiReviewerChecklistItem)),
+})
+export type ZyalJankuraiReviewer = Schema.Schema.Type<typeof ZyalJankuraiReviewer>
+
 export const ZyalJankurai = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   root: Schema.optional(Schema.String),
   bootstrap: Schema.optional(ZyalJankuraiBootstrap),
+  pool: Schema.optional(ZyalJankuraiPool),
+  reviewer: Schema.optional(ZyalJankuraiReviewer),
   audit: Schema.optional(ZyalJankuraiAudit),
   repair_plan: Schema.optional(ZyalJankuraiRepairPlan),
   task_source: Schema.optional(ZyalJankuraiTaskSource),

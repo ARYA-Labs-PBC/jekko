@@ -357,6 +357,7 @@ ZYAL_ARM RUN_FOREVER id=one`
       "12-jankurai-min-loop.zyal",
       "13-advanced-research-loop.zyal",
       "14-jankurai-autoport-basic.zyal",
+      "15-jankurai-fleet-parallel.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
       "memory-benchmark/executable-benchmark.zyal",
@@ -1883,6 +1884,146 @@ jankurai:
     ensure_init: true
     unexpected: 1`)
     await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+
+  test("accepts jankurai.pool with full configuration", async () => {
+    const text = makeZyal(`
+jankurai:
+  enabled: true
+  pool:
+    size: 4
+    hard_cap: 20
+    branch_prefix: "zyal"
+    integration_branch: "zyal/run-1/integration"
+    commit_on_green: true`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.jankurai?.pool?.size).toBe(4)
+    expect(parsed.spec.jankurai?.pool?.commit_on_green).toBe(true)
+    expect(parsed.preview.jankurai_pool_summary).toContain("size:4")
+    expect(parsed.preview.jankurai_pool_summary).toContain("cap:20")
+    expect(parsed.preview.jankurai_pool_summary).toContain("commit_on_green:on")
+  })
+
+  test("jankurai.pool commit_on_green:false surfaces as off", async () => {
+    const text = makeZyal(`
+jankurai:
+  enabled: true
+  pool:
+    commit_on_green: false`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.preview.jankurai_pool_summary).toContain("commit_on_green:off")
+  })
+
+  test("rejects unknown jankurai.pool keys", async () => {
+    const text = makeZyal(`
+jankurai:
+  enabled: true
+  pool:
+    size: 4
+    weird: yes`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow("Unknown ZYAL key: jankurai.pool.weird")
+  })
+
+  test("accepts jankurai.reviewer with checklist", async () => {
+    const text = makeZyal(`
+jankurai:
+  enabled: true
+  reviewer:
+    enabled: true
+    block_promotion: true
+    checklist:
+      - id: untested_edges
+        prompt: "Any edge unreached by tests?"
+        severity: blocker
+      - id: regression_risk
+        severity: warning`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.jankurai?.reviewer?.checklist?.length).toBe(2)
+    expect(parsed.preview.jankurai_reviewer_summary).toContain("checks:2")
+    expect(parsed.preview.jankurai_reviewer_summary).toContain("block_promotion:on")
+  })
+
+  test("rejects unknown jankurai.reviewer keys", async () => {
+    const text = makeZyal(`
+jankurai:
+  enabled: true
+  reviewer:
+    enabled: true
+    surprise: 1`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+
+  test("rejects unknown reviewer.checklist[*] keys", async () => {
+    const text = makeZyal(`
+jankurai:
+  enabled: true
+  reviewer:
+    checklist:
+      - id: thing
+        weird: yes`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+
+  test("rejects invalid reviewer checklist severity", async () => {
+    const text = makeZyal(`
+jankurai:
+  enabled: true
+  reviewer:
+    checklist:
+      - id: thing
+        severity: catastrophic`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+
+  test("accepts critical_reviewer incubator pass type", async () => {
+    const text = makeZyal(`
+incubator:
+  enabled: true
+  budget:
+    max_passes_per_task: 8
+    max_rounds_per_task: 2
+  readiness:
+    promote_at: 0.7
+  passes:
+    - id: scout
+      type: scout
+      context: blind
+      writes: scratch_only
+    - id: proto
+      type: prototype
+      context: inherit
+      writes: isolated_worktree
+    - id: review
+      type: critical_reviewer
+      context: critic
+      writes: scratch_only
+    - id: promote
+      type: promotion_review
+      context: promotion
+      writes: scratch_only
+  promotion:
+    promote_at: 0.7`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.incubator?.passes.some((p) => p.type === "critical_reviewer")).toBe(true)
+    expect(parsed.preview.incubator_passes).toContain("review:critical_reviewer:scratch_only")
+  })
+
+  test("accepts pool fields on worker spec", async () => {
+    const text = makeZyal(`
+agents:
+  workers:
+    - id: jankurai-builder
+      count: 4
+      agent: build
+      isolation: git_worktree
+      pool_size: 4
+      commit_on_green: true
+      integration_branch: zyal/run-1/integration
+      branch_prefix: zyal`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.agents?.workers?.[0]?.pool_size).toBe(4)
+    expect(parsed.spec.agents?.workers?.[0]?.commit_on_green).toBe(true)
+    expect(parsed.spec.agents?.workers?.[0]?.branch_prefix).toBe("zyal")
   })
 })
 

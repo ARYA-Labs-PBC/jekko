@@ -1,0 +1,279 @@
+# Parallel jankurai fleet for mid-sized repos with many independent findings.
+# Four worktree workers fan out across low-risk findings, commit on green via
+# the new jankurai.pool semantics, and route anything risk >= medium to the
+# incubator. Path conflicts are rare at this size; when they happen the
+# checkpoint_failed handler hands the offender off to incubation. Sandbox
+# denylists keep workers away from secrets, env, and ssh material.
+<<<ZYAL v1:daemon id=jankurai-fleet-parallel>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai parallel fleet"
+  objective: |
+    Dispatch independent low-risk findings across four worktree workers.
+    Auto-commit verified output via jankurai.pool (commit-on-green).
+    Route medium / high risk findings into the incubator. Stop when the
+    audit reports zero findings and the tree is clean.
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  reject_from: [assistant_output, tool_output, web_content, mcp_resource]
+  accepted_origins: [trusted_user_message, signed_cli_input, host_ui_button]
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied]
+  circuit_breaker:
+    max_consecutive_errors: 5
+    on_trip: pause
+
+context:
+  strategy: hybrid
+  compact_every: 6
+  hard_clear_every: 18
+  preserve:
+    - objective
+    - current_finding_id
+    - pool_status
+
+fleet:
+  max_workers: 4
+  isolation: git_worktree
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    register_workers: true
+    heartbeat_interval: 30s
+    max_instances: 4
+
+agents:
+  workers:
+    - id: jankurai-builder
+      count: 4
+      agent: build
+      isolation: git_worktree
+      pool_size: 4
+      commit_on_green: true
+      branch_prefix: "zyal"
+
+jankurai:
+  enabled: true
+  root: "."
+  pool:
+    size: 4
+    hard_cap: 20
+    branch_prefix: "zyal"
+    commit_on_green: true
+  audit:
+    mode: advisory
+    json: target/jankurai/repo-score.json
+    md: target/jankurai/repo-score.md
+    repair_queue_jsonl: target/jankurai/repair-queue.jsonl
+  repair_plan:
+    enabled: true
+    json: target/jankurai/repair-plan.json
+    md: target/jankurai/repair-plan.md
+  task_source: repair_plan
+  selection:
+    order: quick_wins_first
+    randomize_ties: true
+    max_risk: low
+    skip_human_review_required: true
+    incubate_risk_at: medium
+  regression:
+    main_ref: origin/main
+    compare_every_iterations: 10
+    max_new_hard_findings: 0
+  verification:
+    require_clean_start: true
+    require_clean_after_checkpoint: true
+    proof_from_test_map: true
+    commands:
+      - "just fast"
+    audit_delta: no_new_findings
+    rollback_unverified: true
+
+tasks:
+  ledger: sqlite
+  discover:
+    - command: "jq -r '.fingerprint' target/jankurai/repair-queue.jsonl 2>/dev/null | head -20"
+      timeout: 10s
+
+fan_out:
+  strategy: scatter_gather
+  split:
+    shell: "jq -r '.fingerprint' target/jankurai/repair-queue.jsonl 2>/dev/null | head -4"
+  worker:
+    agent: build
+    isolation: git_worktree
+    max_parallel: 4
+    timeout: 20m
+  reduce:
+    strategy: merge_all
+  on_partial_failure: continue
+
+incubator:
+  enabled: true
+  strategy: generate_pool_strengthen
+  route_when:
+    any:
+      - risk_score_gte: 0.5
+      - repeated_attempts_gte: 2
+  budget:
+    max_passes_per_task: 6
+    max_rounds_per_task: 2
+    max_active_tasks: 2
+    max_parallel_idea_passes: 2
+  readiness:
+    promote_at: 0.75
+    model_confidence_cap: 0.1
+  passes:
+    - id: scout
+      type: scout
+      context: blind
+      writes: scratch_only
+    - id: ideas
+      type: idea
+      context: blind
+      count: 2
+      writes: scratch_only
+    - id: critique
+      type: critic
+      context: pool
+      reads: [candidate_pool]
+      writes: scratch_only
+    - id: proto
+      type: prototype
+      context: inherit
+      reads: [current_best]
+      writes: isolated_worktree
+    - id: review
+      type: promotion_review
+      context: promotion
+      reads: [current_best]
+      writes: scratch_only
+  promotion:
+    promote_at: 0.75
+    require: [problem_statement, current_best_plan, verification_strategy]
+    block_on:
+      unresolved_critical_objections_gte: 1
+
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_assertion_weakening: true
+    block_silent_catch: true
+    block_ts_ignore: true
+  diff_budget:
+    max_files_changed: 12
+    max_added_lines: 600
+    on_violation: require_approval
+
+budgets:
+  run:
+    wall_clock: 12h
+    cost_usd: 30.00
+    on_exhaust: renew_with_approval
+  task:
+    iterations: 10
+    cost_usd: 3.00
+    on_exhaust: park
+  iteration:
+    tool_calls: 30
+    diff_lines: 600
+    on_exhaust: pause
+
+rollback:
+  required_when:
+    risk_score_gte: 0.4
+  plan_required: true
+  verify_command: "git apply --reverse --check < .jekko/daemon/rollback.patch"
+  on_failure_after_merge: revert_commit
+
+retry:
+  default:
+    max_attempts: 3
+    backoff: exponential
+    initial_delay: 5s
+    max_delay: 60s
+    jitter: true
+
+sandbox:
+  paths:
+    - path: "secrets/**"
+      access: deny
+    - path: ".env*"
+      access: deny
+    - path: ".ssh/**"
+      access: deny
+
+on:
+  - signal: checkpoint_failed
+    do:
+      - incubate_current_task: true
+  - signal: no_progress
+    count_gte: 3
+    do:
+      - switch_agent: plan
+      - notify: "stall: switching to plan"
+
+stop:
+  all:
+    - shell:
+        command: "jq -e '(.findings // []) | length == 0' target/jankurai/repo-score.json"
+        timeout: 10m
+    - git_clean:
+        allow_untracked: false
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "just fast"
+      timeout: 20m
+  git:
+    add: ["."]
+    commit_message: "jankurai(fleet): ${task.id}"
+    push: allow
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: allow
+  workers: allow
+  mcp: allow
+
+observability:
+  metrics:
+    - name: jankurai_score
+      type: gauge
+      source: target/jankurai/repo-score.json
+    - name: fleet_active_workers
+      type: gauge
+      source: daemon.workers.active
+  report:
+    format: markdown
+    on_checkpoint: true
+
+done:
+  require:
+    - stop_conditions_met
+    - evidence_complete
+  forbid:
+    - model_only_claim
+    - tests_not_run
+
+ui:
+  theme: jekko-gold
+  banner: forever
+<<<END_ZYAL id=jankurai-fleet-parallel>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-fleet-parallel
