@@ -13,6 +13,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { NodePath } from "@effect/platform-node"
 import { AppFileSystem } from "@jekko-ai/core/filesystem"
 import { CrossSpawnSpawner } from "@jekko-ai/core/cross-spawn-spawner"
+import { resolveInstanceRoot } from "../../src/project/instance-root"
 
 void Log.init({ print: false })
 
@@ -105,6 +106,11 @@ describe("Project.fromDirectory", () => {
     await using tmp = await tmpdir()
     const { project } = await run((svc) => svc.fromDirectory(tmp.path))
     expect(project.id).toBe(ProjectID.global)
+  })
+
+  test("resolveInstanceRoot falls back away from / worktrees", async () => {
+    expect(resolveInstanceRoot({ directory: "/tmp/project", worktree: "/" })).toBe("/tmp/project")
+    expect(resolveInstanceRoot({ directory: "/tmp/project", worktree: "   " })).toBe("/tmp/project")
   })
 
   test("derives stable project ID from root commit", async () => {

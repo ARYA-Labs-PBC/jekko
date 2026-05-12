@@ -22,6 +22,7 @@ import { AppFileSystem } from "@jekko-ai/core/filesystem"
 import { BootstrapRuntime } from "@/effect/bootstrap-runtime"
 import { CrossSpawnSpawner } from "@jekko-ai/core/cross-spawn-spawner"
 import { InstanceState } from "@/effect/instance-state"
+import { resolveInstanceRoot } from "@/project/instance-root"
 import { zod as effectZod } from "@/util/effect-zod"
 import { withStatics } from "@/util/schema"
 
@@ -180,7 +181,7 @@ export const layer: Layer.Layer<
 
     const git = Effect.fnUntraced(function* (args: string[], opts?: { cwd?: string }) {
       const ctx = yield* InstanceState.context
-      const result = yield* gitSvc.run(args, { cwd: opts?.cwd ?? ctx.worktree })
+      const result = yield* gitSvc.run(args, { cwd: opts?.cwd ?? resolveInstanceRoot(ctx) })
       return {
         code: result.exitCode,
         text: result.text(),
@@ -199,7 +200,7 @@ export const layer: Layer.Layer<
         if (yield* fs.exists(directory).pipe(Effect.orDie)) continue
 
         const ref = `refs/heads/${branch}`
-        const branchCheck = yield* git(["show-ref", "--verify", "--quiet", ref], { cwd: ctx.worktree })
+        const branchCheck = yield* git(["show-ref", "--verify", "--quiet", ref], { cwd: resolveInstanceRoot(ctx) })
         if (branchCheck.code === 0) continue
 
         return { name, branch, directory }
@@ -223,7 +224,7 @@ export const layer: Layer.Layer<
     const setup = Effect.fnUntraced(function* (info: Info) {
       const ctx = yield* InstanceState.context
       const created = yield* git(["worktree", "add", "--no-checkout", "-b", info.branch, info.directory], {
-        cwd: ctx.worktree,
+        cwd: resolveInstanceRoot(ctx),
       })
       if (created.code !== 0) {
         throw new CreateFailedError({ message: created.stderr || created.text || "Failed to create git worktree" })
@@ -361,7 +362,7 @@ export const layer: Layer.Layer<
 
       const directory = yield* canonical(input.directory)
 
-      const list = yield* git(["worktree", "list", "--porcelain"], { cwd: ctx.worktree })
+      const list = yield* git(["worktree", "list", "--porcelain"], { cwd: resolveInstanceRoot(ctx) })
       if (list.code !== 0) {
         throw new RemoveFailedError({ message: list.stderr || list.text || "Failed to read git worktrees" })
       }
@@ -379,9 +380,9 @@ export const layer: Layer.Layer<
       }
 
       yield* stopFsmonitor(entry.path)
-      const removed = yield* git(["worktree", "remove", "--force", entry.path], { cwd: ctx.worktree })
+      const removed = yield* git(["worktree", "remove", "--force", entry.path], { cwd: resolveInstanceRoot(ctx) })
       if (removed.code !== 0) {
-        const next = yield* git(["worktree", "list", "--porcelain"], { cwd: ctx.worktree })
+        const next = yield* git(["worktree", "list", "--porcelain"], { cwd: resolveInstanceRoot(ctx) })
         if (next.code !== 0) {
           throw new RemoveFailedError({
             message: removed.stderr || removed.text || next.stderr || next.text || "Failed to remove git worktree",
@@ -398,7 +399,7 @@ export const layer: Layer.Layer<
 
       const branch = entry.branch?.replace(/^refs\/heads\//, "")
       if (branch) {
-        const deleted = yield* git(["branch", "-D", branch], { cwd: ctx.worktree })
+        const deleted = yield* git(["branch", "-D", branch], { cwd: resolveInstanceRoot(ctx) })
         if (deleted.code !== 0) {
           throw new RemoveFailedError({
             message: deleted.stderr || deleted.text || "Failed to delete worktree branch",
@@ -494,12 +495,12 @@ export const layer: Layer.Layer<
       }
 
       const directory = yield* canonical(input.directory)
-      const primary = yield* canonical(ctx.worktree)
+      const primary = yield* canonical(resolveInstanceRoot(ctx))
       if (directory === primary) {
         throw new ResetFailedError({ message: "Cannot reset the primary workspace" })
       }
 
-      const list = yield* git(["worktree", "list", "--porcelain"], { cwd: ctx.worktree })
+      const list = yield* git(["worktree", "list", "--porcelain"], { cwd: resolveInstanceRoot(ctx) })
       if (list.code !== 0) {
         throw new ResetFailedError({ message: list.stderr || list.text || "Failed to read git worktrees" })
       }
@@ -511,7 +512,7 @@ export const layer: Layer.Layer<
 
       const worktreePath = entry.path
 
-      const base = yield* gitSvc.defaultBranch(ctx.worktree)
+      const base = yield* gitSvc.defaultBranch(resolveInstanceRoot(ctx))
       if (!base) {
         throw new ResetFailedError({ message: "Default branch not found" })
       }
@@ -522,7 +523,7 @@ export const layer: Layer.Layer<
         const branch = base.ref.slice(sep + 1)
         yield* gitExpect(
           ["fetch", remote, branch],
-          { cwd: ctx.worktree },
+          { cwd: resolveInstanceRoot(ctx) },
           (r) => new ResetFailedError({ message: r.stderr || r.text || `Failed to fetch ${base.ref}` }),
         )
       }

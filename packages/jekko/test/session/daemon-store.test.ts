@@ -26,6 +26,18 @@ function spec() {
     stop: {
       all: [{ git_clean: { allow_untracked: false } }],
     },
+    models: {
+      profiles: {
+        builder: {
+          provider: "openai",
+          model: "gpt-4o",
+        },
+        critic: {
+          provider: "anthropic",
+          model: "claude-3-5-sonnet",
+        },
+      },
+    },
   })
 }
 
@@ -112,8 +124,10 @@ describe("session.daemon-store", () => {
           specHash: "sha256:test",
         })
 
+        expect((run.spec_json as any).fleet?.jnoccio?.enabled).toBe(true)
+        expect((run.spec_json as any).models?.profiles?.builder?.provider).toBe("jnoccio")
         const events = yield* store.listEvents(run.id)
-        expect(events.map((event) => event.event_type)).toEqual(["run.created"])
+        expect(events.map((event) => event.event_type)).toEqual(["run.created", "daemon.model_profile.rerouted"])
 
         const ledgerPath = path.join(directory, ".jekko", "daemon", run.id, "ledger.jsonl")
         const statePath = path.join(directory, ".jekko", "daemon", run.id, "STATE.md")

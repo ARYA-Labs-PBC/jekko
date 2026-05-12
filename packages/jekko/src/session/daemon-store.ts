@@ -6,8 +6,10 @@ import { ulid } from "ulid"
 import { Effect, Layer, Context } from "effect"
 import { and, asc, desc, eq, isNull, lt, max, or } from "drizzle-orm"
 import { InstanceState } from "@/effect/instance-state"
+import { resolveInstanceRoot } from "@/project/instance-root"
 import { Database } from "@/storage/db"
 import type { ZyalScript } from "@/agent-script/schema"
+import { normalizeDaemonSpec } from "./daemon-autoresearch"
 import { SessionID } from "./schema"
 import {
   DaemonArtifactTable,
@@ -166,7 +168,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const runsRoot = function* (runID: string) {
       const ctx = yield* InstanceState.context
-      const root = ctx.worktree && ctx.worktree !== "/" ? ctx.worktree : ctx.directory
+      const root = resolveInstanceRoot(ctx)
       if (!root || root.trim() === "" || path.resolve(root) === path.parse(path.resolve(root)).root) {
         throw new Error(
           `DaemonStore cannot mirror artifacts: instance worktree=${JSON.stringify(ctx.worktree)} directory=${JSON.stringify(ctx.directory)}`,
@@ -260,13 +262,14 @@ export const layer = Layer.effect(
       specHash: string
     }) {
       const id = ulid()
+      const normalized = normalizeDaemonSpec(input.spec)
       const row: typeof DaemonRunTable.$inferInsert = {
         id,
         root_session_id: SessionID.make(input.rootSessionID),
         active_session_id: SessionID.make(input.activeSessionID),
         status: "created" as DaemonRunStatus,
         phase: "created" as DaemonPhase,
-        spec_json: input.spec,
+        spec_json: normalized.spec,
         spec_hash: input.specHash,
         iteration: 0,
         epoch: 0,
@@ -276,6 +279,17 @@ export const layer = Layer.effect(
       }
       Database.use((db) => db.insert(DaemonRunTable).values(row).run())
       yield* appendEvent({ runID: id, iteration: 0, eventType: "run.created", payload: { spec: input.spec } })
+      if (normalized.reroutedProfiles.length > 0 || normalized.addedFleetJnoccio) {
+        yield* appendEvent({
+          runID: id,
+          iteration: 0,
+          eventType: "daemon.model_profile.rerouted",
+          payload: {
+            rerouted_profiles: normalized.reroutedProfiles,
+            added_fleet_jnoccio: normalized.addedFleetJnoccio,
+          },
+        })
+      }
       return yield* getRun(id).pipe(Effect.map((value) => value!))
     })
 

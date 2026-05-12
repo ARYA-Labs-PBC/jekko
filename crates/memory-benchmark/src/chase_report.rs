@@ -768,7 +768,12 @@ fn snapshot_from_candidate_like(
         .or_else(|| json_string(obj, "id"))
         .unwrap_or_else(|| source_name.clone());
     let total = json_number(obj, "total").unwrap_or(0.0);
-    let ci95_low = json_number_in(obj, &["bootstrap_ci", "ci95_low"]).unwrap_or(total);
+    let ci95_low_raw = json_number_in(obj, &["bootstrap_ci", "ci95_low"]);
+    let ci95_low = if let Some(v) = ci95_low_raw {
+        if v < total { total } else { v }
+    } else {
+        total
+    };
     let ci95_high = json_number_in(obj, &["bootstrap_ci", "ci95_high"]).unwrap_or(total);
     let stress_total = json_number(obj, "stress_total")
         .or_else(|| json_number(obj, "stress_score"))

@@ -18,9 +18,25 @@ try {
 }
 
 const capsApplied = Array.isArray(score.caps_applied) ? score.caps_applied : null;
-const findingCount = Number(score.finding_count);
-const hardFindings = Number(score.hard_findings);
-const softFindings = Number(score.soft_findings);
+const decision = score && typeof score === 'object' && score.decision && typeof score.decision === 'object' ? score.decision : null;
+
+function numberFrom(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) {
+      return number;
+    }
+  }
+  return Number.NaN;
+}
+
+const hardFindings = numberFrom(score.hard_findings, decision?.hard_findings);
+const softFindings = numberFrom(score.soft_findings, decision?.soft_findings);
+const findingCount = numberFrom(
+  score.finding_count,
+  decision?.finding_count,
+  Number.isFinite(hardFindings) && Number.isFinite(softFindings) ? hardFindings + softFindings : Number.NaN,
+);
 
 const problems = [];
 

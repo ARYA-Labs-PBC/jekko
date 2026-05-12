@@ -21,8 +21,18 @@ describe("daemon retry", () => {
     expect(parseDuration("1m")).toBe(60_000)
   })
 
+  test("parseDuration handles english units", () => {
+    expect(parseDuration("30 seconds")).toBe(30_000)
+    expect(parseDuration("15 minutes")).toBe(900_000)
+    expect(parseDuration("2 hours")).toBe(7_200_000)
+  })
+
   test("parseDuration handles bare numbers as seconds", () => {
     expect(parseDuration("5")).toBe(5000)
+  })
+
+  test("parseDuration rejects malformed durations", () => {
+    expect(() => parseDuration("5s later")).toThrow(/Invalid duration/i)
   })
 
   test("resolveRetryPolicy uses override over default", () => {

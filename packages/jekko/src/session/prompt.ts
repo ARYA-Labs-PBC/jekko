@@ -53,6 +53,7 @@ import { zod } from "@/util/effect-zod"
 import { withStatics } from "@/util/schema"
 import * as EffectLogger from "@jekko-ai/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
+import { resolveInstanceRoot } from "@/project/instance-root"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { EffectBridge } from "@/effect/bridge"
@@ -150,7 +151,7 @@ export const layer = Layer.effect(
           seen.add(name)
           const filepath = name.startsWith("~/")
             ? path.join(os.homedir(), name.slice(2))
-            : path.resolve(ctx.worktree, name)
+            : path.resolve(resolveInstanceRoot(ctx), name)
 
           const info = yield* fsys.stat(filepath).pipe(Effect.option)
           if (Option.isNone(info)) {
@@ -573,7 +574,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         mode: task.agent,
         agent: task.agent,
         variant: lastUser.model.variant,
-        path: { cwd: ctx.directory, root: ctx.worktree },
+        path: { cwd: ctx.directory, root: resolveInstanceRoot(ctx) },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         modelID: taskModel.id,
@@ -790,7 +791,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               mode: input.agent,
               agent: input.agent,
               cost: 0,
-              path: { cwd: ctx.directory, root: ctx.worktree },
+              path: { cwd: ctx.directory, root: resolveInstanceRoot(ctx) },
               time: { created: Date.now() },
               role: "assistant",
               tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -1512,7 +1513,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             mode: agent.name,
             agent: agent.name,
             variant: lastUser.model.variant,
-            path: { cwd: ctx.directory, root: ctx.worktree },
+            path: { cwd: ctx.directory, root: resolveInstanceRoot(ctx) },
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
             modelID: model.id,

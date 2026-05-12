@@ -1,3 +1,4 @@
+import path from "path"
 import { createEffect, onCleanup } from "solid-js"
 import { connectJnoccio, disconnectJnoccio } from "@tui/context/jnoccio-ws"
 import {
@@ -10,6 +11,14 @@ import {
   setZyalFlashSource,
   updateZyalMetrics,
 } from "@tui/context/zyal-flash"
+import {
+  activateAutoResearch,
+  deactivateAutoResearch,
+  detectAutoResearch,
+  deriveDaemonDirFromRun,
+  updateAutoResearchScores,
+} from "@tui/context/autoresearch-state"
+import { parseBestState, parseScoreboard } from "@tui/context/autoresearch-parser"
 import { zyalExitReasonFromExitJson } from "./session-helpers"
 
 export const DAEMON_TERMINAL_STATUSES = new Set(["satisfied", "aborted", "failed", "paused"])
@@ -54,6 +63,18 @@ type DaemonRunRecord = {
   last_error?: string | null
   last_exit_result_json?: unknown
   jnoccio?: unknown
+  spec_json?: unknown
+  spec?: unknown
+  daemon_dir?: string | null
+  daemonDir?: string | null
+  artifact_root?: string | null
+  artifactRoot?: string | null
+  paths?: {
+    daemon_dir?: string | null
+    daemonDir?: string | null
+    artifact_root?: string | null
+    artifactRoot?: string | null
+  }
 }
 
 type DaemonRunIdentity = {
@@ -139,6 +160,15 @@ export function useSessionDaemonPolling(input: {
           setZyalFlashSource("session:daemon", true)
           setZyalFlashSource("prompt:submitted", false)
           updateZyalMetrics(daemonRunToZyalMetrics(run, sessionID))
+
+          const arConfig = detectAutoResearch(run)
+          if (arConfig) {
+            activateAutoResearch(arConfig)
+            void pollAutoResearchScores(input.sdk, run, arConfig.runId)
+          } else {
+            deactivateAutoResearch()
+          }
+
           const jnoccio = daemonRunJnoccioConfig(run)
           if (jnoccio) {
             connectJnoccio(jnoccio)
@@ -153,6 +183,7 @@ export function useSessionDaemonPolling(input: {
           }
           input.setOverlay(undefined)
           resetZyalMetrics()
+          deactivateAutoResearch()
         }
       } catch {
         if (!alive) return
@@ -182,8 +213,61 @@ export function useSessionDaemonPolling(input: {
       setZyalFlashSource("prompt:submitted", false)
       input.setOverlay(undefined)
       resetZyalMetrics()
+      deactivateAutoResearch()
     })
   })
+}
+
+async function pollAutoResearchScores(
+  sdk: any,
+  run: DaemonRunRecord,
+  _runId: string,
+) {
+  try {
+    const daemonDir = deriveDaemonDirFromRun(run)
+    if (!daemonDir) return
+    const baseDir = resolveReadBaseDir(sdk)
+    if (!baseDir && !path.isAbsolute(daemonDir)) return
+    const scoreboardResp = await readDaemonFile(baseDir, daemonDir, "scoreboard.tsv")
+    const scores = scoreboardResp ? parseScoreboard(scoreboardResp) : []
+    const bestStateResp = await readDaemonFile(baseDir, daemonDir, "best-state.json")
+    const bestState = bestStateResp ? parseBestState(bestStateResp) : null
+    const iteration = scores.length > 0 ? Math.max(...scores.map((score) => score.iteration)) : 0
+    updateAutoResearchScores({ scores, bestState, iteration })
+  } catch {
+    // Score files may not exist yet — silently ignore.
+  }
+}
+
+function resolveReadBaseDir(sdk: any): string | null {
+  for (const candidate of [
+    sdk.directory,
+    sdk.state?.path?.directory,
+    sdk.path?.directory,
+    sdk.workspace?.directory,
+    sdk.project?.instance?.path?.directory,
+  ]) {
+    if (typeof candidate !== "string") continue
+    const trimmed = candidate.trim()
+    if (trimmed.length > 0) return trimmed
+  }
+  return null
+}
+
+async function readDaemonFile(baseDir: string | null, daemonDir: string, filename: string): Promise<string | null> {
+  try {
+    const fs = await import("node:fs/promises")
+    const resolved = path.isAbsolute(daemonDir)
+      ? daemonDir
+      : baseDir
+        ? path.resolve(baseDir, daemonDir)
+        : null
+    if (!resolved) return null
+    const content = await fs.readFile(path.join(resolved, filename), "utf-8")
+    return content
+  } catch {
+    return null
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, any> {

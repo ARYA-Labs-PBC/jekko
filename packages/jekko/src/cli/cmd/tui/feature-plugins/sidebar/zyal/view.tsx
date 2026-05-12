@@ -7,6 +7,7 @@ import {
   useZyalMetrics,
   zyalFleetHardCap,
 } from "../../../context/zyal-flash"
+import { useAutoResearch } from "../../../context/autoresearch-state"
 import { NEON, compactFmt, latencyFmt, moneyFmt, numberFmt } from "./constants"
 
 export function ZyalSidebarView(props: { api: TuiPluginApi }) {
@@ -248,8 +249,110 @@ export function ZyalSidebarView(props: { api: TuiPluginApi }) {
             </text>
           )}
         </Show>
+        <AutoResearchPanel theme={theme} />
         <text fg={NEON.separator}>{"─".repeat(38)}</text>
       </box>
+    </Show>
+  )
+}
+
+// ─── AutoResearch Benchmark Panel ─────────────────────────────────────
+
+const AR_NEON = {
+  header: "#00E5FF",
+  scoreGood: "#00FF87",
+  scoreBad: "#FF4060",
+  scoreNeutral: "#FFD000",
+  laneActive: "#BBFF00",
+  laneMuted: "#A0A0A0",
+  leader: "#FFD700",
+}
+
+function AutoResearchPanel(props: { theme: () => any }) {
+  const ar = useAutoResearch()
+
+  const deltaColor = createMemo(() => {
+    const s = ar()
+    if (s.delta === null) return AR_NEON.scoreNeutral
+    return s.deltaIsGood ? AR_NEON.scoreGood : AR_NEON.scoreBad
+  })
+
+  const deltaArrow = createMemo(() => {
+    const s = ar()
+    if (s.delta === null) return "—"
+    if (s.delta === 0) return "→"
+    return s.deltaIsGood ? "▲" : "▼"
+  })
+
+  const deltaText = createMemo(() => {
+    const d = ar().delta
+    if (d === null) return "—"
+    const sign = d > 0 ? "+" : ""
+    return `${sign}${d.toFixed(1)}`
+  })
+
+  const goalLabel = createMemo(() =>
+    ar().goalDirection === "maximize" ? "▲ maximize" : "▼ minimize",
+  )
+
+  return (
+    <Show when={ar().active}>
+      <text fg={NEON.separator}>{"─".repeat(38)}</text>
+      <text fg={AR_NEON.header}>
+        <b>◆ AutoResearch</b>
+      </text>
+      <text fg={NEON.separator}>{"─".repeat(38)}</text>
+
+      <text fg={props.theme().textMuted}>
+        Goal{"     "}
+        <span style={{ fg: AR_NEON.scoreNeutral, bold: true }}>{goalLabel()}</span>
+      </text>
+
+      <Show when={ar().startScore !== null}>
+        <text fg={props.theme().textMuted}>
+          Start{"    "}
+          <span style={{ fg: props.theme().text, bold: true }}>
+            {ar().startScore?.toFixed(1) ?? "—"}
+          </span>
+        </text>
+      </Show>
+
+      <Show when={ar().currentBest !== null}>
+        <text fg={props.theme().textMuted}>
+          Best{"     "}
+          <span style={{ fg: deltaColor(), bold: true }}>
+            {ar().currentBest?.toFixed(1) ?? "—"}
+          </span>
+          <span style={{ fg: deltaColor() }}>
+            {" "}{deltaArrow()}{" "}{deltaText()}
+          </span>
+        </text>
+      </Show>
+
+      <text fg={NEON.separator}>{"─".repeat(38)}</text>
+
+      <text fg={props.theme().textMuted}>
+        Lanes{"    "}
+        <span style={{ fg: AR_NEON.laneActive, bold: true }}>{ar().activeLanes}</span>
+        <span style={{ fg: props.theme().textMuted }}> active · </span>
+        <span style={{ fg: AR_NEON.scoreGood, bold: true }}>{ar().promotedLanes}</span>
+        <span style={{ fg: props.theme().textMuted }}> promoted</span>
+      </text>
+
+      <Show when={ar().leaderLaneId}>
+        <text fg={props.theme().textMuted}>
+          Leader{"   "}
+          <span style={{ fg: AR_NEON.leader, bold: true }}>
+            {ar().leaderLaneId ?? "—"}
+          </span>
+        </text>
+      </Show>
+
+      <text fg={props.theme().textMuted}>
+        Iter{"     "}
+        <span style={{ fg: NEON.loops, bold: true }}>{ar().iteration}</span>
+        <span style={{ fg: props.theme().textMuted }}> / ∞</span>
+      </text>
     </Show>
   )
 }

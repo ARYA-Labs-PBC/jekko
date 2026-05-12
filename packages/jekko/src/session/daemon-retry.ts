@@ -80,18 +80,32 @@ export function canRetry(policy: Required<ZyalRetryPolicy>, currentAttempt: numb
  * Parse a duration string like "2s", "500ms", "1m" into milliseconds.
  */
 export function parseDuration(duration: string): number {
-  const match = duration.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)?$/)
-  if (!match) return 0
+  const match = duration.trim().match(/^(\d+(?:\.\d+)?)\s*(ms|millisecond(?:s)?|s|sec(?:ond)?s?|m|min(?:ute)?s?|h|hour(?:s)?)?$/i)
+  if (!match) {
+    throw new Error(`Invalid duration: ${duration}`)
+  }
   const value = parseFloat(match[1])
-  switch (match[2]) {
+  switch (match[2]?.toLowerCase()) {
     case "ms":
+    case "millisecond":
+    case "milliseconds":
       return value
     case "s":
+    case "sec":
+    case "secs":
+    case "second":
+    case "seconds":
     case undefined:
       return value * 1000
     case "m":
+    case "min":
+    case "mins":
+    case "minute":
+    case "minutes":
       return value * 60_000
     case "h":
+    case "hour":
+    case "hours":
       return value * 3_600_000
     default:
       return value * 1000

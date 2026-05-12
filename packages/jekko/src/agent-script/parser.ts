@@ -930,7 +930,7 @@ function assertPowerBlockNestedKeys(input: Record<string, unknown>) {
     }
     if (experiments.scoring !== undefined) {
       const scoring = expectRecord(experiments.scoring, "experiments.scoring")
-      assertKeys("experiments.scoring", scoring, ["weights", "command", "primary", "judge"])
+      assertKeys("experiments.scoring", scoring, ["weights", "command", "primary", "goal_direction", "judge"])
       if (scoring.judge !== undefined) {
         assertKeys("experiments.scoring.judge", expectRecord(scoring.judge, "experiments.scoring.judge"), [
           "agent",

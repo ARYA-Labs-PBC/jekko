@@ -1,6 +1,6 @@
 // jankurai:allow HLT-001-DEAD-MARKER reason=functional-optional-returns-by-design-in-daemon expires=2027-01-01
 // jankurai:allow HLT-000-SCORE-DIMENSION reason=daemon-supervisor-shares-evaluation-paths-by-design expires=2027-01-01
-import { Effect, Layer, Context, Scope, Cause, Fiber, Option } from "effect"
+import { Effect, Layer, Context, Scope, Cause, Fiber, Option, Duration } from "effect"
 import { parseZyal } from "@/agent-script/parser"
 import { buildZyalPreview, type ZyalHookStep, type ZyalParsed, type ZyalPreview, type ZyalScript, type ZyalSignal } from "@/agent-script/schema"
 import { Bus } from "@/bus"
@@ -26,9 +26,11 @@ import { evaluateInputGuardrails, evaluateOutputPatternGuardrails } from "./daem
 import { getHookSteps, resolveHookFailureAction } from "./daemon-hooks"
 import { evaluateAllConstraints, captureBaselines, type ConstraintBaselines } from "./daemon-constraints"
 import { resolveRetryPolicy, computeRetryDelay, canRetry } from "./daemon-retry"
+import { normalizeDaemonSpec, hasAutoResearch, resolveDaemonModel, runAutoResearch } from "./daemon-autoresearch"
 import { applyDaemonPermissions } from "./daemon-permissions"
 import { daemonSignalCountsAsError, effectiveDaemonSignal, suppressDaemonSignal } from "./daemon-signals"
 import { resolveDaemonPolicy, resolveDaemonAutomaticAction, shouldRestartDaemonFiber } from "./daemon-lifetime"
+import { InstanceStore } from "@/project/instance-store"
 
 export type StartPayload = {
   readonly sessionID: SessionID
@@ -162,6 +164,8 @@ export const layer = Layer.effect(
       if (!parsed.arm) {
         throw new Error("ZYAL daemon start requires the trailing ZYAL_ARM RUN_FOREVER sentinel")
       }
+      const normalized = normalizeDaemonSpec(parsed.spec)
+      const runtimeParsed = { ...parsed, spec: normalized.spec } as ZyalParsed
       const sessions = yield* Session.Service
       const prompt = yield* SessionPrompt.Service
       const checks = yield* DaemonChecks.Service
@@ -171,7 +175,7 @@ export const layer = Layer.effect(
       const run = yield* store.createRun({
         rootSessionID: input.sessionID,
         activeSessionID: input.sessionID,
-        spec: parsed.spec,
+        spec: runtimeParsed.spec,
         specHash: parsed.specHash,
       })
       const startSession = yield* sessions.get(input.sessionID)
@@ -213,10 +217,11 @@ export const layer = Layer.effect(
       yield* prompt.prompt({
         ...input.prompt,
         sessionID: input.sessionID,
+        model: resolveDaemonModel() as any,
         noReply: true,
       })
 
-      yield* launchDaemonFiber({ runID: run.id, parsed, sessions, prompt, checkpoint, checks, mcp, worktree })
+      yield* launchDaemonFiber({ runID: run.id, parsed: runtimeParsed, sessions, prompt, checkpoint, checks, mcp, worktree })
       return yield* store.getRun(run.id).pipe(Effect.map((value) => value ?? run))
     })
 
@@ -614,7 +619,7 @@ function superviseDaemonRun(input: RunDaemonInput) {
         phase: "evaluating_stop",
         stopped_at: null,
       })
-      yield* Effect.sleep("1 second")
+      yield* Effect.sleep(Duration.millis(parseDuration("1 second")))
     }
   })
 }
@@ -623,7 +628,7 @@ function runDaemon(input: RunDaemonInput) {
   return Effect.fn("Daemon.run")(function* () {
     let consecutiveErrors = 0
     let signalCounters: SignalCounters = {}
-    const spec = input.parsed.spec
+    const spec = normalizeDaemonSpec(input.parsed.spec).spec
     const onHandlers = getOnHandlers(spec)
 
     // ─── v1.1: Capture constraint baselines on start ─────────────────────
@@ -651,12 +656,31 @@ function runDaemon(input: RunDaemonInput) {
       }
     }
 
+    if (hasAutoResearch(spec)) {
+      const run = yield* input.store.getRun(input.runID)
+      if (run) {
+        const instanceStore = yield* InstanceStore.Service
+        yield* runAutoResearch({
+          run,
+          spec,
+          store: input.store,
+          sessions: input.sessions,
+          prompt: input.prompt,
+          checks: input.checks,
+          worktree: input.worktree,
+          instanceStore,
+          transitionRun: input.transitionRun,
+        })
+      }
+      return
+    }
+
     while (true) {
       const run = yield* input.store.getRun(input.runID)
       if (!run) return
       if (run.status === "aborted" || run.status === "failed" || run.status === "satisfied") return
       if (run.status === "paused") {
-        yield* Effect.sleep("1 second")
+        yield* Effect.sleep(Duration.millis(parseDuration("1 second")))
         continue
       }
 
@@ -872,8 +896,8 @@ function runDaemon(input: RunDaemonInput) {
 
         const checkpointResult = jankuraiCheckpointBlocked ?? (yield* input.checkpoint.runCheckpoint({
           cwd: session.directory,
-          spec: input.parsed.spec,
-          checkpoint: input.parsed.spec.checkpoint,
+          spec,
+          checkpoint: spec.checkpoint,
         }))
 
         // ─── v1.1: Execute after_checkpoint hooks ─────────────────────────
@@ -938,7 +962,7 @@ function runDaemon(input: RunDaemonInput) {
         let stopAttempt = 0
         let stopResult = yield* evaluateStop({
           cwd: session.directory,
-          spec: input.parsed.spec,
+          spec,
           checks: input.checks,
         })
 
@@ -946,11 +970,11 @@ function runDaemon(input: RunDaemonInput) {
           stopAttempt++
           const delay = computeRetryDelay(retryPolicy, stopAttempt - 1)
           if (delay > 0) {
-            yield* Effect.sleep(`${delay} millis` as Parameters<typeof Effect.sleep>[0])
+            yield* Effect.sleep(Duration.millis(delay))
           }
           stopResult = yield* evaluateStop({
             cwd: session.directory,
-            spec: input.parsed.spec,
+            spec,
             checks: input.checks,
           })
         }
@@ -983,7 +1007,7 @@ function runDaemon(input: RunDaemonInput) {
           return "exit" as const
         }
 
-        if (input.parsed.spec.incubator?.enabled) {
+        if (spec.incubator?.enabled) {
           yield* input.transitionRun(input.runID, { phase: "routing_tasks" })
           const tickResult = yield* incubatorTick({
             run: { ...run, iteration },
@@ -1029,9 +1053,9 @@ function runDaemon(input: RunDaemonInput) {
           yield* executeHookStep({ checks: input.checks, cwd: session.directory, phase: "after_iteration", hook })
         }
 
-        const hardClearEvery = input.parsed.spec.context?.hard_clear_every
+        const hardClearEvery = spec.context?.hard_clear_every
         let targetSessionID = session.id
-        if (input.parsed.spec.context?.strategy !== "soft" && hardClearEvery && iteration % hardClearEvery === 0) {
+        if (spec.context?.strategy !== "soft" && hardClearEvery && iteration % hardClearEvery === 0) {
           const forked = yield* input.sessions.fork({ sessionID: session.id, messageID: undefined })
           yield* applyDaemonPermissions({
             sessions: input.sessions,
@@ -1069,19 +1093,14 @@ function runDaemon(input: RunDaemonInput) {
         yield* input.prompt.prompt({
           sessionID: targetSessionID,
           agent: session.agent,
-          model: session.model
-            ? {
-                providerID: session.model.providerID,
-                modelID: session.model.id,
-              }
-            : undefined,
+          model: resolveDaemonModel() as any,
           noReply: true,
           parts: [{ type: "text", text: continuation }],
         })
 
-        const sleep = input.parsed.spec.loop?.sleep ?? "5 seconds"
+        const sleep = spec.loop?.sleep ?? "5 seconds"
         yield* input.transitionRun(input.runID, { phase: "sleeping" })
-        yield* Effect.sleep(sleep as Parameters<typeof Effect.sleep>[0])
+        yield* Effect.sleep(Duration.millis(parseDuration(sleep)))
         return "ok" as const
       }).pipe(
         // catchCause instead of catch — catches BOTH typed errors AND
@@ -1134,7 +1153,7 @@ function runDaemon(input: RunDaemonInput) {
           })
         }
         // Backoff before retrying to avoid hot error loops
-        yield* Effect.sleep("10 seconds")
+        yield* Effect.sleep(Duration.millis(parseDuration("10 seconds")))
         continue
       }
     }

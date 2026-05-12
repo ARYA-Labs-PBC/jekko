@@ -127,6 +127,10 @@ export const ZyalExperiments = Schema.Struct({
     weights: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
     command: Schema.optional(Schema.String),
     primary: Schema.optional(Schema.String),
+    goal_direction: Schema.optional(Schema.Union([
+      Schema.Literal("maximize"),
+      Schema.Literal("minimize"),
+    ])),
     judge: Schema.optional(Schema.Struct({
       agent: Schema.String,
       blind: Schema.optional(Schema.Boolean),
