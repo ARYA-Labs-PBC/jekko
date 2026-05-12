@@ -365,6 +365,7 @@ memory-benchmark-full: memory-benchmark-fast memory-benchmark-generated
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-audit:
 	jankurai audit . --mode advisory --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md
+	node tools/jankurai-audit-gate.mjs target/jankurai/repo-score.json
 	cp target/jankurai/repo-score.json agent/repo-score.json
 	cp target/jankurai/repo-score.md agent/repo-score.md
 
