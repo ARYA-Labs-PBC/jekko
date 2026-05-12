@@ -358,6 +358,7 @@ ZYAL_ARM RUN_FOREVER id=one`
       "13-advanced-research-loop.zyal",
       "14-jankurai-autoport-basic.zyal",
       "15-jankurai-fleet-parallel.zyal",
+      "16-jankurai-incubator-concepts.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
       "memory-benchmark/executable-benchmark.zyal",
@@ -420,6 +421,61 @@ ZYAL_ARM RUN_FOREVER id=one`
     expect(parsed.preview.research_provider_summary).toContain("prefer:official_api,primary_source,privacy_first")
     expect(parsed.preview.research_evidence_summary).toContain("citations")
     expect(parsed.preview.research_safety_summary).toContain("block_internal")
+  })
+
+  test("accepts first-class paper question bank research blocks", async () => {
+    const parsed = await Effect.runPromise(parseZyal(`<<<ZYAL v1:daemon id=paper-qbank>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+job:
+  name: paper-qbank
+  objective: Build paper questions.
+stop:
+  all:
+    - shell:
+        command: "test -f done"
+        assert:
+          exit_code: 0
+research:
+  version: v1
+  mode: academic
+  max_parallel: 2
+  paper_scan:
+    domains: [physics, math]
+    open_access: required
+    max_papers: 1
+  full_text:
+    store: checked_in_json
+    license_policy: oa_only
+  dedupe:
+    state_root: research/knowledge/question-bank/papers
+    duplicate_policy: fail
+  context_packing:
+    strategy: hard
+    target_fill_ratio: 0.82
+    output_reserve_tokens: 4096
+  question_bank:
+    output_root: research/knowledge/question-bank
+    work_items:
+      - id: work-1
+        publication_hash: abc
+    acceptance:
+      min_auditor_agreement: 0.75
+      min_answerability: 0.9
+      max_blind_correct_rate_for_hard: 0.5
+      reject_if_ambiguous: true
+  agent_trials:
+    question_generators: 2
+    answerers: 2
+  audit:
+    critics: 1
+    focused_auditors: 1
+<<<END_ZYAL id=paper-qbank>>>
+ZYAL_ARM RUN_FOREVER id=paper-qbank`))
+    expect(parsed.preview.research_paper_scan_summary).toContain("domains:physics,math")
+    expect(parsed.preview.research_context_packing_summary).toContain("fill:0.82")
+    expect(parsed.preview.research_question_bank_summary).toContain("work:1")
   })
 
   test("rejects unsupported required features in fail-closed preview policy", async () => {

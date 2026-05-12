@@ -431,6 +431,13 @@ function readinessDelta(pass: ZyalIncubatorPass, receipt: PassReceipt) {
       return 0.14
     case "prototype":
       return 0.1
+    // PR2 added `critical_reviewer` to the pass-type union. The pass evaluates
+    // the structured checklist on `jankurai.reviewer` and persists gaps as
+    // `kind="critical_reviewer"` memory rows. Readiness lifts modestly when
+    // the reviewer comes back clean; the actual block decision is enforced
+    // separately at promotion-time via `daemon-reviewer-pass.ts::evaluate`.
+    case "critical_reviewer":
+      return 0.08
     case "promotion_review":
       return 0.08
     case "compress":

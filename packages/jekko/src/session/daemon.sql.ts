@@ -183,6 +183,9 @@ export const DaemonWorkerTable = sqliteTable(
     status: text().notNull(),
     lease_task_id: text(),
     last_heartbeat_at: integer(),
+    pool_id: text(),
+    batch_id: text(),
+    last_commit_sha: text(),
     ...Timestamps,
   },
   (table) => [index("daemon_worker_run_idx").on(table.run_id, table.status)],
@@ -207,5 +210,139 @@ export const DaemonArtifactTable = sqliteTable(
     index("daemon_artifact_run_idx").on(table.run_id),
     index("daemon_artifact_task_idx").on(table.run_id, table.task_id),
     index("daemon_artifact_pass_idx").on(table.run_id, table.pass_id),
+  ],
+)
+
+// ─── PR4: forever-runner tables ──────────────────────────────────────────────
+// These mirror the SQLite schema written by `crates/jankurai-runner` (PR3) and
+// give the daemon-TS bridge a typed view onto the same rows. Drizzle defs only;
+// CRUD lives in `daemon-forever-store.ts`.
+
+export const DaemonFindingTable = sqliteTable(
+  "daemon_finding",
+  {
+    id: text().primaryKey(),
+    run_id: text()
+      .notNull()
+      .references(() => DaemonRunTable.id, { onDelete: "restrict" }),
+    iteration: integer().notNull().default(0),
+    rule_id: text().notNull(),
+    fingerprint: text().notNull(),
+    severity: text().notNull(),
+    paths_json: text({ mode: "json" }).notNull().default([]),
+    cap: text(),
+    status: text().notNull().default("queued"),
+    attempt_count: integer().notNull().default(0),
+    batch_id: text(),
+    last_error: text(),
+    ...Timestamps,
+  },
+  (table) => [
+    index("daemon_finding_run_status_idx").on(table.run_id, table.status),
+    index("daemon_finding_run_severity_idx").on(table.run_id, table.severity),
+    index("daemon_finding_fp_idx").on(table.run_id, table.fingerprint),
+  ],
+)
+
+export const DaemonFindingBatchTable = sqliteTable(
+  "daemon_finding_batch",
+  {
+    id: text().primaryKey(),
+    run_id: text()
+      .notNull()
+      .references(() => DaemonRunTable.id, { onDelete: "restrict" }),
+    wave_index: integer().notNull(),
+    lane: text().notNull().default("parallel"),
+    worker_id: text(),
+    status: text().notNull().default("queued"),
+    started_at: integer(),
+    ended_at: integer(),
+    result_json: text({ mode: "json" }),
+    ...Timestamps,
+  },
+  (table) => [
+    index("daemon_finding_batch_run_wave_idx").on(table.run_id, table.wave_index),
+    index("daemon_finding_batch_status_idx").on(table.run_id, table.status),
+  ],
+)
+
+export const DaemonFindingEdgeTable = sqliteTable(
+  "daemon_finding_edge",
+  {
+    run_id: text()
+      .notNull()
+      .references(() => DaemonRunTable.id, { onDelete: "restrict" }),
+    parent_id: text().notNull(),
+    child_id: text().notNull(),
+    kind: text().notNull().default("path_overlap"),
+    time_created: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.run_id, table.parent_id, table.child_id] }),
+    index("daemon_finding_edge_run_idx").on(table.run_id),
+    index("daemon_finding_edge_child_idx").on(table.run_id, table.child_id),
+  ],
+)
+
+export const DaemonConceptTable = sqliteTable(
+  "daemon_concept",
+  {
+    id: text().primaryKey(),
+    run_id: text()
+      .notNull()
+      .references(() => DaemonRunTable.id, { onDelete: "restrict" }),
+    concept_id: text().notNull(),
+    definition: text().notNull(),
+    derived_from_json: text({ mode: "json" }),
+    proof_refs_json: text({ mode: "json" }),
+    confidence: real().notNull().default(0.5),
+    invalidated_at: integer(),
+    invalidated_reason: text(),
+    ...Timestamps,
+  },
+  (table) => [
+    index("daemon_concept_run_concept_idx").on(table.run_id, table.concept_id),
+    index("daemon_concept_invalidated_idx").on(table.run_id, table.invalidated_at),
+  ],
+)
+
+export const DaemonConceptLinkTable = sqliteTable(
+  "daemon_concept_link",
+  {
+    run_id: text()
+      .notNull()
+      .references(() => DaemonRunTable.id, { onDelete: "restrict" }),
+    parent_concept: text().notNull(),
+    child_concept: text().notNull(),
+    relation: text().notNull().default("derived_from"),
+    time_created: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.run_id, table.parent_concept, table.child_concept] }),
+    index("daemon_concept_link_parent_idx").on(table.run_id, table.parent_concept),
+    index("daemon_concept_link_child_idx").on(table.run_id, table.child_concept),
+  ],
+)
+
+export const DaemonRegressionCycleTable = sqliteTable(
+  "daemon_regression_cycle",
+  {
+    id: text().primaryKey(),
+    run_id: text()
+      .notNull()
+      .references(() => DaemonRunTable.id, { onDelete: "restrict" }),
+    iteration: integer().notNull(),
+    baseline_score: real(),
+    current_score: real(),
+    hard_delta: integer().notNull().default(0),
+    soft_delta: integer().notNull().default(0),
+    caps_delta: integer().notNull().default(0),
+    status: text().notNull().default("pass"),
+    result_json: text({ mode: "json" }),
+    ...Timestamps,
+  },
+  (table) => [
+    index("daemon_regression_cycle_run_iter_idx").on(table.run_id, table.iteration),
+    index("daemon_regression_cycle_status_idx").on(table.run_id, table.status),
   ],
 )

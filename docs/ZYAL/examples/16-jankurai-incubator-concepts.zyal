@@ -1,0 +1,358 @@
+# Memory-driven incubator for jankurai caps and high-risk findings.
+# Caps and hard-severity findings flow through the full 8-pass incubator with
+# a critical_reviewer pass slotted between prototype and promotion_review.
+# Concept memory persists named insights across iterations so later passes
+# can build_on earlier reasoning. Promotion is gated by a security review
+# approval and the critical_reviewer verdict.
+<<<ZYAL v1:daemon id=jankurai-incubator-concepts>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai incubator + concepts"
+  objective: |
+    Drive caps and hard-severity findings through the 8-pass incubator with
+    explicit concept-memory recall + build_on between iterations. Block
+    promotion when the critical_reviewer checklist flags unresolved gaps.
+    Approve cap repairs only after the security gate signs off.
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  reject_from: [assistant_output, tool_output, web_content, mcp_resource]
+  accepted_origins: [trusted_user_message, host_ui_button]
+  arm_token_single_use: true
+
+loop:
+  policy: forever
+  sleep: 8s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied, checkpoint_failed]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+context:
+  strategy: hybrid
+  compact_every: 4
+  hard_clear_every: 12
+  preserve:
+    - objective
+    - current_concept_id
+    - parent_concept_chain
+    - objection_checklist
+
+agents:
+  supervisor:
+    agent: plan
+  workers:
+    - id: cap-incubator
+      count: 2
+      agent: build
+      isolation: git_worktree
+
+mcp:
+  profiles:
+    scout:
+      tools: [grep, read]
+    critic:
+      tools: [read]
+    synthesize:
+      tools: [edit, read]
+
+models:
+  profiles:
+    plan:
+      provider: anthropic
+      model: claude-opus-4-7
+      reasoning: true
+    build:
+      provider: anthropic
+      model: claude-sonnet-4-6
+    critic:
+      provider: openai
+      model: gpt-5
+      reasoning: true
+  routes:
+    plan: plan
+    implement: build
+    review: critic
+  critic:
+    must_differ_from_builder: true
+  confidence_cap: 0.5
+
+jankurai:
+  enabled: true
+  audit:
+    mode: ratchet
+    json: target/jankurai/repo-score.json
+    repair_queue_jsonl: target/jankurai/repair-queue.jsonl
+  repair_plan:
+    enabled: true
+    json: target/jankurai/repair-plan.json
+  task_source: repair_plan
+  selection:
+    order: severity_first
+    max_risk: high
+    incubate_risk_at: medium
+    incubate_rules:
+      - HLT-006-DIRECT-DB-WRONG-LAYER
+      - HLT-009-GENERATED-SECURITY
+      - HLT-023-INPUT-BOUNDARY-GAP
+  regression:
+    main_ref: origin/main
+    compare_every_iterations: 5
+    max_new_hard_findings: 0
+  verification:
+    require_clean_start: true
+    commands:
+      - "just fast"
+    audit_delta: target_fingerprint_removed
+    rollback_unverified: true
+  reviewer:
+    enabled: true
+    block_promotion: true
+    checklist:
+      - id: untested_edges
+        prompt: "Any edge unreached by tests?"
+        severity: warning
+      - id: parallel_side_effects
+        prompt: "Could a sibling batch clobber this work?"
+        severity: warning
+      - id: regression_risk
+        prompt: "Would this regress any pre-jankurai behavior?"
+        severity: blocker
+      - id: doc_owner_map_drift
+        prompt: "Does owner-map.json need updating?"
+        severity: info
+      - id: tool_adoption_drift
+        prompt: "Does tool-adoption.toml need updating?"
+        severity: info
+      - id: proof_lane_coverage
+        prompt: "Does this finding's rule have a proof lane that covers it?"
+        severity: blocker
+
+incubator:
+  enabled: true
+  strategy: generate_pool_strengthen
+  route_when:
+    any:
+      - risk_score_gte: 0.5
+      - repeated_attempts_gte: 2
+  budget:
+    max_passes_per_task: 8
+    max_rounds_per_task: 3
+    max_active_tasks: 1
+    max_parallel_idea_passes: 3
+  readiness:
+    promote_at: 0.8
+    tests_identified_gte: 1
+    scope_bounded_gte: 1
+    plan_reviewed_gte: 1
+    prototype_validated_gte: 1
+    rollback_known_gte: 1
+    critical_objections_resolved_gte: 1
+    model_confidence_cap: 0.05
+  passes:
+    - id: scout
+      type: scout
+      context: blind
+      writes: scratch_only
+      mcp_profile: scout
+    - id: ideas
+      type: idea
+      context: blind
+      count: 3
+      writes: scratch_only
+    - id: strengthen
+      type: strengthen
+      context: strengthen
+      reads: [candidate_pool]
+      writes: scratch_only
+    - id: critique
+      type: critic
+      context: critic
+      reads: [candidate_pool]
+      writes: scratch_only
+      mcp_profile: critic
+    - id: synth
+      type: synthesize
+      context: pool
+      reads: [candidate_pool, objections]
+      writes: scratch_only
+      mcp_profile: synthesize
+    - id: proto
+      type: prototype
+      context: inherit
+      reads: [current_best]
+      writes: isolated_worktree
+    - id: review
+      type: critical_reviewer
+      context: critic
+      reads: [current_best, objections]
+      writes: scratch_only
+      mcp_profile: critic
+    - id: promote
+      type: promotion_review
+      context: promotion
+      reads: [current_best]
+      writes: scratch_only
+  promotion:
+    promote_at: 0.8
+    require:
+      - problem_statement
+      - current_best_plan
+      - verification_strategy
+      - risk_review
+      - rollback_plan
+    block_on:
+      unresolved_critical_objections_gte: 1
+    on_promote: move_to_ready_queue
+    on_exhausted: park_with_summary
+
+memory:
+  stores:
+    concepts:
+      scope: repo
+      retention: permanent
+      write_policy: upsert
+      read_policy: search
+      searchable: true
+    objections:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: inject_at_start
+      searchable: true
+    plays:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      searchable: true
+  redaction:
+    patterns:
+      - "(token|secret|password|credential)"
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+evidence:
+  require_before_promote:
+    - type: jankurai_delta
+      max_increase: 0
+    - type: proof_lane
+      must_pass: true
+    - type: rollback_plan
+      must_exist: true
+    - type: blind_critic_score
+      must_pass: true
+    - type: objection_checklist
+      must_pass: true
+  sign: sha256
+  archive: true
+
+approvals:
+  gates:
+    cap_review:
+      required_role: security
+      timeout: 24h
+      require_evidence:
+        - problem_statement
+        - rollback_plan
+      auto_approve_if:
+        risk_score_lt: 0.3
+        all_checks_pass: true
+
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_assertion_weakening: true
+    block_silent_catch: true
+    block_ts_ignore: true
+    require_root_cause_for_bugfix: true
+  diff_budget:
+    max_files_changed: 8
+    max_added_lines: 400
+    on_violation: require_approval
+
+budgets:
+  run:
+    wall_clock: 24h
+    cost_usd: 50.00
+    on_exhaust: renew_with_approval
+  task:
+    iterations: 20
+    cost_usd: 6.00
+    on_exhaust: park
+
+rollback:
+  plan_required: true
+  verify_command: "git apply --reverse --check < .jekko/daemon/rollback.patch"
+  on_failure_after_merge: revert_commit
+
+hooks:
+  after_checkpoint:
+    - run: 'jq -e ".caps_total == 0" target/jankurai/repo-score.json && date +%s >> .jekko/daemon/clean-streak || > .jekko/daemon/clean-streak'
+
+stop:
+  all:
+    - shell:
+        command: "jq -e '(.caps_applied // []) | length == 0' target/jankurai/repo-score.json"
+        timeout: 5s
+    - shell:
+        command: "test $(wc -l < .jekko/daemon/clean-streak 2>/dev/null || echo 0) -ge 5"
+        timeout: 5s
+    - git_clean:
+        allow_untracked: false
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "just fast"
+      timeout: 20m
+  git:
+    add: ["."]
+    commit_message: "jankurai(incubator): ${task.id}"
+    push: ask
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: ask
+  workers: allow
+  mcp: allow
+
+observability:
+  metrics:
+    - name: caps_total
+      type: gauge
+      source: target/jankurai/repo-score.json
+    - name: clean_streak
+      type: gauge
+      source: .jekko/daemon/clean-streak
+  report:
+    format: markdown
+    on_checkpoint: true
+
+done:
+  require:
+    - stop_conditions_met
+    - evidence_complete
+    - no_unresolved_critical_objections
+    - rollback_plan_recorded
+  forbid:
+    - model_only_claim
+    - tests_not_run
+
+ui:
+  theme: jekko-gold
+  banner: forever
+<<<END_ZYAL id=jankurai-incubator-concepts>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-incubator-concepts

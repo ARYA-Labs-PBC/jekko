@@ -1,6 +1,6 @@
 # ZYAL Powerful Examples
 
-Nineteen flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
+Twenty flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
 
 | File | Demonstrates | Power blocks |
 |---|---|---|
@@ -18,6 +18,7 @@ Nineteen flagship runbooks that show what ZYAL v2.6 makes possible. Each is a co
 | [`13-advanced-research-loop.zyal`](13-advanced-research-loop.zyal) | Evidence-first external research loop with parallel cited search and extraction controls; powers the README demo asset | `research`, `permissions`, `evidence`, `budgets` |
 | [`14-jankurai-autoport-basic.zyal`](14-jankurai-autoport-basic.zyal) | Entry-level forever loop for a fresh repo: self-bootstraps jankurai, audits, drives caps and high/medium findings to zero with a single worker, commits on green, stops at score ≥ 90 with three consecutive clean runs | `jankurai.bootstrap`, `hooks`, `quality`, `done` |
 | [`15-jankurai-fleet-parallel.zyal`](15-jankurai-fleet-parallel.zyal) | Parallel fleet for mid-sized repos: 4 worktree workers fan out across low-risk findings, commit-on-green via `jankurai.pool`, route medium+ risk to incubator, regression compare every 10 iterations | `jankurai.pool`, `fleet.jnoccio`, `fan_out`, `incubator`, `rollback`, `sandbox`, `budgets` |
+| [`16-jankurai-incubator-concepts.zyal`](16-jankurai-incubator-concepts.zyal) | Memory-driven incubator for caps + hard findings: full 8-pass incubator with a `critical_reviewer` pass, concept memory across iterations, security `cap_review` approval gate | `jankurai.reviewer`, `incubator.passes` (incl. `critical_reviewer`), `memory.stores`, `approvals.gates`, `models.critic`, `evidence` |
 | [`memory-benchmark/prompt-scoring.zyal`](memory-benchmark/prompt-scoring.zyal) | Judge-population prompt scoring for the tracked memory benchmark corpus | `fan_out`, `memory`, `evidence`, `security`, `observability` |
 | [`memory-benchmark/autoresearch-basic.zyal`](memory-benchmark/autoresearch-basic.zyal) | Basic sandboxed AutoResearch memory benchmark with four workers and best-verified-patch reduction | `fan_out`, `experiments`, `memory`, `sandbox`, `observability` |
 | [`memory-benchmark/executable-benchmark.zyal`](memory-benchmark/executable-benchmark.zyal) | Deterministic Rust harness scoring for baseline, candidate, and reference memory systems | `fan_out`, `experiments`, `evidence`, `sandbox`, `observability` |

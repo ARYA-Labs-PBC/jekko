@@ -1,5 +1,8 @@
 import type { ZyalIncubator, ZyalIncubatorRouteCondition } from "@/agent-script/schema"
 import type { DaemonStore } from "./daemon-store"
+import type { Finding } from "./daemon-finding-classifier"
+import type { Batch, Wave } from "./daemon-finding-dag"
+import { schedule as scheduleWaves } from "./daemon-finding-dag"
 
 export type ReadinessEvidence = {
   testsIdentified: number
@@ -35,10 +38,67 @@ export type RouteInput = {
 }
 
 export type RouteResult = {
-  lane: "normal" | "incubator" | "blocked"
+  lane: "normal" | "incubator" | "blocked" | "parallel"
   readinessScore: number
   riskScore: number
   reasons: string[]
+}
+
+/** Lane assignment for a finding routed through the PR3 worker pool. */
+export type FindingLane = "parallel" | "incubator" | "human_required"
+
+export type FindingRouteDecision = {
+  finding: Finding
+  lane: FindingLane
+  /** Optional reason tag(s) for telemetry. */
+  reasons: string[]
+}
+
+export type RouteFindingsResult = {
+  waves: Wave[]
+  decisions: FindingRouteDecision[]
+}
+
+/**
+ * Plans parallel worker dispatch by combining the path-overlap DAG (Wave[])
+ * with per-finding lane routing. Caps and high-severity findings are pulled
+ * into the incubator lane regardless of which wave the DAG put them in;
+ * everything else flows through `parallel` lanes one batch at a time.
+ *
+ * Workers consume `waves[w].batches[b]` in order; the daemon-side worker pool
+ * (`daemon-worker-pool.ts`) gates concurrency so we never dispatch more than
+ * the resolved pool size at once.
+ */
+export function routeFindings(findings: readonly Finding[]): RouteFindingsResult {
+  const decisions: FindingRouteDecision[] = findings.map((finding) => {
+    if (finding.cap !== undefined) {
+      return { finding, lane: "incubator", reasons: ["cap"] }
+    }
+    if (finding.severity === "critical" || finding.severity === "high") {
+      return { finding, lane: "incubator", reasons: ["hard_severity"] }
+    }
+    if (touchesCriticalPath(finding.paths)) {
+      return { finding, lane: "incubator", reasons: ["critical_path"] }
+    }
+    return { finding, lane: "parallel", reasons: [] }
+  })
+  const waves = scheduleWaves(findings)
+  return { waves, decisions }
+}
+
+export function laneForBatch(batch: Batch, decisions: readonly FindingRouteDecision[]): FindingLane {
+  // A batch's lane is the worst lane of any finding in it. In practice a
+  // batch holds one finding today (the DAG packs one finding per batch) but
+  // we keep the rule conservative for future fan-in.
+  const byFingerprint = new Map(decisions.map((d) => [d.finding.fingerprint, d]))
+  let lane: FindingLane = "parallel"
+  for (const finding of batch.findings) {
+    const decision = byFingerprint.get(finding.fingerprint)
+    if (!decision) continue
+    if (decision.lane === "human_required") return "human_required"
+    if (decision.lane === "incubator") lane = "incubator"
+  }
+  return lane
 }
 
 const DEFAULT_EVIDENCE: ReadinessEvidence = {
@@ -197,6 +257,19 @@ function isCriticalPath(value: string) {
     "packages/jekko/src/agent-script/",
     "db/migrations/",
   ].some((prefix) => value.startsWith(prefix))
+}
+
+/** Public surface for the finding router: any of these paths trip the
+ *  incubator lane even at low severity. Mirrors `isCriticalPath` plus the
+ *  jankurai canonical-config + migration dirs so cap-adjacent edits route
+ *  through review. */
+function touchesCriticalPath(paths: readonly string[]): boolean {
+  return paths.some((p) =>
+    isCriticalPath(p) ||
+    p.startsWith("agent/") ||
+    p.startsWith(".jekko/agent/") ||
+    p.startsWith(".github/workflows/"),
+  )
 }
 
 function globMatch(value: string, pattern: string) {
