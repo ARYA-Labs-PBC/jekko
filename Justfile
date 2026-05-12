@@ -137,6 +137,8 @@ jekko-test-fast:
 		test/keybind.test.ts \
 		test/ide/ \
 		test/util/ \
+		test/tool/jankurai-audit-gate.test.ts \
+		test/tool/jankurai-workflow.test.ts \
 		test/auth/ \
 		test/account/ \
 		test/config/agent-color.test.ts \
