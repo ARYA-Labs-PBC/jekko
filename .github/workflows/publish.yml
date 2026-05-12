@@ -51,11 +51,10 @@ jobs:
 
       - name: Install Jekko
         if: inputs.bump || inputs.version
-        run: bun i -g jekko-ai
+        run: bash ops/ci/publish-install-jekko.sh
 
       - id: version
-        run: |
-          ./script/version.ts
+        run: bash ops/ci/publish-version.sh
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
           JEKKO_BUMP: ${{ inputs.bump }}
@@ -89,13 +88,13 @@ jobs:
 
       - name: Build
         id: build
-        run: |
-          ./packages/jekko/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
+        run: bash ops/ci/publish-build-cli.sh
         env:
           JEKKO_VERSION: ${{ needs.version.outputs.version }}
           JEKKO_RELEASE: ${{ needs.version.outputs.release }}
           GH_REPO: ${{ needs.version.outputs.repo }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
+          BUILD_ARGS: ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -167,41 +166,14 @@ jobs:
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
 
-      - name: Verify Windows CLI signatures
-        shell: pwsh
-        run: |
-          $files = @(
-            "${{ github.workspace }}\packages\jekko\dist\jekko-windows-arm64\bin\jekko.exe",
-            "${{ github.workspace }}\packages\jekko\dist\jekko-windows-x64\bin\jekko.exe",
-            "${{ github.workspace }}\packages\jekko\dist\jekko-windows-x64-baseline\bin\jekko.exe"
-          )
-
-          foreach ($file in $files) {
-            $sig = Get-AuthenticodeSignature $file
-            if ($sig.Status -ne "Valid") {
-              throw "Invalid signature for ${file}: $($sig.Status)"
-            }
-          }
-
-      - name: Repack Windows CLI archives
-        working-directory: packages/jekko/dist
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "jekko-windows-arm64\bin\*" -DestinationPath "jekko-windows-arm64.zip" -Force
-          Compress-Archive -Path "jekko-windows-x64\bin\*" -DestinationPath "jekko-windows-x64.zip" -Force
-          Compress-Archive -Path "jekko-windows-x64-baseline\bin\*" -DestinationPath "jekko-windows-x64-baseline.zip" -Force
-
-      - name: Upload signed Windows CLI release assets
+      - name: Publish Windows CLI release assets
         if: needs.version.outputs.release != ''
-        shell: pwsh
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
-        run: |
-          gh release upload "v${{ needs.version.outputs.version }}" `
-            "${{ github.workspace }}\packages\jekko\dist\jekko-windows-arm64.zip" `
-            "${{ github.workspace }}\packages\jekko\dist\jekko-windows-x64.zip" `
-            "${{ github.workspace }}\packages\jekko\dist\jekko-windows-x64-baseline.zip" `
-            --repo "${{ needs.version.outputs.repo }}"
+          VERSION: ${{ needs.version.outputs.version }}
+          VERSION_RELEASE: ${{ needs.version.outputs.release }}
+          VERSION_REPO: ${{ needs.version.outputs.repo }}
+        run: bash ops/ci/publish-sign-cli-windows.sh
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -276,19 +248,10 @@ jobs:
 
       - name: Setup SSH for AUR
         env:
-          AUR_SSH_KEY: ${{ runner.temp }}/aur-key
-          GIT_SSH_COMMAND: ssh -i ${{ runner.temp }}/aur-key -o UserKnownHostsFile=${{ runner.temp }}/known_hosts -o IdentitiesOnly=yes
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pacman-package-manager
-          mkdir -p "$RUNNER_TEMP"
-          printf '%s\n' "${{ secrets.AUR_KEY }}" > "$AUR_SSH_KEY"
-          chmod 600 "$AUR_SSH_KEY"
-          git config --global user.email "jekko@sst.dev"
-          git config --global user.name "jekko"
-          ssh-keyscan -H aur.archlinux.org >> "$RUNNER_TEMP/known_hosts" || true
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+        run: bash ops/ci/publish-aur.sh
 
-      - run: ./script/publish.ts
+      - run: bash ops/ci/publish.sh
         env:
           JEKKO_VERSION: ${{ needs.version.outputs.version }}
           JEKKO_RELEASE: ${{ needs.version.outputs.release }}

@@ -131,10 +131,11 @@ Summary:
 - Proof receipt:
 
 ### JK-1033 - [high] HLT-031-TYPESCRIPT-BAD-BEHAVIOR - packages/jekko/src/cli/cmd/tui/routes/session/index.tsx
-- Status: Pending
+- Status: Blocked
 - Assignee: unassigned
 - Started:
 - Completed:
+- Failure reason: rtk just fast failed in packages/jekko/src/server/routes/instance/httpapi/groups/session.ts (outside allowed paths); no safe task-scope fix is available
 - Source packet: `191`
 - Fingerprint: `sha256:29191d577751b9be90b5e9d9d97230ae4aca21fabd3186c993af3c055096fd47`
 - Check: `HLT-031-TYPESCRIPT-BAD-BEHAVIOR:boundary`
@@ -213,7 +214,8 @@ Summary:
   - Files touched: `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/zyal.tsx`, `JANKURAI_TASKLIST.md`
 
 ### JK-1035 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
-- Status: Pending
+- Status: Blocked
+- Failure reason: no occurrence of 'todo' found in the file
 - Assignee: unassigned
 - Started:
 - Completed:
@@ -252,10 +254,11 @@ Summary:
 - Proof receipt:
 
 ### JK-1036 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/zyal.tsx
-- Status: Pending
+- Status: Blocked
 - Assignee: unassigned
 - Started:
 - Completed:
+- Failure reason: no occurrence of 'stale' found in the file
 - Source packet: `181`
 - Fingerprint: `sha256:710299fa56cb7bcbc4e531362f99f3e18292fa454d02410c30d91d87e162506f`
 - Check: `HLT-001-DEAD-MARKER:vibe`
@@ -290,7 +293,8 @@ Summary:
 - Proof receipt:
 
 ### JK-1037 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/component/prompt/index.tsx
-- Status: Pending
+- Status: Blocked
+- Failure reason: no occurrence of 'fallback' found in the file
 - Assignee: unassigned
 - Started:
 - Completed:
@@ -328,10 +332,11 @@ Summary:
 - Proof receipt:
 
 ### JK-1038 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
-- Status: Pending
-- Assignee: unassigned
-- Started:
+- Status: Blocked
+- Assignee: bentaylor
+- Started: 2026-05-12T00:00:00Z
 - Completed:
+- Failure reason: no occurrence of 'fallback' found in the file
 - Source packet: `194`
 - Fingerprint: `sha256:a545feadec36473e698142331154ca8c849cbb7b00a475909a8793ca52687836`
 - Check: `HLT-001-DEAD-MARKER:vibe`
@@ -366,10 +371,11 @@ Summary:
 - Proof receipt:
 
 ### JK-1039 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
-- Status: Pending
-- Assignee: unassigned
+- Status: Blocked
+- Assignee: bentaylor
 - Started:
 - Completed:
+- Failure reason: no occurrence of 'fallback' found in the file
 - Source packet: `196`
 - Fingerprint: `sha256:ab505750f01acdb027eae175430ca87f934cb4b7af7e29225fbca6d4b9a46de9`
 - Check: `HLT-001-DEAD-MARKER:vibe`
@@ -404,10 +410,11 @@ Summary:
 - Proof receipt:
 
 ### JK-1040 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
-- Status: Pending
-- Assignee: unassigned
-- Started:
+- Status: Blocked
+- Assignee: bentaylor
+- Started: 2026-05-12T00:00:00Z
 - Completed:
+- Failure reason: no occurrence of 'fallback' found in the file
 - Source packet: `193`
 - Fingerprint: `sha256:afa426ed93321432634ab6aa47b8d1d0d53d24a487ccdca3e7fa3cd00e06a08b`
 - Check: `HLT-001-DEAD-MARKER:vibe`
@@ -442,10 +449,11 @@ Summary:
 - Proof receipt:
 
 ### JK-1041 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
-- Status: Pending
+- Status: Blocked
 - Assignee: unassigned
 - Started:
 - Completed:
+- Failure reason: no occurrence of 'fallback' found in the file
 - Source packet: `198`
 - Fingerprint: `sha256:c491677aa05d099ba6371ab573239a55f03fa02b3bcb8630be269b09bb6cd5d8`
 - Check: `HLT-001-DEAD-MARKER:vibe`
@@ -480,10 +488,11 @@ Summary:
 - Proof receipt:
 
 ### JK-1042 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
-- Status: Pending
+- Status: Blocked
 - Assignee: unassigned
 - Started:
 - Completed:
+- Failure reason: no occurrence of 'fallback' found in the file
 - Source packet: `199`
 - Fingerprint: `sha256:dd425bc02186efe1556fd4276272fe7698801c6d4b9cf9bde9378bf41ee5df8b`
 - Check: `HLT-001-DEAD-MARKER:vibe`
@@ -518,10 +527,11 @@ Summary:
 - Proof receipt:
 
 ### JK-1043 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
-- Status: Pending
+- Status: Blocked
 - Assignee: unassigned
 - Started:
 - Completed:
+- Failure reason: no occurrence of 'fallback' found in the file
 - Source packet: `195`
 - Fingerprint: `sha256:e424e16b8f1d0d7f316d4004971e38ef51c6bce992d058c788c08c1a134ae4d6`
 - Check: `HLT-001-DEAD-MARKER:vibe`
@@ -556,10 +566,12 @@ Summary:
 - Proof receipt:
 
 ### JK-1044 - [high] HLT-001-DEAD-MARKER - packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
-- Status: Pending
+- Status: Blocked
 - Assignee: unassigned
 - Started:
 - Completed:
+- Failure reason: no occurrence of 'fallback' found in the file
+- Failure reason: no occurrence of 'fallback' found in the file
 - Source packet: `197`
 - Fingerprint: `sha256:e4d55bd5cc3dd157a9cece6f7c0b920d510befcb0cb32c0b1d5f231d595a8ff9`
 - Check: `HLT-001-DEAD-MARKER:vibe`

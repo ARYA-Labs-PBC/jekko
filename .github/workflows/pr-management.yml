@@ -22,60 +22,14 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Check team membership
-        id: team-check
-        run: |
-          LOGIN="${{ github.event.pull_request.user.login }}"
-          if [ "$LOGIN" = "jekko-agent[bot]" ] || grep -qxF "$LOGIN" .github/TEAM_MEMBERS; then
-            echo "is_team=true" >> "$GITHUB_OUTPUT"
-            echo "Skipping: $LOGIN is a team member or bot"
-          else
-            echo "is_team=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Setup Bun
-        if: steps.team-check.outputs.is_team != 'true'
-        uses: ./.github/actions/setup-bun
-
-      - name: Install dependencies
-        if: steps.team-check.outputs.is_team != 'true'
-        run: bun install
-
-      - name: Install jekko
-        if: steps.team-check.outputs.is_team != 'true'
-        run: bun i -g jekko-ai
-
-      - name: Build prompt
-        if: steps.team-check.outputs.is_team != 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          {
-            echo "Check for duplicate PRs related to this new PR:"
-            echo ""
-            echo "CURRENT_PR_NUMBER: $PR_NUMBER"
-            echo ""
-            echo "Title: $(gh pr view "$PR_NUMBER" --json title --jq .title)"
-            echo ""
-            echo "Description:"
-            gh pr view "$PR_NUMBER" --json body --jq .body
-          } > pr_info.txt
+      - uses: ./.github/actions/setup-bun
 
       - name: Check for duplicate PRs
-        if: steps.team-check.outputs.is_team != 'true'
         env:
           JEKKO_API_KEY: ${{ secrets.JEKKO_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          COMMENT=$(bun script/duplicate-pr.ts -f pr_info.txt "Check the attached file for PR details and search for duplicates")
-
-          if [ "$COMMENT" != "No duplicate PRs found" ]; then
-            gh pr comment "$PR_NUMBER" --body "_The following comment was made by an LLM, it may be inaccurate:_
-
-          $COMMENT"
-          fi
+        run: bash ops/ci/pr-management.sh
 
   add-contributor-label:
     if: github.repository == 'neverhuman/jekko' && vars.JEKKO_AUTOMATION_ENABLED == '1'
@@ -86,18 +40,4 @@ jobs:
       issues: write
     steps:
       - name: Add Contributor Label
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
-        with:
-          script: |
-            const isPR = !!context.payload.pull_request;
-            const issueNumber = isPR ? context.payload.pull_request.number : context.payload.issue.number;
-            const authorAssociation = isPR ? context.payload.pull_request.author_association : context.payload.issue.author_association;
-
-            if (authorAssociation === 'CONTRIBUTOR') {
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                labels: ['contributor']
-              });
-            }
+        run: bash ops/ci/pr-management-contributor.sh

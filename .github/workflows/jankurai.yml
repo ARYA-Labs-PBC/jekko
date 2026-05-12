@@ -1,6 +1,5 @@
 name: jankurai
 
-# Trigger nudge — force PR re-sync after concurrency-cancelled runs.
 on:
   pull_request:
   push:
@@ -26,66 +25,10 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
-      - name: Install jankurai
-        run: cargo install --git https://github.com/neverhuman/jankurai --tag v1.0.0 --locked jankurai
-      - name: Install gitleaks
-        run: |
-          go install github.com/gitleaks/gitleaks/v8@v8.24.2
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: jankurai version
-        run: jankurai --version
-      - name: jankurai audit
-        run: jankurai audit . --mode ratchet --baseline agent/baselines/main.repo-score.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --sarif target/jankurai/jankurai.sarif --github-step-summary target/jankurai/summary.md --repair-queue-jsonl target/jankurai/repair-queue.jsonl
-      - name: jankurai audit gate
-        run: node tools/jankurai-audit-gate.mjs target/jankurai/repo-score.json
-      - name: Proof routing
-        run: jankurai proof . --changed-from origin/main --out target/jankurai/proof-plan.json --md target/jankurai/proof-plan.md
-      - name: Proofbind verify
-        run: |
-          jankurai proofbind verify . --changed-from origin/main || \
-            jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json
-      - name: Proofmark rust
-        run: jankurai proofmark rust . --obligations target/jankurai/proofbind/obligations.json
-      - name: Rust witness build
-        run: cd crates/tuiwright-jekko-unlock && jankurai rust witness build .
-      - name: zyalc compile drift
-        run: cargo run --manifest-path crates/zyalc/Cargo.toml --locked --quiet -- compile --all --check
-      - name: sandboxctl validate + unit + worktree smoke
-        run: |
-          cargo build --manifest-path crates/sandboxctl/Cargo.toml --locked
-          cargo test  --manifest-path crates/sandboxctl/Cargo.toml --locked --tests --no-fail-fast
-      - name: Language bad-behavior tests
-        run: cargo test --manifest-path crates/jankurai/Cargo.toml --test language_bad_behavior --no-fail-fast
-      - name: Security scan
-        run: |
-          jankurai security run . --strict --profile ci --out target/jankurai/security/evidence.json
+      - name: Run jankurai audit
+        run: bash ops/ci/jankurai.sh
       - name: Stage governance artifacts
-        run: |
-          cp target/jankurai/repo-score.json agent/repo-score.json
-          cp target/jankurai/repo-score.md agent/repo-score.md
-      - name: Secret scanning (trufflehog)
-        uses: trufflesecurity/trufflehog@ba0a524d6e51744d9d4e306bc57ac5d6ca5173ea
-        with:
-          path: .
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
-          extra_args: --debug --only-verified
-      - name: Dependency scanning (syft + grype)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
-        with:
-          path: .
-          artifact-name: sbom
-          fail-build: false
-      - name: Grype vulnerability scan
-        uses: anchore/scan-action@3343887d815d7b07465f6fdcd395bd66508d486a
-        with:
-          path: .
-          fail-build: false
-          severity-cutoff: high
-      - name: Install cargo audit
-        run: cargo install cargo-audit --locked
-      - name: Cargo audit
-        run: cd crates/tuiwright-jekko-unlock && cargo audit
+        run: bash ops/ci/jankurai-stage.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
@@ -135,13 +78,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
-      - name: Install backend deps
-        run: ${{ matrix.install }}
-      - name: Build sandboxctl
-        run: cargo build --manifest-path crates/sandboxctl/Cargo.toml --locked
-      - name: Validate canonical lanes spec
-        run: cargo run --manifest-path crates/sandboxctl/Cargo.toml --locked --quiet -- validate
-      - name: Run backend unit + smoke tests
+      - name: Run sandboxctl matrix lane
         env:
           SANDBOXCTL_BACKEND: ${{ matrix.backend }}
-        run: cargo test --manifest-path crates/sandboxctl/Cargo.toml --locked --tests --no-fail-fast
+          INSTALL_CMD: ${{ matrix.install }}
+        run: bash ops/ci/sandbox-backends.sh

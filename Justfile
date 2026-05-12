@@ -426,3 +426,15 @@ ci-local-sandboxctl:
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local: ci-local-audit ci-local-proof ci-local-proofmark ci-local-zyalc ci-local-sandboxctl ci-local-bad-behavior ci-local-security ci-local-cargo-audit memory-benchmark-fast
 	@echo "ci-local: all jankurai.yml local-equivalent steps passed"
+
+# Thin aliases that mirror scripts/ci-local.sh for convenience.
+ci-doctor: doctor
+
+ci-quick:
+	bash scripts/ci-local.sh quick
+
+ci-audit:
+	bash scripts/ci-local.sh audit
+
+ci:
+	bash scripts/ci-local.sh all

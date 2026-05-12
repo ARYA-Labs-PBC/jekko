@@ -1,18 +1,18 @@
 # jankurai Repo Score
 
 - Standard: `jankurai`
-- Auditor: `1.0.0`
+- Auditor: `1.3.0`
 - Schema: `1.7.0`
 - Paper edition: `2026.05-ed8`
 - Target stack ID: `rust-ts-vite-react-postgres-bounded-python`
 - Target stack: `Rust core + TypeScript/React/Vite + PostgreSQL + generated contracts + exception-only Python AI/data service`
 - Repo: `.`
-- Run ID: `1778618585`
-- Started at: `1778618585`
-- Elapsed: `2719` ms
+- Run ID: `1778621433`
+- Started at: `1778621433`
+- Elapsed: `2476` ms
 - Scope: `full`
-- Raw score: `91`
-- Final score: `91`
+- Raw score: `90`
+- Final score: `90`
 - Decision: `advisory`
 - Minimum score: `85`
 - Caps applied: `none`
@@ -66,6 +66,26 @@
 | `web-security-bad-behavior` | 68 | no |
 | `repo-rot-bad-behavior` | 88 | no |
 | `comment-hygiene-dangerous-residue` | 72 | no |
+| `ci-local-parity` | 70 | no |
+
+## Copy-Code Redundancy
+
+- Status: `review` hard=`0` warning=`5` files=`427`
+- Policy: min-lines=`10` min-tokens=`100` max-findings=`50` include-tests=`false` strict=`false`
+- Duplicate volume: lines=`19` tokens=`42` bytes=`406`
+
+- Notes:
+  - hard classes are limited to exact active-source file matches and substantial exact same-name units
+  - warning classes include same-body different-name units and token/block duplication
+  - tests, fixtures, stories, config, Docker, and migrations are omitted unless --include-tests is set
+
+| Kind | Severity | Language | Lines | Tokens | Instances | Reason |
+| --- | --- | --- | ---: | ---: | --- | --- |
+| `ExactUnitSameName` | `Warning` | `rust` | 8 | 13 | `crates/agent-search/src/types/response.rs:136-144, crates/agent-search/src/types/response.rs:155-163` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitDifferentName` | `Warning` | `typescript` | 3 | 8 | `packages/jekko/src/account/schema.ts:34-37, packages/jekko/src/account/schema.ts:39-42, packages/jekko/src/control-plane/workspace-shared.ts:130-133` | `same body appears under different names across files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 3 | 2 | `crates/agent-search/src/providers/arxiv.rs:41-44, crates/agent-search/src/providers/gdelt.rs:37-40, crates/agent-search/src/router.rs:41-44` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitDifferentName` | `Warning` | `typescript` | 4 | 17 | `packages/jekko/src/cli/cmd/plug.ts:78-82, packages/jekko/src/cli/cmd/tui/plugin/runtime-load-shared.ts:22-26` | `same body appears under different names across files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 1 | 2 | `crates/memory-benchmark/src/types.rs:263-264, crates/memory-benchmark/src/types.rs:302-303` | `same-name semantic unit copied across multiple files` |
 
 ## Dimensions
 
@@ -79,7 +99,7 @@
 | Data truth and workflow safety | 8 | 95 | 7.60 | database surface present; structured db boundary manifest present |
 | Observability and repair evidence | 8 | 88 | 7.04 | observability libraries or patterns found; ops/observability directory present |
 | Context economy and agent instructions | 7 | 100 | 7.00 | root `AGENTS.md` present; root `AGENTS.md` stays short |
-| Jankurai tool adoption and CI replacement | 7 | 24 | 1.68 | control-plane files present; applicable=15 |
+| Jankurai tool adoption and CI replacement | 7 | 10 | 0.70 | control-plane files present; applicable=16 |
 | Python containment and polyglot hygiene | 4 | 100 | 4.00 | no Python files in scope |
 | Build speed signals | 4 | 95 | 3.80 | build acceleration markers found; targeted test/build commands found |
 
@@ -110,19 +130,20 @@
 ## Tool Adoption
 
 - Control plane present: `true`
-- Applicable tools: `15`
+- Applicable tools: `16`
 - Configured: `0`
-- CI evidence: `3`
-- Artifact verified: `3`
-- Replaced count: `3`
-- Missing CI evidence: `audit-ci, proof-routing, security, ci-bad-behavior, git-bad-behavior, release-bad-behavior, contract-drift, authz-matrix, input-boundary, agent-tool-supply, release-readiness, cost-budget`
+- CI evidence: `0`
+- Artifact verified: `0`
+- Replaced count: `0`
+- Missing CI evidence: `audit-ci, proof-routing, proofbind, proofmark-rust, copy-code, security, ci-bad-behavior, git-bad-behavior, release-bad-behavior, contract-drift, rust-witness, authz-matrix, input-boundary, agent-tool-supply, release-readiness, cost-budget`
 
 | Tool | Category | Mode | Status | Replaced | Artifacts |
 | --- | --- | --- | --- | --- | --- |
 | `audit-ci` | `audit` | `auto` | `missing` | `manual repo scoring, ad hoc score gates` | `agent/repo-score.json, agent/repo-score.md` |
 | `proof-routing` | `proof` | `auto` | `missing` | `ad hoc proof lane selection, manual proof receipts` | `agent/repo-score.json, agent/repo-score.md, target/jankurai/repair-queue.jsonl` |
-| `proofbind` | `proof` | `auto` | `artifact_verified` | `manual changed-surface routing, ad hoc proof obligation lists` | `target/jankurai/proofbind/surface-witness.json, target/jankurai/proofbind/obligations.json` |
-| `proofmark-rust` | `proof` | `auto` | `artifact_verified` | `line-only coverage review, manual in-diff mutation review` | `target/jankurai/proofmark/proofmark-receipt.json, target/jankurai/proofmark/proof-receipt.json` |
+| `proofbind` | `proof` | `auto` | `missing` | `manual changed-surface routing, ad hoc proof obligation lists` | `target/jankurai/proofbind/surface-witness.json, target/jankurai/proofbind/obligations.json` |
+| `proofmark-rust` | `proof` | `auto` | `missing` | `line-only coverage review, manual in-diff mutation review` | `target/jankurai/proofmark/proofmark-receipt.json, target/jankurai/proofmark/proof-receipt.json` |
+| `copy-code` | `audit` | `auto` | `missing` | `ad hoc copy-code review, manual duplication triage` | `target/jankurai/copy-code.json, target/jankurai/copy-code.md` |
 | `security` | `security` | `auto` | `missing` | `gitleaks, dependency review, SBOM/provenance` | `target/jankurai/security/evidence.json` |
 | `ci-bad-behavior` | `security` | `auto` | `missing` | `mutable workflow refs, secret echo/debug workflow checks, non-blocking security scans` | `target/jankurai/language-bad-behavior.log` |
 | `git-bad-behavior` | `audit` | `auto` | `missing` | `destructive git automation, force-push release scripts, hidden stash-based state` | `target/jankurai/language-bad-behavior.log` |
@@ -130,7 +151,7 @@
 | `ux-qa` | `ux` | `auto` | `not_applicable` | `playwright, axe-core, visual baselines` | `target/jankurai/ux-qa.json` |
 | `db-migration-analyze` | `db` | `auto` | `not_applicable` | `manual migration review` | `target/jankurai/migration-report.json` |
 | `contract-drift` | `contract` | `auto` | `missing` | `handwritten contract drift checks, openapi diff` | `agent/repo-score.json, agent/repo-score.md` |
-| `rust-witness` | `rust` | `auto` | `artifact_verified` | `manual witness graphing` | `target/jankurai/rust/witness-graph.json` |
+| `rust-witness` | `rust` | `auto` | `missing` | `manual witness graphing` | `target/jankurai/rust/witness-graph.json` |
 | `vibe-coverage` | `audit` | `auto` | `not_applicable` | `manual vibe-coding coverage spreadsheet` | `target/jankurai/vibe-coverage.json, target/jankurai/vibe-coverage.md` |
 | `coverage-evidence` | `proof` | `auto` | `not_applicable` | `manual coverage report review, ad hoc mutation survivor review` | `target/jankurai/coverage/coverage-audit.json, target/jankurai/coverage/coverage-audit.md` |
 | `authz-matrix` | `security` | `auto` | `missing` | `manual authz matrix review` | `agent/repo-score.json, agent/repo-score.md` |
@@ -142,10 +163,10 @@
 ## Security evidence (ingested)
 
 - Source: `target/jankurai/security/evidence.json`
-- Envelope exit code: `0` · elapsed: `48000` ms · strict: `false`
+- Envelope exit code: `0` · elapsed: `41000` ms · strict: `false`
 - Commands — ran: `2`, skipped: `1`, failed: `0`
-- Generated at: `1778613528`
-- Git HEAD (envelope): `fc1b867428ea2e0f58093a745bce8c3c8e39557a`
+- Generated at: `1778620026`
+- Git HEAD (envelope): `e8ef38dbc56f205bc7a6bb06242a01172024ff66`
 
 ## Boundary manifest (ingested)
 
