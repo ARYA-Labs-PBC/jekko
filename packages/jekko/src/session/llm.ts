@@ -57,10 +57,12 @@ function daemonRequestHeaders(
   metadata: JnoccioProcessMetadata | undefined | null,
   sessionID: string,
   parentSessionID: string | undefined,
+  agentRole: string,
 ): Record<string, string> {
   const base: Record<string, string> = {
     "x-session-affinity": sessionID,
     "User-Agent": `jekko/${InstallationVersion}`,
+    "x-jekko-agent-role": agentRole,
   }
   if (parentSessionID) base["x-parent-session-id"] = parentSessionID
   if (metadata) {
@@ -416,7 +418,7 @@ const live: Layer.Layer<
           // pid, version) regardless of provider — closes the prior leak
           // where these only flowed on jekko providers. Adds jekko-only
           // session/request/project on top when applicable.
-          ...daemonRequestHeaders(metadata, input.sessionID, input.parentSessionID),
+          ...daemonRequestHeaders(metadata, input.sessionID, input.parentSessionID, input.agent.name),
           ...(isJekkoProvider
             ? {
                 "x-jekko-session": input.sessionID,

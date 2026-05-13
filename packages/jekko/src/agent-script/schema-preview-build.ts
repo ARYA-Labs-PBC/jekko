@@ -91,6 +91,73 @@ export function buildZyalPreview(input: { spec: ZyalScript; arm?: ZyalArm }): Zy
         .filter(Boolean)
         .join(" ") || "configured"
     : undefined
+  const summarizeResearchPaperScan = research?.paper_scan
+    ? [
+        research.paper_scan.enabled === false ? "disabled" : "enabled",
+        research.paper_scan.domains?.length ? `domains:${research.paper_scan.domains.join(",")}` : null,
+        research.paper_scan.open_access ? `oa:${research.paper_scan.open_access}` : null,
+        research.paper_scan.max_papers ? `max:${research.paper_scan.max_papers}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ") || "configured"
+    : undefined
+  const summarizeResearchFullText = research?.full_text
+    ? [
+        research.full_text.enabled === false ? "disabled" : "enabled",
+        research.full_text.store ? `store:${research.full_text.store}` : null,
+        research.full_text.license_policy ? `license:${research.full_text.license_policy}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ") || "configured"
+    : undefined
+  const summarizeResearchDedupe = research?.dedupe
+    ? [
+        research.dedupe.enabled === false ? "disabled" : "enabled",
+        research.dedupe.state_root ? `state:${research.dedupe.state_root}` : null,
+        research.dedupe.duplicate_policy ? `duplicates:${research.dedupe.duplicate_policy}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ") || "configured"
+    : undefined
+  const summarizeResearchContextPacking = research?.context_packing
+    ? [
+        research.context_packing.strategy ? `strategy:${research.context_packing.strategy}` : null,
+        research.context_packing.target_fill_ratio ? `fill:${research.context_packing.target_fill_ratio}` : null,
+        research.context_packing.output_reserve_tokens ? `reserve:${research.context_packing.output_reserve_tokens}` : null,
+        research.context_packing.safe_window_tokens ? `safe:${research.context_packing.safe_window_tokens}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ") || "configured"
+    : undefined
+  const summarizeResearchQuestionBank = research?.question_bank
+    ? [
+        research.question_bank.output_root ? `out:${research.question_bank.output_root}` : null,
+        research.question_bank.work_items?.length ? `work:${research.question_bank.work_items.length}` : null,
+        research.question_bank.acceptance?.min_auditor_agreement ? `agreement:${research.question_bank.acceptance.min_auditor_agreement}` : null,
+        research.question_bank.acceptance?.min_answerability ? `answerability:${research.question_bank.acceptance.min_answerability}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ") || "configured"
+    : undefined
+  const summarizeResearchAgentTrials = research?.agent_trials
+    ? [
+        research.agent_trials.question_generators ? `generators:${research.agent_trials.question_generators}` : null,
+        research.agent_trials.answerers ? `answerers:${research.agent_trials.answerers}` : null,
+        research.agent_trials.model_profile ? `model:${research.agent_trials.model_profile}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ") || "configured"
+    : undefined
+  const summarizeResearchAudit = research?.audit
+    ? [
+        research.audit.critics ? `critics:${research.audit.critics}` : null,
+        research.audit.focused_auditors ? `auditors:${research.audit.focused_auditors}` : null,
+        research.audit.min_auditor_agreement ? `agreement:${research.audit.min_auditor_agreement}` : null,
+        research.audit.min_answerability ? `answerability:${research.audit.min_answerability}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ") || "configured"
+    : undefined
   const experimentsScoringSummary = input.spec.experiments?.scoring
     ? [
         input.spec.experiments.scoring.primary ? `primary:${input.spec.experiments.scoring.primary}` : null,
@@ -393,6 +460,13 @@ export function buildZyalPreview(input: { spec: ZyalScript; arm?: ZyalArm }): Zy
     research_evidence_summary: summarizeResearchEvidence,
     research_safety_summary: summarizeResearchSafety,
     research_budget_summary: summarizeResearchBudget,
+    research_paper_scan_summary: summarizeResearchPaperScan,
+    research_full_text_summary: summarizeResearchFullText,
+    research_dedupe_summary: summarizeResearchDedupe,
+    research_context_packing_summary: summarizeResearchContextPacking,
+    research_question_bank_summary: summarizeResearchQuestionBank,
+    research_agent_trials_summary: summarizeResearchAgentTrials,
+    research_audit_summary: summarizeResearchAudit,
     jankurai_enabled: jankurai?.enabled === true,
     jankurai_summary: jankurai
       ? [

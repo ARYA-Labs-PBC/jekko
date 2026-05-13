@@ -6,6 +6,7 @@ pub enum Split {
     PublicGenerated,
     PrivateGenerated,
     Stress,
+    RealPapers,
 }
 
 impl Split {
@@ -15,6 +16,7 @@ impl Split {
             Split::PublicGenerated => "public-generated",
             Split::PrivateGenerated => "private-generated",
             Split::Stress => "stress",
+            Split::RealPapers => "real-papers",
         }
     }
 }
@@ -27,6 +29,7 @@ pub struct SuiteConfig {
     pub fixture_count: usize,
     pub difficulty: u8,
     pub context_budget: u32,
+    pub paper_bank_path: Option<String>,
 }
 
 impl Default for SuiteConfig {
@@ -38,6 +41,7 @@ impl Default for SuiteConfig {
             fixture_count: 100,
             difficulty: 2,
             context_budget: 4096,
+            paper_bank_path: None,
         }
     }
 }

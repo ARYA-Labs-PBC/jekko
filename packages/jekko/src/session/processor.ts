@@ -537,6 +537,8 @@ export const layer: Layer.Layer<
             ctx.assistantMessage.finish = value.finishReason
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
+            const jnoccio = extractJnoccioMetadata(value.providerMetadata)
+            if (jnoccio) ctx.assistantMessage.jnoccio = jnoccio
             yield* session.updatePart({
               id: PartID.ascending(),
               reason: value.finishReason,
@@ -811,6 +813,25 @@ export const layer: Layer.Layer<
     return Service.of({ create })
   }),
 )
+
+function extractJnoccioMetadata(value: unknown): Record<string, any> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const record = value as Record<string, any>
+  const direct = record.jnoccio
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct
+  for (const candidate of Object.values(record)) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue
+    const nested = candidate as Record<string, any>
+    if (nested.jnoccio && typeof nested.jnoccio === "object" && !Array.isArray(nested.jnoccio)) {
+      return nested.jnoccio as Record<string, any>
+    }
+    if (typeof nested.request_id === "string" && typeof nested.route_mode === "string") {
+      return nested
+    }
+  }
+  if (typeof record.request_id === "string" && typeof record.route_mode === "string") return record
+  return undefined
+}
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(

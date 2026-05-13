@@ -47,6 +47,7 @@ pub fn parse_args() -> (String, Option<String>, SuiteConfig) {
                         "public" => Split::PublicSmoke,
                         "generated" => Split::PublicGenerated,
                         "stress" => Split::Stress,
+                        "real-papers" => Split::RealPapers,
                         _ => config.split,
                     };
                 }
@@ -59,8 +60,15 @@ pub fn parse_args() -> (String, Option<String>, SuiteConfig) {
                         "private" => Split::PrivateGenerated,
                         "stress" => Split::Stress,
                         "public" => Split::PublicSmoke,
+                        "real-papers" => Split::RealPapers,
                         _ => config.split,
                     };
+                }
+                i += 2;
+            }
+            "--paper-bank" => {
+                if let Some(value) = args.get(i + 1) {
+                    config.paper_bank_path = Some(value.clone());
                 }
                 i += 2;
             }
@@ -93,7 +101,7 @@ pub fn parse_args() -> (String, Option<String>, SuiteConfig) {
             }
             "--help" | "-h" => {
                 eprintln!(
-                    "bench --candidate <name> [--suite public|generated|stress] [--seed label] [--fixtures n] [--out path] [--json]\n  candidate in {{baseline, reference_context_pack, reference_evidence_ledger, reference_claim_skeptic,\n    ledger_first, hybrid_index, temporal_graph, compression_first, skeptic_dataset,\n    arena_lane_00, arena_lane_01, arena_lane_02, arena_lane_03, arena_lane_04,\n    arena_lane_05, arena_lane_06, arena_lane_07, arena_lane_08, arena_lane_09,\n    arena_lane_10, arena_lane_11, arena_lane_12, arena_lane_13, arena_lane_14,\n    arena_lane_15, arena_lane_16, arena_lane_17, arena_lane_18, arena_lane_19}}"
+                    "bench --candidate <name> [--suite public|generated|stress|real-papers] [--paper-bank path] [--seed label] [--fixtures n] [--out path] [--json]\n  candidate in {{baseline, reference_context_pack, reference_evidence_ledger, reference_claim_skeptic,\n    ledger_first, hybrid_index, temporal_graph, compression_first, skeptic_dataset,\n    arena_lane_00, arena_lane_01, arena_lane_02, arena_lane_03, arena_lane_04,\n    arena_lane_05, arena_lane_06, arena_lane_07, arena_lane_08, arena_lane_09,\n    arena_lane_10, arena_lane_11, arena_lane_12, arena_lane_13, arena_lane_14,\n    arena_lane_15, arena_lane_16, arena_lane_17, arena_lane_18, arena_lane_19}}"
                 );
                 process::exit(0);
             }

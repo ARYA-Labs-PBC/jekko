@@ -574,6 +574,7 @@ export const Assistant = Schema.Struct({
     }),
   }),
   structured: Schema.optional(Schema.Any),
+  jnoccio: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
   variant: Schema.optional(Schema.String),
   finish: Schema.optional(Schema.String),
 })

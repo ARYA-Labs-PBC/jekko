@@ -360,6 +360,9 @@ ZYAL_ARM RUN_FOREVER id=one`
       "15-jankurai-fleet-parallel.zyal",
       "16-jankurai-incubator-concepts.zyal",
       "17-dynamic-dispatch-advanced.zyal",
+      "18-semantic-bug-finder-basic.zyal",
+      "19-semantic-bug-finder-advanced.zyal",
+      "20-semantic-bug-finder-ultra.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
       "memory-benchmark/executable-benchmark.zyal",
@@ -422,6 +425,69 @@ ZYAL_ARM RUN_FOREVER id=one`
     expect(parsed.preview.research_provider_summary).toContain("prefer:official_api,primary_source,privacy_first")
     expect(parsed.preview.research_evidence_summary).toContain("citations")
     expect(parsed.preview.research_safety_summary).toContain("block_internal")
+  })
+
+  test("accepts the basic semantic bug-finder example", async () => {
+    const parsed = await Effect.runPromise(
+      parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/18-semantic-bug-finder-basic.zyal"), "utf8")),
+    )
+    expect(parsed.preview.quality_enabled).toBe(true)
+    expect(parsed.preview.quality_summary).toContain("anti_vibe")
+    expect(parsed.preview.evidence_enabled).toBe(true)
+    expect(parsed.preview.rollback_enabled).toBe(true)
+    expect(parsed.preview.hook_count).toBeGreaterThan(0)
+    expect(parsed.spec.permissions?.git_push).toBe("ask")
+    expect(parsed.spec.quality?.anti_vibe?.require_failing_test_first_for_bugfix).toBe(true)
+    expect(parsed.spec.evidence?.require_before_promote?.map((item) => item.type)).toEqual([
+      "invariant",
+      "counterexample",
+      "failing_test",
+      "proof_command",
+      "pr_evidence",
+    ])
+    expect(parsed.spec.hooks?.after_checkpoint?.[0]?.run).toContain("gh pr create")
+  })
+
+  test("accepts the advanced semantic bug-finder example", async () => {
+    const parsed = await Effect.runPromise(
+      parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/19-semantic-bug-finder-advanced.zyal"), "utf8")),
+    )
+    expect(parsed.preview.jankurai_enabled).toBe(true)
+    expect(parsed.preview.jankurai_summary).toContain("order:severity_first")
+    expect(parsed.preview.jankurai_verification_summary).toContain("test_map")
+    expect(parsed.preview.experiments_enabled).toBe(true)
+    expect(parsed.preview.taint_enabled).toBe(true)
+    expect(parsed.preview.evidence_summary).toContain("rollback_note")
+    expect(parsed.preview.hook_count).toBeGreaterThan(0)
+    expect(parsed.spec.jankurai?.verification?.proof_from_test_map).toBe(true)
+    expect(parsed.spec.hooks?.on_start?.length).toBe(3)
+    expect(parsed.spec.quality?.anti_vibe?.require_failing_test_first_for_bugfix).toBe(true)
+  })
+
+  test("accepts the ultra semantic bug-finder example", async () => {
+    const parsed = await Effect.runPromise(
+      parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/20-semantic-bug-finder-ultra.zyal"), "utf8")),
+    )
+    expect(parsed.preview.dispatch_enabled).toBe(true)
+    expect(parsed.preview.dispatch_lane_count).toBe(7)
+    expect(parsed.preview.fleet_max_workers).toBe(12)
+    expect(parsed.preview.research_enabled).toBe(true)
+    expect(parsed.preview.taint_enabled).toBe(true)
+    expect(parsed.preview.memory_store_count).toBeGreaterThanOrEqual(4)
+    expect(parsed.preview.security_enabled).toBe(true)
+    expect(parsed.preview.sandbox_enabled).toBe(true)
+    expect(parsed.preview.approval_gate_count).toBeGreaterThan(0)
+    expect(parsed.spec.dispatch?.lanes?.map((lane) => lane.id)).toEqual([
+      "boundary",
+      "negative-test",
+      "false-green",
+      "race-transaction",
+      "contract-drift",
+      "docker-runtime",
+      "random-deep-dive",
+    ])
+    expect(parsed.spec.research?.paper_scan?.enabled).toBe(true)
+    expect(parsed.spec.jankurai?.verification?.proof_from_test_map).toBe(true)
   })
 
   test("accepts first-class paper question bank research blocks", async () => {

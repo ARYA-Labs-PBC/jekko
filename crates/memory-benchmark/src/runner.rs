@@ -105,6 +105,16 @@ pub fn run_candidate_with_config(
     config: &SuiteConfig,
 ) -> Result<CandidateReport, String> {
     let mut adapter = boxed_adapter(candidate)?;
+    if config.split == Split::RealPapers {
+        let Some(path) = config.paper_bank_path.as_deref() else {
+            return Err("bench: --suite real-papers requires --paper-bank <path>".to_string());
+        };
+        return crate::corpus::real_papers::run_candidate(
+            candidate,
+            adapter.as_mut(),
+            std::path::Path::new(path),
+        );
+    }
     if config.split != Split::PublicSmoke {
         return run_generated_candidate(candidate, adapter.as_mut(), config);
     }

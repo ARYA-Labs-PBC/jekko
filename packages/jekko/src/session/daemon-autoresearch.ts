@@ -99,6 +99,7 @@ type LaneResult = {
   readonly laneId: string
   readonly sessionID: string
   readonly worktreePath: string
+  readonly workItemID?: string
   readonly promptTokens: number
   readonly completionTokens: number
   readonly totalTokens: number
@@ -311,6 +312,8 @@ function runLane(input: {
 }) {
   return Effect.gen(function* () {
     const laneID = input.lane.id
+    const workItems = input.spec.research?.question_bank?.work_items ?? []
+    const workItem = workItems[input.laneIndex % Math.max(workItems.length, 1)]
     const laneRoot = path.join(input.artifactRoot, "reports", "lanes", laneID)
     const laneArtifactDir = laneRoot
     yield* Effect.promise(() => mkdir(laneArtifactDir, { recursive: true }))
@@ -329,13 +332,14 @@ function runLane(input: {
         sessionID: SessionID.make(input.input.run.active_session_id),
         messageID: undefined,
       })
-      const promptText = buildLanePrompt(input.spec, input.lane, laneID, input.laneIndex)
+      const promptText = buildLanePrompt(input.spec, input.lane, laneID, input.laneIndex, workItem)
       yield* input.input.store.appendEvent({
         runID: input.input.run.id,
         iteration: input.input.run.iteration,
         eventType: "autoresearch.lane.started",
         payload: {
           lane_id: laneID,
+          work_item_id: workItem?.id ?? null,
           hypothesis: input.lane.hypothesis,
           prompt_strategy: input.lane.prompt_strategy ?? null,
           worktree: laneDirectory,
@@ -352,6 +356,7 @@ function runLane(input: {
       })
       const loop = yield* prompt.loopResult({ sessionID: session.id })
       const assistant = loop.message.info as Record<string, any>
+      const routeMetadata = routeMetadataFromAssistant(assistant, input.input.run.id, laneID, input.lane.agent ?? "build")
 
       const diff = yield* input.input.checks.runShellCheck({
         cwd: laneDirectory,
@@ -369,6 +374,8 @@ function runLane(input: {
         session_id: session.id,
         assistant_message_id: assistant?.id ?? null,
         assistant_finish: assistant?.finish ?? null,
+        work_item: workItem ?? null,
+        route_metadata: routeMetadata,
         prompt_tokens: numberFrom(assistant?.tokens?.input ?? assistant?.tokens?.inputTokens),
         completion_tokens: numberFrom(assistant?.tokens?.output ?? assistant?.tokens?.outputTokens),
         total_tokens: numberFrom(assistant?.tokens?.total ?? assistant?.tokens?.totalTokens),
@@ -377,6 +384,22 @@ function runLane(input: {
       }
 
       yield* Effect.promise(() => writeFile(path.join(laneArtifactDir, "report.json"), JSON.stringify(laneSummary, null, 2) + "\n"))
+      yield* Effect.promise(() =>
+        writeFile(
+          path.join(laneArtifactDir, "agent-attempt.json"),
+          JSON.stringify(
+            {
+              lane_id: laneID,
+              work_item: workItem ?? null,
+              route_metadata: routeMetadata,
+              terminal: loop.terminal,
+              accepted: false,
+            },
+            null,
+            2,
+          ) + "\n",
+        ),
+      )
       yield* Effect.promise(() => writeFile(path.join(laneArtifactDir, "patch.diff"), patch))
 
       yield* input.input.store.appendEvent({
@@ -390,6 +413,7 @@ function runLane(input: {
         laneId: laneID,
         sessionID: session.id,
         worktreePath: laneDirectory,
+        workItemID: workItem?.id,
         promptTokens: numberFrom(assistant?.tokens?.input ?? assistant?.tokens?.inputTokens),
         completionTokens: numberFrom(assistant?.tokens?.output ?? assistant?.tokens?.outputTokens),
         totalTokens: numberFrom(assistant?.tokens?.total ?? assistant?.tokens?.totalTokens),
@@ -407,6 +431,8 @@ function runLane(input: {
             lane_index: input.laneIndex,
             hypothesis: input.lane.hypothesis,
             prompt_strategy: input.lane.prompt_strategy ?? null,
+            work_item: workItem ?? null,
+            route_metadata: routeMetadataFromAssistant(undefined, input.input.run.id, laneID, input.lane.agent ?? "build"),
             worktree: laneDirectory,
             session_id: null,
             assistant_message_id: null,
@@ -420,6 +446,7 @@ function runLane(input: {
           }
 
           yield* Effect.promise(() => writeFile(path.join(laneArtifactDir, "report.json"), JSON.stringify(failureSummary, null, 2) + "\n"))
+          yield* Effect.promise(() => writeFile(path.join(laneArtifactDir, "agent-attempt.json"), JSON.stringify(failureSummary, null, 2) + "\n"))
           yield* Effect.promise(() => writeFile(path.join(laneArtifactDir, "patch.diff"), ""))
           yield* input.input.store.appendEvent({
             runID: input.input.run.id,
@@ -432,6 +459,7 @@ function runLane(input: {
             laneId: laneID,
             sessionID: "",
             worktreePath: laneDirectory,
+            workItemID: workItem?.id,
             promptTokens: 0,
             completionTokens: 0,
             totalTokens: 0,
@@ -459,15 +487,56 @@ function runLane(input: {
   })
 }
 
-function buildLanePrompt(spec: ZyalScript, lane: NonNullable<ZyalScript["experiments"]>["lanes"][number], laneID: string, laneIndex: number) {
+function buildLanePrompt(
+  spec: ZyalScript,
+  lane: NonNullable<ZyalScript["experiments"]>["lanes"][number],
+  laneID: string,
+  laneIndex: number,
+  workItem?: NonNullable<NonNullable<ZyalScript["research"]>["question_bank"]>["work_items"][number],
+) {
   return [
     `AutoResearch lane ${laneIndex + 1}: ${laneID}`,
     `Objective: ${spec.job.objective}`,
     `Hypothesis: ${lane.hypothesis}`,
     `Prompt strategy: ${lane.prompt_strategy ?? "default"}`,
+    workItem ? `Question-bank work item: ${JSON.stringify(workItem)}` : undefined,
+    spec.research?.context_packing ? `Context packing: ${JSON.stringify(spec.research.context_packing)}` : undefined,
+    spec.research?.question_bank?.acceptance ? `Acceptance thresholds: ${JSON.stringify(spec.research.question_bank.acceptance)}` : undefined,
     `Use the Jnoccio model identity for all assistant calls.`,
     `Make the smallest useful change for this lane and preserve deterministic outputs.`,
-  ].join("\n")
+  ].filter(Boolean).join("\n")
+}
+
+function routeMetadataFromAssistant(
+  assistant: Record<string, any> | undefined,
+  runID: string,
+  laneID: string,
+  agentRole: string,
+) {
+  const jnoccio = assistant?.jnoccio ?? assistant?.metadata?.jnoccio ?? {}
+  return {
+    request_id: stringOrNull(jnoccio.request_id),
+    route_mode: stringOrNull(jnoccio.route_mode),
+    primary_model_id: stringOrNull(jnoccio.primary_model_id),
+    backup_model_ids: Array.isArray(jnoccio.backup_model_ids) ? jnoccio.backup_model_ids.filter((value: unknown) => typeof value === "string") : [],
+    fusion_model_id: stringOrNull(jnoccio.fusion_model_id),
+    winner_model_id: stringOrNull(jnoccio.winner_model_id),
+    confidence: numberOrNull(jnoccio.confidence),
+    provider: stringOrNull(assistant?.providerID),
+    model: stringOrNull(assistant?.modelID),
+    agent_role: agentRole,
+    zyal_run_id: runID,
+    zyal_lane_id: laneID,
+  }
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null
+}
+
+function numberOrNull(value: unknown): number | null {
+  const next = Number(value)
+  return Number.isFinite(next) ? next : null
 }
 
 function clampWorkerCount(value: number | undefined) {

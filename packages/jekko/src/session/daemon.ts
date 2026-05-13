@@ -27,6 +27,7 @@ import { getHookSteps, resolveHookFailureAction } from "./daemon-hooks"
 import { evaluateAllConstraints, captureBaselines, type ConstraintBaselines } from "./daemon-constraints"
 import { resolveRetryPolicy, computeRetryDelay, canRetry } from "./daemon-retry"
 import { normalizeDaemonSpec, hasAutoResearch, resolveDaemonModel, runAutoResearch } from "./daemon-autoresearch"
+import { hasResearchPipeline, runResearchPreflight } from "./daemon-research"
 import { applyDaemonPermissions } from "./daemon-permissions"
 import { daemonSignalCountsAsError, effectiveDaemonSignal, suppressDaemonSignal } from "./daemon-signals"
 import { resolveDaemonPolicy, resolveDaemonAutomaticAction, shouldRestartDaemonFiber } from "./daemon-lifetime"
@@ -653,6 +654,17 @@ function runDaemon(input: RunDaemonInput) {
       })
       if (startSession) {
         yield* executeHookStep({ checks: input.checks, cwd: startSession.directory, phase: "on_start", hook })
+      }
+    }
+
+    if (hasResearchPipeline(spec)) {
+      const run = yield* input.store.getRun(input.runID)
+      if (run) {
+        yield* runResearchPreflight({
+          run,
+          spec,
+          store: input.store,
+        })
       }
     }
 
