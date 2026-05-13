@@ -1,0 +1,1228 @@
+Yes — **if the goal is the world’s greatest Rust TUI app, I would make Ratatui the strategic frontend target.** The uploaded fork is currently a TypeScript/SolidJS/OpenTUI frontend, so Ratatui cannot be “dropped into” the existing `.tsx` files. But the backend/API shape in `TUI_BACKEND_API.md` is already good enough to support a Rust-native Ratatui frontend that consumes the same HTTP + SSE session/event surface.
+
+My revised recommendation is:
+
+1. **Short term:** apply the visual/design changes I outlined to the current OpenTUI/Solid code so you can ship fast.
+2. **Strategic path:** build a new Rust `ratatui` frontend as a first-class app, preserving the backend APIs and event stream.
+3. **Long term:** retire the recognizable OpenCode/OpenTUI visual structure entirely and make the Ratatui client the flagship.
+
+Ratatui is especially attractive here because it is a Rust crate for complex terminal UIs with widgets, layout, styling, backends, and text primitives; it was forked from `tui-rs` in 2023 and is actively evolving. The current latest line is `0.30.0`, which introduced modularization, backend flexibility, widget/layout improvements, and a newer `ratatui::run()` API. ([Docs.rs][1])
+
+---
+
+# Ratatui Addendum to the Engineering Report
+
+## 1. New strategic architecture
+
+The current app should become:
+
+```txt
+existing backend / SDK / session engine
+        │
+        ├── existing TypeScript/OpenTUI client, temporary
+        │
+        └── new Rust Ratatui client, flagship
+```
+
+The Ratatui client should consume:
+
+```txt
+GET  /event
+POST /session/:sessionID/prompt
+POST /session/:sessionID/abort
+POST /tui/append-prompt
+POST /tui/submit-prompt
+POST /tui/open-sessions
+POST /tui/open-models
+POST /tui/open-themes
+POST /tui/select-session
+POST /tui/publish
+```
+
+Do **not** try to recreate the backend inside Rust first. Keep the backend/session engine, build a beautiful Rust TUI shell around it, and progressively replace the current TS TUI.
+
+Ratatui is immediate-mode: the UI is redrawn from application state on each frame. That is a great fit for this app because session streaming, tool progress, prompt state, mode changes, and left rail state can all be modeled as one `AppState` rendered every frame. Ratatui itself does not own your input/event system, so you must design the event loop deliberately with keyboard, mouse, timers, backend SSE, and command events flowing into one app reducer. ([Ratatui][2])
+
+---
+
+## 2. New Rust crate layout
+
+Create a new frontend crate:
+
+```txt
+crates/jekko-tui/
+├── Cargo.toml
+├── src/
+│   ├── main.rs
+│   ├── app.rs
+│   ├── event.rs
+│   ├── action.rs
+│   ├── client/
+│   │   ├── mod.rs
+│   │   ├── api.rs
+│   │   ├── sse.rs
+│   │   └── schema.rs
+│   ├── theme/
+│   │   ├── mod.rs
+│   │   ├── palette.rs
+│   │   ├── astra.rs
+│   │   └── syntax.rs
+│   ├── layout/
+│   │   ├── mod.rs
+│   │   ├── regions.rs
+│   │   └── responsive.rs
+│   ├── widgets/
+│   │   ├── mod.rs
+│   │   ├── command_ribbon.rs
+│   │   ├── left_rail.rs
+│   │   ├── transcript.rs
+│   │   ├── message_card.rs
+│   │   ├── tool_capsule.rs
+│   │   ├── composer.rs
+│   │   ├── dialog.rs
+│   │   ├── toast.rs
+│   │   ├── status_strip.rs
+│   │   └── logo.rs
+│   ├── command/
+│   │   ├── mod.rs
+│   │   ├── registry.rs
+│   │   └── keymap.rs
+│   └── util/
+│       ├── text.rs
+│       ├── wrap.rs
+│       └── scroll.rs
+```
+
+This structure maps closely to the existing TUI concepts but removes the old recognizable implementation style.
+
+---
+
+## 3. Cargo dependencies
+
+Use Ratatui as the UI core, Tokio for async, Crossterm for terminal events, Reqwest for HTTP, and an SSE parser for `/event`.
+
+```toml
+[package]
+name = "jekko-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = { version = "0.30", features = ["serde"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+color-eyre = "0.6"
+unicode-width = "0.2"
+textwrap = "0.16"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+```
+
+The `serde` feature is especially useful because Ratatui supports serialization/deserialization of style and color types through that feature, which makes saved themes and theme JSON import easier. ([Ratatui][3])
+
+---
+
+## 4. Ratatui visual system
+
+The design should remain the same concept I proposed earlier, but Ratatui lets you execute it more cleanly:
+
+```txt
+┌────────────────────────────────────────────────────────────────────────────┐
+│ ✦ AppName   repo/branch   model   agent   tokens   Ctrl+. Snow/Void       │
+├───────────────┬────────────────────────────────────────────────────────────┤
+│ LEFT RAIL     │ TRANSCRIPT CANVAS                                          │
+│ mission       │                                                            │
+│ context       │ user request cards                                         │
+│ files         │ assistant stream                                           │
+│ tools         │ tool capsules                                              │
+│ costs         │ diffs / patches                                            │
+│               │                                                            │
+├───────────────┴────────────────────────────────────────────────────────────┤
+│ COMPOSER DECK                                                             │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+Ratatui’s built-in widgets include blocks, paragraphs, lists, tables, charts, gauges, scrollbars, and more, and strings/spans/lines/text can also be rendered as widgets. That gives the Rust frontend enough raw power to build the left rail, transcript, command palette, dialogs, composer, tool progress cards, cost gauges, sparklines, and dashboard panels without a web-style retained component tree. ([Docs.rs][4])
+
+---
+
+## 5. Core `AppState`
+
+Create a single canonical state object. This is the heart of the Ratatui app.
+
+```rust
+// src/app.rs
+
+use crate::theme::ThemeMode;
+
+#[derive(Debug, Clone)]
+pub struct AppState {
+    pub running: bool,
+    pub route: Route,
+    pub theme_mode: ThemeMode,
+    pub left_rail_visible: bool,
+    pub left_rail_width: u16,
+
+    pub sessions: Vec<SessionSummary>,
+    pub active_session_id: Option<String>,
+    pub transcript: Vec<TranscriptItem>,
+
+    pub composer: ComposerState,
+    pub command_palette: CommandPaletteState,
+    pub dialog: Option<DialogState>,
+    pub toast: Option<ToastState>,
+
+    pub backend_status: BackendStatus,
+    pub model: Option<ModelInfo>,
+    pub agent: Option<AgentInfo>,
+    pub token_usage: Option<TokenUsage>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Route {
+    Home,
+    Session { session_id: String },
+    Dashboard,
+    Plugin { id: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct ComposerState {
+    pub input: String,
+    pub cursor: usize,
+    pub mode: ComposerMode,
+    pub focused: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposerMode {
+    Ask,
+    Shell,
+    Plan,
+    Build,
+}
+```
+
+In the old TS app, state is spread across many Solid providers. In Ratatui, keep rendering pure: every widget gets `&AppState` plus a `Rect` and draws itself.
+
+---
+
+## 6. Event loop
+
+The Ratatui app should merge terminal events, backend events, ticks, render requests, and commands into one channel.
+
+```rust
+// src/event.rs
+
+use crossterm::event::KeyEvent;
+
+#[derive(Debug)]
+pub enum AppEvent {
+    Tick,
+    Render,
+    Key(KeyEvent),
+    Mouse(crossterm::event::MouseEvent),
+    Resize { width: u16, height: u16 },
+    Backend(BackendEvent),
+    Command(Command),
+    Error(String),
+    Quit,
+}
+```
+
+Recommended loop:
+
+```rust
+// src/main.rs
+
+use color_eyre::Result;
+use ratatui::DefaultTerminal;
+
+mod app;
+mod event;
+mod action;
+mod client;
+mod layout;
+mod theme;
+mod widgets;
+mod command;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    color_eyre::install()?;
+
+    let mut terminal = ratatui::init();
+    let result = run(&mut terminal).await;
+    ratatui::restore();
+
+    result
+}
+
+async fn run(terminal: &mut DefaultTerminal) -> Result<()> {
+    let mut app = app::App::new().await?;
+    app.start_event_tasks().await?;
+
+    while app.state.running {
+        terminal.draw(|frame| {
+            widgets::render_app(frame, &app.state);
+        })?;
+
+        let event = app.next_event().await?;
+        app.handle_event(event).await?;
+    }
+
+    Ok(())
+}
+```
+
+This keeps the frame rendering simple and lets the app redraw after keypresses, resize, backend SSE deltas, prompt edits, model changes, and theme toggles.
+
+---
+
+## 7. Layout engine
+
+Create one layout function that produces named regions.
+
+```rust
+// src/layout/regions.rs
+
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+#[derive(Debug, Clone, Copy)]
+pub struct AppRegions {
+    pub ribbon: Rect,
+    pub body: Rect,
+    pub left_rail: Option<Rect>,
+    pub transcript: Rect,
+    pub composer: Rect,
+    pub status: Rect,
+}
+
+pub fn compute(area: Rect, left_rail_visible: bool, rail_width: u16) -> AppRegions {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // command ribbon
+            Constraint::Min(6),    // body
+            Constraint::Length(5), // composer
+            Constraint::Length(1), // status strip
+        ])
+        .split(area);
+
+    let ribbon = vertical[0];
+    let body = vertical[1];
+    let composer = vertical[2];
+    let status = vertical[3];
+
+    let (left_rail, transcript) = if left_rail_visible && body.width >= 100 {
+        let horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(rail_width),
+                Constraint::Min(40),
+            ])
+            .split(body);
+
+        (Some(horizontal[0]), horizontal[1])
+    } else {
+        (None, body)
+    };
+
+    AppRegions {
+        ribbon,
+        body,
+        left_rail,
+        transcript,
+        composer,
+        status,
+    }
+}
+```
+
+This is where you guarantee the app is **not** recognized as OpenCode: the left rail is structural, not incidental.
+
+---
+
+## 8. Theme system in Rust
+
+```rust
+// src/theme/mod.rs
+
+use ratatui::style::{Color, Style};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    Void,
+    Snow,
+}
+
+#[derive(Debug, Clone)]
+pub struct Theme {
+    pub mode: ThemeMode,
+
+    pub background: Color,
+    pub panel: Color,
+    pub element: Color,
+    pub menu: Color,
+
+    pub text: Color,
+    pub muted: Color,
+
+    pub primary: Color,
+    pub secondary: Color,
+    pub accent: Color,
+
+    pub success: Color,
+    pub warning: Color,
+    pub error: Color,
+    pub info: Color,
+
+    pub border_subtle: Color,
+    pub border: Color,
+    pub border_active: Color,
+}
+
+impl Theme {
+    pub fn astra(mode: ThemeMode) -> Self {
+        match mode {
+            ThemeMode::Void => Self {
+                mode,
+                background: Color::Rgb(8, 10, 18),
+                panel: Color::Rgb(14, 19, 32),
+                element: Color::Rgb(21, 27, 44),
+                menu: Color::Rgb(27, 34, 54),
+
+                text: Color::Rgb(234, 240, 255),
+                muted: Color::Rgb(142, 154, 180),
+
+                primary: Color::Rgb(124, 92, 255),
+                secondary: Color::Rgb(0, 212, 255),
+                accent: Color::Rgb(183, 255, 42),
+
+                success: Color::Rgb(60, 255, 155),
+                warning: Color::Rgb(255, 204, 102),
+                error: Color::Rgb(255, 92, 122),
+                info: Color::Rgb(0, 212, 255),
+
+                border_subtle: Color::Rgb(31, 41, 66),
+                border: Color::Rgb(42, 54, 86),
+                border_active: Color::Rgb(124, 92, 255),
+            },
+            ThemeMode::Snow => Self {
+                mode,
+                background: Color::Rgb(251, 252, 255),
+                panel: Color::Rgb(242, 245, 250),
+                element: Color::Rgb(232, 238, 247),
+                menu: Color::Rgb(223, 232, 245),
+
+                text: Color::Rgb(16, 22, 37),
+                muted: Color::Rgb(101, 112, 131),
+
+                primary: Color::Rgb(91, 71, 255),
+                secondary: Color::Rgb(0, 126, 167),
+                accent: Color::Rgb(90, 143, 0),
+
+                success: Color::Rgb(6, 122, 70),
+                warning: Color::Rgb(168, 99, 0),
+                error: Color::Rgb(200, 50, 82),
+                info: Color::Rgb(0, 126, 167),
+
+                border_subtle: Color::Rgb(216, 224, 236),
+                border: Color::Rgb(199, 209, 224),
+                border_active: Color::Rgb(91, 71, 255),
+            },
+        }
+    }
+
+    pub fn text_style(&self) -> Style {
+        Style::default().fg(self.text).bg(self.background)
+    }
+}
+```
+
+This gives you the requested **white/dark scheme** cleanly.
+
+---
+
+## 9. `Ctrl+.` theme shortcut
+
+Add this to the Rust keymap:
+
+```rust
+// src/command/keymap.rs
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::event::AppEvent;
+use crate::command::Command;
+
+pub fn map_key(key: KeyEvent) -> Option<Command> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('.'), KeyModifiers::CONTROL) => {
+            Some(Command::ToggleThemeMode)
+        }
+        (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
+            Some(Command::ToggleLeftRail)
+        }
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            Some(Command::OpenCommandPalette)
+        }
+        (KeyCode::Esc, _) => {
+            Some(Command::Dismiss)
+        }
+        _ => None,
+    }
+}
+```
+
+And the reducer:
+
+```rust
+// src/action.rs
+
+use crate::app::AppState;
+use crate::command::Command;
+use crate::theme::ThemeMode;
+
+pub fn apply_command(state: &mut AppState, command: Command) {
+    match command {
+        Command::ToggleThemeMode => {
+            state.theme_mode = match state.theme_mode {
+                ThemeMode::Void => ThemeMode::Snow,
+                ThemeMode::Snow => ThemeMode::Void,
+            };
+
+            state.toast = Some(ToastState::info(match state.theme_mode {
+                ThemeMode::Void => "Void mode enabled",
+                ThemeMode::Snow => "Snow mode enabled",
+            }));
+        }
+        Command::ToggleLeftRail => {
+            state.left_rail_visible = !state.left_rail_visible;
+        }
+        _ => {}
+    }
+}
+```
+
+Also keep `<leader>t` as a fallback if your key parser supports leader bindings, because some terminals may emit unusual sequences for control punctuation.
+
+---
+
+## 10. Rendering root
+
+```rust
+// src/widgets/mod.rs
+
+use ratatui::Frame;
+use ratatui::widgets::{Block, Clear};
+use crate::app::AppState;
+use crate::layout;
+use crate::theme::Theme;
+
+pub mod command_ribbon;
+pub mod left_rail;
+pub mod transcript;
+pub mod composer;
+pub mod status_strip;
+pub mod dialog;
+pub mod toast;
+
+pub fn render_app(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let theme = Theme::astra(state.theme_mode);
+
+    frame.render_widget(
+        Block::default().style(theme.text_style()),
+        area,
+    );
+
+    let regions = layout::regions::compute(
+        area,
+        state.left_rail_visible,
+        state.left_rail_width,
+    );
+
+    command_ribbon::render(frame, regions.ribbon, state, &theme);
+
+    if let Some(rail) = regions.left_rail {
+        left_rail::render(frame, rail, state, &theme);
+    }
+
+    transcript::render(frame, regions.transcript, state, &theme);
+    composer::render(frame, regions.composer, state, &theme);
+    status_strip::render(frame, regions.status, state, &theme);
+
+    if let Some(dialog) = &state.dialog {
+        let area = centered_rect(70, 70, frame.area());
+        frame.render_widget(Clear, area);
+        dialog::render(frame, area, dialog, &theme);
+    }
+
+    if let Some(toast) = &state.toast {
+        toast::render(frame, frame.area(), toast, &theme);
+    }
+}
+```
+
+---
+
+## 11. Command ribbon widget
+
+```rust
+// src/widgets/command_ribbon.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+};
+
+use crate::{app::AppState, theme::Theme};
+
+pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let line = Line::from(vec![
+        Span::styled("✦ ", Style::default().fg(theme.primary)),
+        Span::styled("AppName", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+        Span::styled("  │  ", Style::default().fg(theme.border_subtle)),
+        Span::styled("Ctrl+P", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+        Span::styled(" command  ", Style::default().fg(theme.muted)),
+        Span::styled("Ctrl+.", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(" theme  ", Style::default().fg(theme.muted)),
+        Span::styled("Ctrl+B", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+        Span::styled(" left rail", Style::default().fg(theme.muted)),
+    ]);
+
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(theme.border_subtle))
+        .style(Style::default().bg(theme.background));
+
+    frame.render_widget(
+        Paragraph::new(line).block(block),
+        area,
+    );
+}
+```
+
+---
+
+## 12. Left rail widget
+
+```rust
+// src/widgets/left_rail.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
+};
+
+use crate::{app::AppState, theme::Theme};
+
+pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(theme.border_subtle))
+        .style(Style::default().bg(theme.panel));
+
+    frame.render_widget(block, area);
+
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(3),
+        height: area.height.saturating_sub(2),
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(8),
+            Constraint::Length(3),
+        ])
+        .split(inner);
+
+    let title = state
+        .active_session_id
+        .as_deref()
+        .unwrap_or("No session");
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("MISSION", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(Span::styled(title, Style::default().fg(theme.text))),
+            Line::from(Span::styled("context · files · tools", Style::default().fg(theme.muted))),
+        ]),
+        chunks[0],
+    );
+
+    let items = vec![
+        ListItem::new(Line::from(vec![
+            Span::styled("◇ ", Style::default().fg(theme.secondary)),
+            Span::styled("Workspace", Style::default().fg(theme.text)),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("◇ ", Style::default().fg(theme.accent)),
+            Span::styled("Changed files", Style::default().fg(theme.text)),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("◇ ", Style::default().fg(theme.success)),
+            Span::styled("MCP / LSP", Style::default().fg(theme.text)),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("◇ ", Style::default().fg(theme.warning)),
+            Span::styled("Costs / tokens", Style::default().fg(theme.text)),
+        ])),
+    ];
+
+    frame.render_widget(
+        List::new(items)
+            .style(Style::default().bg(theme.panel))
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(theme.border_subtle)),
+            ),
+        chunks[1],
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("✦ ", Style::default().fg(theme.accent)),
+            Span::styled("AppName", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+            Span::styled(" online", Style::default().fg(theme.muted)),
+        ]))
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(theme.border_subtle)),
+        ),
+        chunks[2],
+    );
+}
+```
+
+This gives you a distinctive left-side “mission rail” instead of the existing right panel.
+
+---
+
+## 13. Transcript cards
+
+```rust
+// src/widgets/message_card.rs
+
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Wrap},
+};
+
+use crate::theme::Theme;
+
+pub fn render_user_card(frame: &mut Frame, area: Rect, body: &str, theme: &Theme) {
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(theme.primary))
+        .style(Style::default().bg(theme.panel));
+
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::styled("YOU", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(body, Style::default().fg(theme.text))),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+pub fn render_assistant_text(frame: &mut Frame, area: Rect, body: &str, theme: &Theme) {
+    let text = Text::from(body);
+
+    frame.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().fg(theme.text).bg(theme.background))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+```
+
+The key design decision: **no more heavy left-border chat grammar**. Use top-edge cards, whitespace, and small labels.
+
+---
+
+## 14. Tool capsules
+
+```rust
+// src/widgets/tool_capsule.rs
+
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+};
+
+use crate::theme::Theme;
+
+pub enum ToolStatus {
+    Running,
+    Success,
+    Failed,
+}
+
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    name: &str,
+    summary: &str,
+    status: ToolStatus,
+    theme: &Theme,
+) {
+    let color = match status {
+        ToolStatus::Running => theme.info,
+        ToolStatus::Success => theme.success,
+        ToolStatus::Failed => theme.error,
+    };
+
+    let icon = match status {
+        ToolStatus::Running => "●",
+        ToolStatus::Success => "✓",
+        ToolStatus::Failed => "✕",
+    };
+
+    let line = Line::from(vec![
+        Span::styled(format!("{icon} "), Style::default().fg(color)),
+        Span::styled(name, Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+        Span::styled("  ", Style::default()),
+        Span::styled(summary, Style::default().fg(theme.muted)),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(line)
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(color))
+                    .style(Style::default().bg(theme.panel)),
+            ),
+        area,
+    );
+}
+```
+
+This is a premium TUI pattern: tools become compact, information-rich components rather than noisy logs.
+
+---
+
+## 15. Composer Deck
+
+```rust
+// src/widgets/composer.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Wrap},
+};
+
+use crate::{app::{AppState, ComposerMode}, theme::Theme};
+
+pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(if state.composer.focused {
+            theme.border_active
+        } else {
+            theme.border_subtle
+        }))
+        .style(Style::default().bg(theme.panel));
+
+    frame.render_widget(block, area);
+
+    let inner = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let mode = match state.composer.mode {
+        ComposerMode::Ask => "ASK",
+        ComposerMode::Shell => "SHELL",
+        ComposerMode::Plan => "PLAN",
+        ComposerMode::Build => "BUILD",
+    };
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(mode, Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(" · ", Style::default().fg(theme.muted)),
+            Span::styled("Describe the change, attach context, or run a command", Style::default().fg(theme.muted)),
+        ])),
+        chunks[0],
+    );
+
+    let input = if state.composer.input.is_empty() {
+        "Describe the change…"
+    } else {
+        &state.composer.input
+    };
+
+    let input_style = if state.composer.input.is_empty() {
+        Style::default().fg(theme.muted).bg(theme.panel)
+    } else {
+        Style::default().fg(theme.text).bg(theme.panel)
+    };
+
+    frame.render_widget(
+        Paragraph::new(input)
+            .style(input_style)
+            .wrap(Wrap { trim: false }),
+        chunks[1],
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Enter", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+            Span::styled(" send  ", Style::default().fg(theme.muted)),
+            Span::styled("Esc", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+            Span::styled(" clear  ", Style::default().fg(theme.muted)),
+            Span::styled("Ctrl+.", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(" theme", Style::default().fg(theme.muted)),
+        ])),
+        chunks[2],
+    );
+}
+```
+
+This becomes the signature bottom surface of the product.
+
+---
+
+## 16. Backend SSE bridge
+
+The new Rust client should read `/event` and convert backend events into `AppEvent::Backend`.
+
+```rust
+// src/client/sse.rs
+
+use futures_util::StreamExt;
+use tokio::sync::mpsc;
+
+use crate::event::AppEvent;
+
+pub async fn start_sse_task(
+    base_url: String,
+    tx: mpsc::Sender<AppEvent>,
+) -> color_eyre::Result<()> {
+    tokio::spawn(async move {
+        let url = format!("{base_url}/event");
+
+        let response = match reqwest::get(url).await {
+            Ok(r) => r,
+            Err(err) => {
+                let _ = tx.send(AppEvent::Error(format!("SSE connect failed: {err}"))).await;
+                return;
+            }
+        };
+
+        let mut stream = response.bytes_stream();
+
+        while let Some(next) = stream.next().await {
+            match next {
+                Ok(bytes) => {
+                    // Parse SSE frames here.
+                    // Then:
+                    // let event = parse_backend_event(&bytes)?;
+                    // tx.send(AppEvent::Backend(event)).await.ok();
+                }
+                Err(err) => {
+                    let _ = tx.send(AppEvent::Error(format!("SSE stream error: {err}"))).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+```
+
+The architecture document says the current app subscribes to `GET /event` for session lifecycle and streaming events, so the Ratatui client should preserve that behavior rather than inventing a new stream.
+
+---
+
+## 17. HTTP API bridge
+
+```rust
+// src/client/api.rs
+
+use serde::Serialize;
+
+#[derive(Clone)]
+pub struct ApiClient {
+    base_url: String,
+    http: reqwest::Client,
+}
+
+impl ApiClient {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            http: reqwest::Client::new(),
+        }
+    }
+
+    pub async fn submit_prompt(
+        &self,
+        session_id: &str,
+        text: &str,
+    ) -> color_eyre::Result<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            text: &'a str,
+        }
+
+        let url = format!("{}/session/{}/prompt", self.base_url, session_id);
+
+        self.http
+            .post(url)
+            .json(&Body { text })
+            .send()
+            .await?
+            .error_for_status()?;
+
+        Ok(())
+    }
+
+    pub async fn abort_session(&self, session_id: &str) -> color_eyre::Result<()> {
+        let url = format!("{}/session/{}/abort", self.base_url, session_id);
+
+        self.http
+            .post(url)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        Ok(())
+    }
+}
+```
+
+This maps cleanly to the documented backend surface.
+
+---
+
+## 18. What Ratatui lets you do better than the current frontend
+
+Ratatui gives you a more disciplined path to a truly premium terminal app:
+
+| Area             | Existing OpenTUI/Solid approach    | Ratatui approach                             |
+| ---------------- | ---------------------------------- | -------------------------------------------- |
+| Rendering        | Retained/reactive TS components    | Immediate-mode Rust frame render             |
+| Layout           | JSX-style boxes                    | Explicit `Rect` layout engine                |
+| Performance      | JS event/render layer              | Native Rust draw loop                        |
+| Theming          | JSON → RGBA theme resolver         | Strongly typed theme structs, optional serde |
+| Input            | OpenTUI keyboard hooks             | Unified event reducer                        |
+| Backend stream   | SDK/SSE provider                   | Direct async SSE task                        |
+| Widgets          | Custom JSX components              | Native widgets + custom `Widget` impls       |
+| Distinctiveness  | Still near inherited OpenCode tree | Entirely new app shell                       |
+| Recognition risk | Higher                             | Much lower                                   |
+
+Ratatui 0.30’s modularization also means application authors can still use the main `ratatui` crate while widget authors can depend on `ratatui-core` for lower dependency weight and API stability. That matters if you later build a public plugin/widget ecosystem around your app. ([Docs.rs][4])
+
+---
+
+## 19. New file-change plan if Ratatui is adopted
+
+The previous report’s TS file changes still apply for the current frontend. But with a Ratatui rewrite, add these new files instead of trying to over-invest in the TS visual layer.
+
+### New Rust files
+
+| New file                                         | Purpose                                |
+| ------------------------------------------------ | -------------------------------------- |
+| `crates/jekko-tui/Cargo.toml`                    | Rust TUI crate dependencies            |
+| `crates/jekko-tui/src/main.rs`                   | Terminal setup, run loop               |
+| `crates/jekko-tui/src/app.rs`                    | `AppState`, route state, reducer owner |
+| `crates/jekko-tui/src/event.rs`                  | Unified event enum                     |
+| `crates/jekko-tui/src/action.rs`                 | Command/event reducer                  |
+| `crates/jekko-tui/src/client/api.rs`             | HTTP backend client                    |
+| `crates/jekko-tui/src/client/sse.rs`             | SSE `/event` bridge                    |
+| `crates/jekko-tui/src/client/schema.rs`          | Backend event/session schemas          |
+| `crates/jekko-tui/src/theme/astra.rs`            | Dark/white theme                       |
+| `crates/jekko-tui/src/theme/palette.rs`          | Color utilities                        |
+| `crates/jekko-tui/src/theme/syntax.rs`           | Syntax colors                          |
+| `crates/jekko-tui/src/layout/regions.rs`         | App layout split                       |
+| `crates/jekko-tui/src/layout/responsive.rs`      | Width/height behavior                  |
+| `crates/jekko-tui/src/widgets/command_ribbon.rs` | Top command ribbon                     |
+| `crates/jekko-tui/src/widgets/left_rail.rs`      | Left mission rail                      |
+| `crates/jekko-tui/src/widgets/transcript.rs`     | Transcript canvas                      |
+| `crates/jekko-tui/src/widgets/message_card.rs`   | User/assistant cards                   |
+| `crates/jekko-tui/src/widgets/tool_capsule.rs`   | Tool status widgets                    |
+| `crates/jekko-tui/src/widgets/composer.rs`       | Bottom composer deck                   |
+| `crates/jekko-tui/src/widgets/dialog.rs`         | Command center/modal layer             |
+| `crates/jekko-tui/src/widgets/toast.rs`          | Toast/signal layer                     |
+| `crates/jekko-tui/src/widgets/status_strip.rs`   | Bottom status                          |
+| `crates/jekko-tui/src/widgets/logo.rs`           | New identity                           |
+| `crates/jekko-tui/src/command/registry.rs`       | Commands                               |
+| `crates/jekko-tui/src/command/keymap.rs`         | Shortcuts including `Ctrl+.`           |
+
+### Existing TS files still worth changing immediately
+
+| Existing file                                    | Why still change                               |                      |
+| ------------------------------------------------ | ---------------------------------------------- | -------------------- |
+| `app-bindings.tsx`                               | Remove `OC                                     | ` terminal title now |
+| `routes/session/sidebar.tsx`                     | Remove `OpenCode` footer now                   |                      |
+| `feature-plugins/sidebar/footer.tsx`             | Remove `OpenCode` footer now                   |                      |
+| `feature-plugins/home/tips-view.tsx`             | Remove `/oc` now                               |                      |
+| `server/routes/instance/httpapi/handlers/tui.ts` | Fix `/open-themes` bug                         |                      |
+| `server/routes/instance/tui.ts`                  | Fix `/open-themes` bug                         |                      |
+| `TUI_BACKEND_API.md`                             | Document the Rust Ratatui client path          |                      |
+| `TUI_CODE.md`                                    | Document current frontend vs new Rust frontend |                      |
+
+---
+
+## 20. How to preserve plugins
+
+The current TS plugin system will not automatically carry over to Ratatui. I recommend splitting plugin support into two categories:
+
+### Phase 1: backend-driven plugin data
+
+Plugins can provide data through backend events/API. Ratatui renders known panel types:
+
+```rust
+pub enum RailPanel {
+    Context(ContextPanel),
+    Files(FilesPanel),
+    Mcp(McpPanel),
+    Lsp(LspPanel),
+    Tasks(TaskPanel),
+    CustomJson(CustomPanel),
+}
+```
+
+### Phase 2: Rust widget plugins
+
+Later, expose a plugin interface around `ratatui-core` widget traits. Since Ratatui 0.30 modularized core types into `ratatui-core`, third-party widget authors can target the core crate instead of pulling the full app/widget/backend stack. ([Docs.rs][4])
+
+---
+
+## 21. Recommended migration plan
+
+### Phase A — Immediate de-recognition
+
+Do this in the existing codebase:
+
+```txt
+Remove OpenCode / OC / /oc
+Move visible panel left
+Add astra dark/white theme
+Add Ctrl+. mode switch
+Fix open-themes command bug
+```
+
+### Phase B — Build Ratatui shell
+
+Create the Rust crate and implement:
+
+```txt
+theme
+layout
+command ribbon
+left rail
+composer
+transcript
+toast
+dialogs
+keybindings
+```
+
+Mock backend data first.
+
+### Phase C — Connect backend
+
+Implement:
+
+```txt
+HTTP session list/get/prompt/abort
+SSE /event stream
+session.next.* event reducer
+tool call lifecycle reducer
+permission/question reducer
+```
+
+### Phase D — Premium features
+
+Add:
+
+```txt
+smooth scroll state
+searchable transcript
+command palette
+theme picker
+model picker
+session switcher
+diff viewer
+tool inspector
+cost/token gauges
+sparkline panels
+```
+
+### Phase E — Retire old frontend
+
+Once the Ratatui client covers core flows, make it the default TUI and keep the TS/OpenTUI client only as legacy during transition.
+
+---
+
+## 22. Final Ratatui recommendation
+
+I would revise the project goal like this:
+
+> The current OpenTUI/Solid frontend should be treated as the compatibility client. The flagship should become a Rust-native Ratatui frontend with a left mission rail, command ribbon, transcript canvas, composer deck, and first-class dark/white theme switching.
+
+That gives you three huge wins:
+
+1. **A completely different identity** from OpenCode.
+2. **A true Rust TUI foundation** instead of a TypeScript terminal layer.
+3. **A more powerful long-term rendering model** for dashboards, streaming state, widgets, charts, gauges, and custom app panels.
+
+The Ratatui path is more work than restyling the existing code, but it is the path I would choose for the “world’s greatest Rust TUI coding app.”
+
+[1]: https://docs.rs/ratatui/latest/ratatui/ "ratatui - Rust"
+[2]: https://ratatui.rs/concepts/rendering/ "Rendering | Ratatui"
+[3]: https://ratatui.rs/installation/feature-flags/ "Feature Flags | Ratatui"
+[4]: https://docs.rs/ratatui/latest/ratatui/widgets/index.html "ratatui::widgets - Rust"
+

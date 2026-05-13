@@ -45,15 +45,37 @@ fn default_tui_paints_first_frame() -> Result<()> {
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        page.wait_for_text("JEKKO", HOME_TIMEOUT)
-            .with_context(|| {
-                let _ = page.screenshot(artifact_dir.join(format!("{case}-home-timeout.png")));
-                let _ = copy_jekko_logs(&workspace, &case);
-                format!("{case} did not paint the home sentinel")
-            })?;
+        page.wait_for_text("JEKKO", HOME_TIMEOUT).with_context(|| {
+            let _ = page.screenshot(artifact_dir.join(format!("{case}-home-timeout.png")));
+            let _ = copy_jekko_logs(&workspace, &case);
+            format!("{case} did not paint the home sentinel")
+        })?;
 
         page.screenshot(artifact_dir.join(format!("{case}-home.png")))?;
     }
 
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn default_tui_clears_loading_screen_quickly() -> Result<()> {
+    let Some(jekko) = jekko_bin() else {
+        eprintln!("skipped: set JEKKO_BIN to the jekko binary path");
+        return Ok(());
+    };
+
+    let artifact_dir = ensure_artifact_dir()?.join("boot");
+    std::fs::create_dir_all(&artifact_dir)?;
+
+    let (workspace, _project, _, _, _, _) =
+        prepare_workspace("project", "# default-tui-loader-boot\n")?;
+    let case = "default-tui-loader";
+    let page = spawn_jekko_with_size(&workspace, &jekko, 80, 24, case)?;
+
+    page.expect_screen()
+        .not_to_contain_text("Loading TUI plugins...")?;
+
+    page.screenshot(artifact_dir.join(format!("{case}-home.png")))?;
     Ok(())
 }

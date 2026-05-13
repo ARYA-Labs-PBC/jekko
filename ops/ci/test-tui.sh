@@ -9,5 +9,7 @@ git config --global user.name "jekko"
 bun --cwd packages/jekko ./script/build.ts --single --skip-install
 bun --cwd packages/jekko ./script/tui-binary-smoke.ts
 bun --cwd packages/jekko test test/cli/tui/ test/cli/cmd/tui/
-JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
-JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-fail-fast
+JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)"
+JEKKO_BIN="$JEKKO_BIN" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_clears_loading_screen_quickly -- --nocapture
+JEKKO_BIN="$JEKKO_BIN" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
+JEKKO_BIN="$JEKKO_BIN" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-fail-fast

@@ -37,11 +37,7 @@ impl QueryRouter {
     }
 }
 
-impl Default for QueryRouter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::providers::default_from_new!(QueryRouter);
 
 pub fn plan_providers(
     entries: &[ProviderEntry],

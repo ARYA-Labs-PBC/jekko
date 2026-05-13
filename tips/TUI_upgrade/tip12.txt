@@ -1,0 +1,1431 @@
+Absolutely — **Ratatui should be the “ultimate version” path**.
+
+The important distinction is this: the uploaded TUI is currently **TypeScript + SolidJS + OpenTUI**, not Rust. So Ratatui cannot be sprinkled into the existing frontend as a normal dependency. To leverage Ratatui properly, the right move is to create a **new Rust TUI frontend** that speaks to the same backend/API/event system already documented in `TUI_BACKEND_API.md`.
+
+That is actually a great architecture fit. The existing backend already exposes REST endpoints, SSE events, session APIs, prompt APIs, provider/config APIs, permission/question APIs, and TUI control events. So the Rust/Ratatui version should not rewrite the backend. It should replace the rendering/input layer.
+
+Ratatui is a strong match for this because it provides immediate-mode Rust rendering, responsive layouts, rich widgets such as charts, sparklines, tables, gauges, scrollable lists, and progress bars, plus dynamic constraint-based layouts that adapt from small tmux panes to large terminals. ([Ratatui][1]) Ratatui also supports terminal backends including Crossterm, Termion, Termwiz, and a `TestBackend` that is useful for unit-testing UI rendering. ([Ratatui][2]) In Ratatui `0.30.0`, the project was modularized into crates such as `ratatui-core`, `ratatui-widgets`, and backend crates, with a newer `ratatui::run()` API and major widget/layout improvements. ([Ratatui][3])
+
+Below is the engineering addendum I would attach to the prior report.
+
+---
+
+# Ratatui Replatform Addendum: Build the World-Class Rust TUI
+
+## 1. Recommended Strategy
+
+Do **not** port the current TypeScript UI one component at a time.
+
+Instead, build a new Rust frontend:
+
+```txt
+Current backend / worker / HTTP / SSE
+        │
+        │ REST + SSE
+        ▼
+New Rust Ratatui frontend
+```
+
+The current OpenTUI frontend can stay during transition, but the future flagship TUI should be:
+
+```txt
+jekko-tui-rs
+├── Ratatui renderer
+├── Crossterm input/backend
+├── Tokio async runtime
+├── reqwest HTTP client
+├── SSE event stream client
+├── JSON theme/config loader
+├── Snapshot-tested custom widgets
+└── Atlas visual system
+```
+
+This lets you keep the backend strength while making the visible app completely unrecognizable from OpenCode/OpenTUI.
+
+---
+
+# 2. Why Ratatui Is Worth It Here
+
+Ratatui gives you a more native, more controllable, more premium Rust TUI surface.
+
+Use it for:
+
+1. **True responsive layout**
+
+   * Left rail can collapse, overlay, resize, and split cleanly.
+   * Top control strip, center stream, and bottom prompt can be managed with `Layout::vertical` and `Layout::horizontal`.
+
+2. **Custom widgets**
+
+   * Message cards.
+   * Tool trace capsules.
+   * Diff viewers.
+   * Permission approval panels.
+   * Command runway.
+   * Left Atlas Rail sections.
+     Ratatui’s docs show custom widgets implemented through the `Widget` trait, including mouse-interactive examples. ([Ratatui][4])
+
+3. **Charts, gauges, sparklines, tables**
+
+   * Token burn gauges.
+   * Context usage gauges.
+   * Agent latency sparklines.
+   * Model cost charts.
+   * File activity tables.
+   * Build/test status panels.
+     These are exactly the kinds of “coding cockpit” features that make the app feel world-class.
+
+4. **Canvas-based visualizations**
+
+   * Agent execution graph.
+   * Session timeline.
+   * Worktree topology.
+   * Tool-call dependency map.
+     Ratatui includes a `Canvas` widget for drawing shapes, points, maps, and other custom visual content. ([Ratatui][5])
+
+5. **Snapshot testing**
+
+   * Use Ratatui’s `TestBackend` to lock visual output.
+   * This is huge for avoiding regressions in a high-polish TUI. Ratatui explicitly documents `TestBackend` as useful for unit-testing application UI. ([Ratatui][2])
+
+6. **Theme serialization**
+
+   * Use the Ratatui `serde` feature so style/color types can be serialized/deserialized for saved themes. ([Ratatui][6])
+
+---
+
+# 3. New Rust Crate Layout
+
+Add a new Rust frontend crate, ideally separate from the TypeScript package.
+
+Recommended path:
+
+```txt
+crates/jekko-tui-rs/
+├── Cargo.toml
+├── src/
+│   ├── main.rs
+│   ├── app.rs
+│   ├── action.rs
+│   ├── config.rs
+│   ├── keymap.rs
+│   ├── terminal.rs
+│   ├── backend/
+│   │   ├── mod.rs
+│   │   ├── client.rs
+│   │   ├── event_stream.rs
+│   │   ├── schema.rs
+│   │   └── command.rs
+│   ├── state/
+│   │   ├── mod.rs
+│   │   ├── session.rs
+│   │   ├── message.rs
+│   │   ├── prompt.rs
+│   │   ├── rail.rs
+│   │   └── theme.rs
+│   ├── ui/
+│   │   ├── mod.rs
+│   │   ├── layout.rs
+│   │   ├── theme.rs
+│   │   ├── style.rs
+│   │   └── widgets/
+│   │       ├── mod.rs
+│   │       ├── control_strip.rs
+│   │       ├── atlas_rail.rs
+│   │       ├── signal_stream.rs
+│   │       ├── message_card.rs
+│   │       ├── tool_trace.rs
+│   │       ├── diff_view.rs
+│   │       ├── command_runway.rs
+│   │       ├── command_lens.rs
+│   │       ├── approval_card.rs
+│   │       ├── status_gauge.rs
+│   │       ├── sparkline_panel.rs
+│   │       └── modal.rs
+│   └── tests/
+│       └── snapshots.rs
+```
+
+This gives you a serious Rust-native UI system rather than a clone of the current component tree.
+
+---
+
+# 4. Cargo Dependencies
+
+Recommended initial `Cargo.toml`:
+
+```toml
+[package]
+name = "jekko-tui-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = { version = "0.30", features = ["serde", "crossterm_0_29"] }
+crossterm = "0.29"
+
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+eventsource-stream = "0.2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+color-eyre = "0.6"
+
+unicode-width = "0.2"
+textwrap = "0.16"
+pulldown-cmark = "0.12"
+
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+insta = "1"
+```
+
+Ratatui’s default backend is Crossterm, and the docs note that Ratatui `0.30+` supports choosing compatible Crossterm versions with feature flags such as `crossterm_0_28` and `crossterm_0_29`. ([Ratatui][2])
+
+---
+
+# 5. Runtime Architecture
+
+The Rust TUI should have three concurrent input streams:
+
+```txt
+┌──────────────────────────────────────────────┐
+│                 Rust App State               │
+├──────────────────────┬───────────────────────┤
+│ keyboard/mouse input │ backend SSE events    │
+│ prompt edits         │ session deltas        │
+│ command palette      │ tool updates          │
+│ resize events        │ permissions/questions │
+└──────────────────────┴───────────────────────┘
+                 │
+                 ▼
+           Ratatui render()
+```
+
+Use an internal action enum:
+
+```rust
+#[derive(Debug, Clone)]
+pub enum Action {
+    Tick,
+    Render,
+    Quit,
+
+    TerminalResize { width: u16, height: u16 },
+
+    ToggleThemeMode,
+    ToggleRail,
+    OpenCommandLens,
+    CloseModal,
+
+    PromptInput(char),
+    PromptBackspace,
+    PromptSubmit,
+    PromptClear,
+
+    SessionSelect(String),
+    SessionCreate,
+    SessionAbort,
+    SessionCompact,
+
+    BackendEvent(BackendEvent),
+    BackendError(String),
+}
+```
+
+This is the Ratatui equivalent of the current Solid event/store updates.
+
+---
+
+# 6. Main Entry Point
+
+Example `src/main.rs`:
+
+```rust
+use color_eyre::Result;
+
+mod action;
+mod app;
+mod backend;
+mod config;
+mod keymap;
+mod state;
+mod terminal;
+mod ui;
+
+use app::App;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    color_eyre::install()?;
+
+    let config = config::Config::load()?;
+    let backend = backend::Client::new(config.backend_url.clone());
+
+    let mut app = App::new(config, backend).await?;
+
+    ratatui::run(|terminal| {
+        app.run(terminal)
+    })?;
+
+    Ok(())
+}
+```
+
+Ratatui `0.30.0` introduced `ratatui::run()`, which initializes and restores the terminal around a closure. ([Ratatui][3])
+
+---
+
+# 7. Backend Client
+
+Use the existing backend API instead of inventing a new one.
+
+Example `src/backend/client.rs`:
+
+```rust
+use anyhow::Result;
+use reqwest::Client as HttpClient;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone)]
+pub struct Client {
+    http: HttpClient,
+    base_url: String,
+}
+
+impl Client {
+    pub fn new(base_url: String) -> Self {
+        Self {
+            http: HttpClient::new(),
+            base_url,
+        }
+    }
+
+    pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
+        let url = format!("{}/session", self.base_url);
+        let response = self.http.get(url).send().await?;
+        Ok(response.json().await?)
+    }
+
+    pub async fn submit_prompt(
+        &self,
+        session_id: &str,
+        request: PromptRequest,
+    ) -> Result<()> {
+        let url = format!("{}/session/{}/prompt", self.base_url, session_id);
+        self.http.post(url).json(&request).send().await?;
+        Ok(())
+    }
+
+    pub async fn abort_session(&self, session_id: &str) -> Result<()> {
+        let url = format!("{}/session/{}/abort", self.base_url, session_id);
+        self.http.post(url).send().await?;
+        Ok(())
+    }
+
+    pub async fn open_theme_picker(&self) -> Result<()> {
+        let url = format!("{}/tui/open-themes", self.base_url);
+        self.http.post(url).send().await?;
+        Ok(())
+    }
+
+    pub async fn toggle_theme_mode(&self) -> Result<()> {
+        let url = format!("{}/tui/toggle-theme-mode", self.base_url);
+        self.http.post(url).send().await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionSummary {
+    pub id: String,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptRequest {
+    pub text: String,
+    pub files: Vec<String>,
+}
+```
+
+This keeps the Ratatui frontend aligned with the `TUI_BACKEND_API.md` flow.
+
+---
+
+# 8. SSE Event Stream
+
+Example `src/backend/event_stream.rs`:
+
+```rust
+use anyhow::Result;
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
+use reqwest::Client;
+use tokio::sync::mpsc;
+
+use crate::action::Action;
+
+pub async fn spawn_event_stream(
+    base_url: String,
+    tx: mpsc::UnboundedSender<Action>,
+) -> Result<()> {
+    let url = format!("{}/event", base_url);
+
+    tokio::spawn(async move {
+        let client = Client::new();
+
+        loop {
+            let result = client.get(&url).send().await;
+
+            let Ok(response) = result else {
+                let _ = tx.send(Action::BackendError("failed to connect to event stream".into()));
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                continue;
+            };
+
+            let mut stream = response.bytes_stream().eventsource();
+
+            while let Some(event) = stream.next().await {
+                match event {
+                    Ok(event) => {
+                        match serde_json::from_str::<crate::backend::schema::BackendEvent>(&event.data) {
+                            Ok(parsed) => {
+                                let _ = tx.send(Action::BackendEvent(parsed));
+                            }
+                            Err(err) => {
+                                let _ = tx.send(Action::BackendError(format!(
+                                    "invalid backend event: {err}"
+                                )));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Action::BackendError(format!(
+                            "event stream error: {err}"
+                        )));
+                        break;
+                    }
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    });
+
+    Ok(())
+}
+```
+
+---
+
+# 9. Atlas Layout in Ratatui
+
+The target layout becomes extremely clean in Ratatui.
+
+Example `src/ui/layout.rs`:
+
+```rust
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+#[derive(Debug, Clone, Copy)]
+pub struct AtlasLayout {
+    pub control_strip: Rect,
+    pub atlas_rail: Rect,
+    pub signal_stream: Rect,
+    pub command_runway: Rect,
+}
+
+pub fn compute(area: Rect, rail_visible: bool, rail_width: u16) -> AtlasLayout {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Control Strip
+            Constraint::Min(8),    // Main body
+            Constraint::Length(5), // Command Runway
+        ])
+        .split(area);
+
+    let body = vertical[1];
+
+    let horizontal = if rail_visible {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(rail_width), // Left Atlas Rail
+                Constraint::Min(40),            // Signal Stream
+            ])
+            .split(body)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(0), Constraint::Min(40)])
+            .split(body)
+    };
+
+    AtlasLayout {
+        control_strip: vertical[0],
+        atlas_rail: horizontal[0],
+        signal_stream: horizontal[1],
+        command_runway: vertical[2],
+    }
+}
+```
+
+This locks in the requested left-panel design.
+
+---
+
+# 10. Atlas Theme in Rust
+
+Example `src/ui/theme.rs`:
+
+```rust
+use ratatui::style::Color;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Palette {
+    pub primary: Color,
+    pub secondary: Color,
+    pub accent: Color,
+
+    pub text: Color,
+    pub text_muted: Color,
+
+    pub background: Color,
+    pub panel: Color,
+    pub element: Color,
+    pub menu: Color,
+
+    pub border: Color,
+    pub border_active: Color,
+    pub border_subtle: Color,
+
+    pub success: Color,
+    pub warning: Color,
+    pub error: Color,
+    pub info: Color,
+}
+
+pub fn atlas(mode: ThemeMode) -> Palette {
+    match mode {
+        ThemeMode::Dark => Palette {
+            primary: Color::Rgb(75, 225, 255),
+            secondary: Color::Rgb(155, 140, 255),
+            accent: Color::Rgb(244, 201, 93),
+
+            text: Color::Rgb(234, 242, 255),
+            text_muted: Color::Rgb(139, 154, 178),
+
+            background: Color::Rgb(8, 11, 18),
+            panel: Color::Rgb(13, 19, 32),
+            element: Color::Rgb(18, 27, 45),
+            menu: Color::Rgb(16, 24, 39),
+
+            border: Color::Rgb(38, 52, 76),
+            border_active: Color::Rgb(75, 225, 255),
+            border_subtle: Color::Rgb(27, 38, 57),
+
+            success: Color::Rgb(114, 241, 184),
+            warning: Color::Rgb(244, 201, 93),
+            error: Color::Rgb(255, 107, 138),
+            info: Color::Rgb(106, 173, 255),
+        },
+
+        ThemeMode::Light => Palette {
+            primary: Color::Rgb(0, 109, 143),
+            secondary: Color::Rgb(91, 71, 184),
+            accent: Color::Rgb(179, 107, 0),
+
+            text: Color::Rgb(16, 23, 37),
+            text_muted: Color::Rgb(102, 112, 133),
+
+            background: Color::Rgb(251, 252, 254),
+            panel: Color::Rgb(243, 246, 251),
+            element: Color::Rgb(234, 240, 248),
+            menu: Color::Rgb(255, 255, 255),
+
+            border: Color::Rgb(199, 209, 224),
+            border_active: Color::Rgb(0, 109, 143),
+            border_subtle: Color::Rgb(221, 229, 240),
+
+            success: Color::Rgb(8, 122, 82),
+            warning: Color::Rgb(178, 99, 0),
+            error: Color::Rgb(198, 56, 90),
+            info: Color::Rgb(15, 102, 194),
+        },
+    }
+}
+```
+
+---
+
+# 11. Control Strip Widget
+
+Example `src/ui/widgets/control_strip.rs`:
+
+```rust
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Style, Stylize},
+    text::{Line, Span},
+    widgets::Widget,
+};
+
+use crate::state::AppState;
+use crate::ui::theme::Palette;
+
+pub struct ControlStrip<'a> {
+    pub state: &'a AppState,
+    pub palette: Palette,
+}
+
+impl Widget for ControlStrip<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let session_title = self
+            .state
+            .active_session_title()
+            .unwrap_or("No session");
+
+        let mode = match self.state.theme_mode {
+            crate::ui::theme::ThemeMode::Dark => "Atlas Dark",
+            crate::ui::theme::ThemeMode::Light => "Atlas Light",
+        };
+
+        let line = Line::from(vec![
+            Span::styled("◆", Style::default().fg(self.palette.primary)),
+            Span::styled(" Jekko Atlas", Style::default().fg(self.palette.text).bold()),
+            Span::styled("  ·  ", Style::default().fg(self.palette.text_muted)),
+            Span::styled(session_title, Style::default().fg(self.palette.secondary)),
+            Span::styled("  ·  ", Style::default().fg(self.palette.text_muted)),
+            Span::styled(mode, Style::default().fg(self.palette.text_muted)),
+            Span::styled("  ·  Ctrl+X D", Style::default().fg(self.palette.accent)),
+        ]);
+
+        line.render(area, buf);
+    }
+}
+```
+
+---
+
+# 12. Atlas Rail Widget
+
+Example `src/ui/widgets/atlas_rail.rs`:
+
+```rust
+use ratatui::{
+    buffer::Buffer,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Style, Stylize},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Widget},
+};
+
+use crate::state::AppState;
+use crate::ui::theme::Palette;
+
+pub struct AtlasRail<'a> {
+    pub state: &'a AppState,
+    pub palette: Palette,
+}
+
+impl Widget for AtlasRail<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .borders(Borders::RIGHT)
+            .border_style(Style::default().fg(self.palette.border_subtle))
+            .style(Style::default().bg(self.palette.panel));
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Length(4),
+                Constraint::Length(6),
+                Constraint::Min(4),
+                Constraint::Length(2),
+            ])
+            .split(inner);
+
+        let title = Line::from(vec![
+            Span::styled("◆", Style::default().fg(self.palette.primary)),
+            Span::styled(" Atlas Rail", Style::default().fg(self.palette.text).bold()),
+        ]);
+        Paragraph::new(title).render(chunks[0], buf);
+
+        let context_percent = self.state.context_percent();
+        Gauge::default()
+            .label(format!("{context_percent}% context"))
+            .gauge_style(Style::default().fg(self.palette.primary).bg(self.palette.element))
+            .ratio((context_percent as f64 / 100.0).clamp(0.0, 1.0))
+            .render(chunks[1], buf);
+
+        let files: Vec<ListItem> = self
+            .state
+            .changed_files()
+            .iter()
+            .map(|file| {
+                ListItem::new(Line::from(vec![
+                    Span::styled("● ", Style::default().fg(self.palette.warning)),
+                    Span::styled(file.as_str(), Style::default().fg(self.palette.text)),
+                ]))
+            })
+            .collect();
+
+        List::new(files)
+            .block(Block::default().title("Files").borders(Borders::TOP))
+            .style(Style::default().fg(self.palette.text))
+            .render(chunks[2], buf);
+
+        let services = vec![
+            ListItem::new("● LSP ready"),
+            ListItem::new("● MCP connected"),
+            ListItem::new("● Formatter ready"),
+        ];
+
+        List::new(services)
+            .block(Block::default().title("Services").borders(Borders::TOP))
+            .style(Style::default().fg(self.palette.text_muted))
+            .render(chunks[3], buf);
+    }
+}
+```
+
+This is where Ratatui’s gauges, lists, blocks, and layout engine immediately make the left rail feel like a real coding cockpit.
+
+---
+
+# 13. Signal Stream Widget
+
+The Signal Stream should be a scrollable transcript made of custom cards.
+
+Example high-level widget:
+
+```rust
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::Style,
+    widgets::{Block, Borders, Paragraph, Widget},
+};
+
+use crate::state::AppState;
+use crate::ui::theme::Palette;
+
+pub struct SignalStream<'a> {
+    pub state: &'a AppState,
+    pub palette: Palette,
+}
+
+impl Widget for SignalStream<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .borders(Borders::NONE)
+            .style(Style::default().bg(self.palette.background));
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let lines = self.state.rendered_message_lines(inner.width as usize);
+
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" Signal Stream ")
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(self.palette.border_subtle)),
+            )
+            .style(Style::default().fg(self.palette.text).bg(self.palette.background))
+            .scroll((self.state.scroll_offset, 0))
+            .render(inner, buf);
+    }
+}
+```
+
+For the premium version, do not use one giant `Paragraph` forever. Move to custom widgets:
+
+```txt
+MessageCard
+ToolTrace
+DiffView
+ReasoningBlock
+ShellBlock
+CompactionBlock
+```
+
+Each should implement `Widget` or `StatefulWidget`.
+
+---
+
+# 14. Command Runway Widget
+
+Example `src/ui/widgets/command_runway.rs`:
+
+```rust
+use ratatui::{
+    buffer::Buffer,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Style, Stylize},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Widget},
+};
+
+use crate::state::AppState;
+use crate::ui::theme::Palette;
+
+pub struct CommandRunway<'a> {
+    pub state: &'a AppState,
+    pub palette: Palette,
+}
+
+impl Widget for CommandRunway<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let focused = self.state.prompt_focused;
+
+        let border_color = if focused {
+            self.palette.border_active
+        } else {
+            self.palette.border_subtle
+        };
+
+        let block = Block::default()
+            .title(" Command Runway ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color))
+            .style(Style::default().bg(self.palette.panel));
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+
+        let meta = Line::from(vec![
+            Span::styled("◆ ", Style::default().fg(self.palette.primary)),
+            Span::styled("agent: ", Style::default().fg(self.palette.text_muted)),
+            Span::styled(self.state.agent_label(), Style::default().fg(self.palette.text)),
+            Span::styled(" · model: ", Style::default().fg(self.palette.text_muted)),
+            Span::styled(self.state.model_label(), Style::default().fg(self.palette.secondary)),
+        ]);
+
+        Paragraph::new(meta).render(rows[0], buf);
+
+        let prompt = Line::from(vec![
+            Span::styled("› ", Style::default().fg(self.palette.primary).bold()),
+            Span::styled(self.state.prompt.text.as_str(), Style::default().fg(self.palette.text)),
+        ]);
+
+        Paragraph::new(prompt).render(rows[1], buf);
+
+        let help = Line::from(vec![
+            Span::styled("Ctrl+X D", Style::default().fg(self.palette.accent)),
+            Span::styled(" mode · ", Style::default().fg(self.palette.text_muted)),
+            Span::styled("Ctrl+P", Style::default().fg(self.palette.accent)),
+            Span::styled(" commands · ", Style::default().fg(self.palette.text_muted)),
+            Span::styled("Esc", Style::default().fg(self.palette.accent)),
+            Span::styled(" stop", Style::default().fg(self.palette.text_muted)),
+        ]);
+
+        Paragraph::new(help).render(rows[2], buf);
+    }
+}
+```
+
+---
+
+# 15. Keyboard Handling: White/Dark Shortcut
+
+Example `src/keymap.rs`:
+
+```rust
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::action::Action;
+
+#[derive(Debug, Default)]
+pub struct KeyState {
+    leader_active: bool,
+}
+
+impl KeyState {
+    pub fn handle(&mut self, key: KeyEvent) -> Option<Action> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('x') {
+            self.leader_active = true;
+            return None;
+        }
+
+        if self.leader_active {
+            self.leader_active = false;
+
+            return match key.code {
+                KeyCode::Char('d') | KeyCode::Char('D') => Some(Action::ToggleThemeMode),
+                KeyCode::Char('b') | KeyCode::Char('B') => Some(Action::ToggleRail),
+                KeyCode::Char('p') | KeyCode::Char('P') => Some(Action::OpenCommandLens),
+                _ => None,
+            };
+        }
+
+        match key.code {
+            KeyCode::Esc => Some(Action::SessionAbort),
+            KeyCode::Enter => Some(Action::PromptSubmit),
+            KeyCode::Backspace => Some(Action::PromptBackspace),
+            KeyCode::Char(c) => Some(Action::PromptInput(c)),
+            _ => None,
+        }
+    }
+}
+```
+
+Behavior:
+
+```txt
+Ctrl+X D    Toggle Atlas Dark / Atlas Light
+Ctrl+X B    Toggle Atlas Rail
+Ctrl+P      Command Lens
+Esc         Stop current agent response
+Enter       Submit prompt
+```
+
+---
+
+# 16. Render Loop
+
+Example `src/app.rs`:
+
+```rust
+use std::time::Duration;
+
+use color_eyre::Result;
+use crossterm::event::{self, Event};
+use ratatui::DefaultTerminal;
+use tokio::sync::mpsc;
+
+use crate::{
+    action::Action,
+    backend::Client,
+    config::Config,
+    keymap::KeyState,
+    state::AppState,
+    ui,
+};
+
+pub struct App {
+    config: Config,
+    backend: Client,
+    state: AppState,
+    key_state: KeyState,
+    tx: mpsc::UnboundedSender<Action>,
+    rx: mpsc::UnboundedReceiver<Action>,
+}
+
+impl App {
+    pub async fn new(config: Config, backend: Client) -> Result<Self> {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        crate::backend::event_stream::spawn_event_stream(
+            config.backend_url.clone(),
+            tx.clone(),
+        )
+        .await?;
+
+        Ok(Self {
+            config,
+            backend,
+            state: AppState::default(),
+            key_state: KeyState::default(),
+            tx,
+            rx,
+        })
+    }
+
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        loop {
+            terminal.draw(|frame| {
+                ui::render(frame, &self.state);
+            })?;
+
+            while let Ok(action) = self.rx.try_recv() {
+                self.update(action)?;
+            }
+
+            if event::poll(Duration::from_millis(16))? {
+                match event::read()? {
+                    Event::Key(key) => {
+                        if let Some(action) = self.key_state.handle(key) {
+                            self.update(action)?;
+                        }
+                    }
+                    Event::Resize(width, height) => {
+                        self.update(Action::TerminalResize { width, height })?;
+                    }
+                    _ => {}
+                }
+            }
+
+            if self.state.should_quit {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn update(&mut self, action: Action) -> Result<()> {
+        match action {
+            Action::Quit => self.state.should_quit = true,
+
+            Action::ToggleThemeMode => {
+                self.state.toggle_theme_mode();
+            }
+
+            Action::ToggleRail => {
+                self.state.rail_visible = !self.state.rail_visible;
+            }
+
+            Action::PromptInput(c) => {
+                self.state.prompt.text.push(c);
+            }
+
+            Action::PromptBackspace => {
+                self.state.prompt.text.pop();
+            }
+
+            Action::PromptSubmit => {
+                let text = self.state.prompt.text.clone();
+                self.state.prompt.text.clear();
+
+                let backend = self.backend.clone();
+                let session_id = self.state.active_session_id.clone();
+
+                tokio::spawn(async move {
+                    let _ = backend.submit_prompt(
+                        &session_id,
+                        crate::backend::client::PromptRequest {
+                            text,
+                            files: vec![],
+                        },
+                    ).await;
+                });
+            }
+
+            Action::BackendEvent(event) => {
+                self.state.apply_backend_event(event);
+            }
+
+            Action::BackendError(message) => {
+                self.state.push_error(message);
+            }
+
+            _ => {}
+        }
+
+        Ok(())
+    }
+}
+```
+
+---
+
+# 17. Main UI Renderer
+
+Example `src/ui/mod.rs`:
+
+```rust
+use ratatui::Frame;
+
+use crate::state::AppState;
+
+pub mod layout;
+pub mod style;
+pub mod theme;
+pub mod widgets;
+
+use widgets::{
+    atlas_rail::AtlasRail,
+    command_runway::CommandRunway,
+    control_strip::ControlStrip,
+    signal_stream::SignalStream,
+};
+
+pub fn render(frame: &mut Frame, state: &AppState) {
+    let palette = theme::atlas(state.theme_mode);
+    let area = frame.area();
+
+    frame
+        .buffer_mut()
+        .set_style(area, ratatui::style::Style::default().bg(palette.background));
+
+    let layout = layout::compute(area, state.rail_visible, state.rail_width);
+
+    frame.render_widget(
+        ControlStrip { state, palette },
+        layout.control_strip,
+    );
+
+    if state.rail_visible {
+        frame.render_widget(
+            AtlasRail { state, palette },
+            layout.atlas_rail,
+        );
+    }
+
+    frame.render_widget(
+        SignalStream { state, palette },
+        layout.signal_stream,
+    );
+
+    frame.render_widget(
+        CommandRunway { state, palette },
+        layout.command_runway,
+    );
+
+    if state.command_lens_open {
+        let area = centered_rect(70, 60, area);
+        frame.render_widget(
+            widgets::command_lens::CommandLens { state, palette },
+            area,
+        );
+    }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    use ratatui::layout::{Constraint, Direction, Layout};
+
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+```
+
+---
+
+# 18. Ratatui-Specific “World’s Greatest Coding App” Features
+
+This is where Ratatui becomes more than a replacement renderer.
+
+## 18.1 Left Atlas Rail
+
+Use Ratatui widgets:
+
+```txt
+Atlas Rail
+├── Project card
+├── Git branch/status
+├── Changed files list
+├── Context gauge
+├── Token/cost sparkline
+├── Pending permissions
+├── MCP status
+├── LSP status
+└── Agent stack
+```
+
+Recommended widgets:
+
+```txt
+Block
+List
+Gauge
+LineGauge
+Sparkline
+Table
+Scrollbar
+Tabs
+```
+
+## 18.2 Signal Stream
+
+Render each message as a custom widget:
+
+```txt
+UserPromptCard
+AssistantMessageCard
+ToolTraceCard
+ShellCommandCard
+DiffCard
+ReasoningCard
+CompactionCard
+```
+
+This avoids the “chat transcript clone” look.
+
+## 18.3 Command Runway
+
+Make the prompt feel like a command console:
+
+```txt
+╭─ Command Runway ───────────────────────── model: opus · agent: build ─╮
+│ › fix auth race and add regression test                               │
+╰─ Ctrl+X D mode · Ctrl+P command lens · Esc stop ──────────────────────╯
+```
+
+## 18.4 Command Lens
+
+Use a modal list with fuzzy search:
+
+```txt
+╭─ Command Lens ─────────────────────────────────────╮
+│ /theme-mode        Toggle Atlas Light/Dark          │
+│ /models            Switch active model              │
+│ /sessions          Open recent sessions             │
+│ /review            Review current changes           │
+╰─────────────────────────────────────────────────────╯
+```
+
+## 18.5 Canvas-Based Agent Map
+
+Use Ratatui Canvas for a signature feature:
+
+```txt
+Agent Flow
+Build ──► Test ──► Review ──► Patch
+  │        │         │
+  ▼        ▼         ▼
+tools    files     diff
+```
+
+This would make the TUI instantly feel distinct from OpenCode.
+
+---
+
+# 19. Backend/API Changes Still Needed
+
+Even with a Ratatui frontend, the backend changes from the prior report still matter.
+
+## Fix `/tui/open-themes`
+
+File:
+
+```txt
+packages/jekko/src/server/routes/instance/tui.ts
+```
+
+Current behavior appears wrong because `/open-themes` publishes `session.list`.
+
+Change to:
+
+```ts
+.post("/open-themes", async (c) => {
+  await Bus.publish(TuiEvent.CommandExecute, {
+    command: "theme.switch",
+  })
+  return c.json(true)
+})
+```
+
+## Add `/tui/toggle-theme-mode`
+
+```ts
+.post("/toggle-theme-mode", async (c) => {
+  await Bus.publish(TuiEvent.CommandExecute, {
+    command: "theme.switch_mode",
+  })
+  return c.json(true)
+})
+```
+
+## Add command alias support
+
+```ts
+const commandAliases: Record<string, string> = {
+  session_new: "session.new",
+  session_share: "session.share",
+  session_interrupt: "session.interrupt",
+  session_compact: "session.compact",
+
+  messages_page_up: "session.page.up",
+  messages_page_down: "session.page.down",
+  messages_line_up: "session.line.up",
+  messages_line_down: "session.line.down",
+  messages_half_page_up: "session.half.page.up",
+  messages_half_page_down: "session.half.page.down",
+  messages_first: "session.first",
+  messages_last: "session.last",
+
+  agent_cycle: "agent.cycle",
+
+  theme_switch: "theme.switch",
+  theme_mode: "theme.switch_mode",
+  theme_toggle: "theme.switch_mode",
+}
+```
+
+---
+
+# 20. Existing TypeScript Files in Relation to Ratatui
+
+If you build the Rust frontend, many existing TypeScript UI files become legacy or compatibility-only.
+
+## Keep backend-relevant files
+
+```txt
+packages/jekko/src/server/routes/instance/tui.ts
+packages/jekko/src/cli/cmd/tui/event.ts
+packages/jekko/src/cli/cmd/tui/app-events.tsx
+packages/jekko/src/cli/cmd/tui/context/sdk.tsx
+packages/jekko/src/cli/cmd/tui/context/sync.tsx
+```
+
+These describe the event/API model that the Rust TUI should mirror.
+
+## Eventually retire or freeze OpenTUI rendering files
+
+```txt
+packages/jekko/src/cli/cmd/tui/app.tsx
+packages/jekko/src/cli/cmd/tui/app-view.tsx
+packages/jekko/src/cli/cmd/tui/component/logo.tsx
+packages/jekko/src/cli/cmd/tui/component/navigation-header.tsx
+packages/jekko/src/cli/cmd/tui/component/prompt/index.tsx
+packages/jekko/src/cli/cmd/tui/routes/session/session-view.tsx
+packages/jekko/src/cli/cmd/tui/routes/session/sidebar.tsx
+packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
+```
+
+If there is not enough time to fully migrate, implement the Atlas redesign in OpenTUI first, then build Ratatui as the next-generation frontend.
+
+---
+
+# 21. Migration Plan
+
+## Phase A: Ratatui proof of concept
+
+Build:
+
+```txt
+crates/jekko-tui-rs/
+```
+
+Minimum working features:
+
+```txt
+- Start terminal
+- Connect to backend
+- Subscribe to /event
+- List sessions
+- Select session
+- Render left rail
+- Render message stream
+- Submit prompt
+- Toggle Atlas Light/Dark with Ctrl+X D
+```
+
+## Phase B: Replace visible coding surface
+
+Add:
+
+```txt
+- Command Runway
+- Command Lens
+- Tool trace cards
+- Diff cards
+- Permission cards
+- Context gauge
+- Changed files table
+- MCP/LSP service status
+```
+
+## Phase C: Make it unmistakably premium
+
+Add:
+
+```txt
+- Canvas-based agent flow
+- Token/cost sparklines
+- Session timeline
+- Scrollbars
+- Mouse support
+- Snapshot tests
+- Theme JSON loader
+- Full dark/light parity
+```
+
+## Phase D: Make Rust TUI default
+
+CLI behavior:
+
+```txt
+jekko tui              # launches Rust Ratatui frontend
+jekko tui --legacy     # launches old OpenTUI frontend
+jekko tui --engine=rs  # explicit Rust frontend
+jekko tui --engine=ot  # explicit OpenTUI frontend
+```
+
+---
+
+# 22. Best Final Recommendation
+
+Use Ratatui as the **flagship frontend**, not as a partial enhancement.
+
+The strongest architecture is:
+
+```txt
+Backend:
+  Keep existing TypeScript backend/API/event machinery.
+
+Frontend:
+  New Rust Ratatui app.
+
+Design:
+  Jekko Atlas visual system.
+
+Layout:
+  Left Atlas Rail.
+  Center Signal Stream.
+  Bottom Command Runway.
+  Top Control Strip.
+
+Theme:
+  Atlas Dark / Atlas Light.
+  Ctrl+X D toggle.
+
+Signature Ratatui features:
+  Gauges, sparklines, tables, scrollbars, custom widgets, Canvas agent map,
+  TestBackend snapshot tests.
+```
+
+That path gives you the most credible shot at a TUI that feels dramatically more polished than the current fork and **impossible to mistake for OpenCode**.
+
+[1]: https://ratatui.rs/ "Ratatui | Ratatui"
+[2]: https://ratatui.rs/concepts/backends/ "Backends | Ratatui"
+[3]: https://ratatui.rs/highlights/v030/ "v0.30.0 | Ratatui"
+[4]: https://ratatui.rs/examples/widgets/custom_widget/ "Custom Widget | Ratatui"
+[5]: https://ratatui.rs/examples/widgets/canvas/ "Canvas | Ratatui"
+[6]: https://ratatui.rs/installation/feature-flags/ "Feature Flags | Ratatui"
+

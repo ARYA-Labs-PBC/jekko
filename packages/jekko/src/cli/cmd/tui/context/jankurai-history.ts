@@ -62,36 +62,44 @@ function readAndUpdate(historyPath: string) {
   }
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 function parseLine(line: string): JankuraiHistoryPoint | undefined {
   try {
-    const obj = JSON.parse(line)
-    if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return undefined
-    const r = obj as Record<string, unknown>
-    const ts = typeof r.ts === "number" ? r.ts : typeof r.generated_at === "number" ? r.generated_at : undefined
-    const score = typeof r.score === "number" ? r.score : undefined
-    if (ts === undefined || score === undefined) return undefined
-    const decision = (r.decision && typeof r.decision === "object" ? (r.decision as Record<string, unknown>) : {}) as Record<string, unknown>
-    return {
-      ts,
-      score,
-      hardFindings: typeof r.hardFindings === "number"
-        ? r.hardFindings
-        : typeof decision.hard_findings === "number"
-        ? (decision.hard_findings as number)
-        : undefined,
-      softFindings: typeof r.softFindings === "number"
-        ? r.softFindings
-        : typeof decision.soft_findings === "number"
-        ? (decision.soft_findings as number)
-        : undefined,
-      capsApplied: typeof r.capsApplied === "number"
-        ? r.capsApplied
-        : Array.isArray(r.caps_applied)
-        ? (r.caps_applied as unknown[]).length
-        : undefined,
-    }
+    return buildHistoryPoint(line)
   } catch {
+    // jankurai:allow HLT-001-DEAD-MARKER reason=parse-boundary-catches-malformed-jsonl-lines expires=2027-01-01
     return undefined
+  }
+}
+
+function buildHistoryPoint(line: string): JankuraiHistoryPoint {
+  const obj = JSON.parse(line)
+  if (!isPlainObject(obj)) throw new Error("not a plain object")
+  const ts = typeof obj.ts === "number" ? obj.ts : typeof obj.generated_at === "number" ? obj.generated_at : undefined
+  const score = typeof obj.score === "number" ? obj.score : undefined
+  if (ts === undefined || score === undefined) throw new Error("missing ts or score")
+  const decision = isPlainObject(obj.decision) ? obj.decision : {}
+  return {
+    ts,
+    score,
+    hardFindings: typeof obj.hardFindings === "number"
+      ? obj.hardFindings
+      : typeof decision.hard_findings === "number"
+      ? decision.hard_findings
+      : undefined,
+    softFindings: typeof obj.softFindings === "number"
+      ? obj.softFindings
+      : typeof decision.soft_findings === "number"
+      ? decision.soft_findings
+      : undefined,
+    capsApplied: typeof obj.capsApplied === "number"
+      ? obj.capsApplied
+      : Array.isArray(obj.caps_applied)
+      ? obj.caps_applied.length
+      : undefined,
   }
 }
 

@@ -10,6 +10,8 @@ reach GitHub. In this repo, `scripts/ci-local.sh` is the local entrypoint and
 | ---------------- | ------- | ----- |
 | `just ci-doctor` | local prerequisite check | reports missing tools and install hints |
 | `just ci-quick`  | fast workspace lane | same checks as `just fast` |
+| `just tui-startup-smoke` | local host-binary TUI smoke | fast Mac/host-binary check for plugin-loading hangs |
+| `just tui-ci`    | CI-safe TUI lane | host binary smoke, rendered TUI tests, and TUIwright PTY regressions |
 | `just ci-audit`  | Jankurai audit lane | runs the audit and zero-caps gate |
 | `just ci`        | full local CI parity | runs the full local CI sequence |
 
@@ -31,3 +33,5 @@ Typical tools the doctor expects:
 Keep `scripts/ci-local.sh` as the source of truth for local CI flow changes.
 When a workflow changes, update the corresponding local command there so the
 local and GitHub paths stay aligned.
+For TUI boot regressions, keep `docs/testing-tui.md`, `ops/ci/test-tui.sh`,
+`just tui-ci`, and `just tui-startup-smoke` aligned.

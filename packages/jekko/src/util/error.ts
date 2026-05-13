@@ -50,6 +50,12 @@ export function errorMessage(error: unknown): string {
   return "unknown error"
 }
 
+export function errorCause(error: unknown) {
+  if (!error || typeof error !== "object") return
+  if (!("cause" in error)) return
+  return (error as { cause?: unknown }).cause
+}
+
 export function errorData(error: unknown) {
   if (error instanceof Error) {
     return {

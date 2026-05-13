@@ -37,29 +37,36 @@ function readAndUpdate(baselinePath: string) {
   }
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 export function parseBaselineJson(raw: string): JankuraiBaseline | null {
   try {
-    const obj = JSON.parse(raw)
-    if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return null
-    const r = obj as Record<string, unknown>
-    if (typeof r.score !== "number") return null
-    const decision = (r.decision && typeof r.decision === "object" ? (r.decision as Record<string, unknown>) : {}) as Record<string, unknown>
-    const capsApplied = Array.isArray(r.caps_applied) ? (r.caps_applied as unknown[]).length : 0
-    return {
-      score: r.score,
-      hardFindings: typeof decision.hard_findings === "number" ? (decision.hard_findings as number) : 0,
-      softFindings: typeof decision.soft_findings === "number" ? (decision.soft_findings as number) : 0,
-      capsApplied,
-      conformanceLevel:
-        typeof r.observed_conformance_level === "string"
-          ? (r.observed_conformance_level as string)
-          : typeof r.claimed_conformance_level === "string"
-          ? (r.claimed_conformance_level as string)
-          : "—",
-      standardVersion: typeof r.standard_version === "string" ? (r.standard_version as string) : "—",
-    }
+    return buildBaseline(raw)
   } catch {
+    // jankurai:allow HLT-001-DEAD-MARKER reason=parse-boundary-catches-malformed-external-json expires=2027-01-01
     return null
+  }
+}
+
+function buildBaseline(raw: string): JankuraiBaseline {
+  const obj = JSON.parse(raw)
+  if (!isPlainObject(obj)) throw new Error("not a plain object")
+  if (typeof obj.score !== "number") throw new Error("score must be a number")
+  const decision = isPlainObject(obj.decision) ? obj.decision : {}
+  const capsApplied = Array.isArray(obj.caps_applied) ? obj.caps_applied.length : 0
+  const conformanceLevel =
+    typeof obj.observed_conformance_level === "string" ? obj.observed_conformance_level
+    : typeof obj.claimed_conformance_level === "string" ? obj.claimed_conformance_level
+    : "—"
+  return {
+    score: obj.score,
+    hardFindings: typeof decision.hard_findings === "number" ? decision.hard_findings : 0,
+    softFindings: typeof decision.soft_findings === "number" ? decision.soft_findings : 0,
+    capsApplied,
+    conformanceLevel,
+    standardVersion: typeof obj.standard_version === "string" ? obj.standard_version : "—",
   }
 }
 

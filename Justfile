@@ -355,12 +355,48 @@ memory-benchmark-generated:
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate baseline --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out target/memory-benchmark/baseline-generated.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin verify_determinism -- --suite generated --seed {{memory_benchmark_seed}} --fixtures 500
 
+# Native paper-QBank builder tests. Network/model providers are not used here.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+qbank-builder-test:
+	cargo test --manifest-path crates/qbank-builder/Cargo.toml --locked --no-fail-fast
+
+# Validate checked-in QBank artifacts. --allow-empty keeps fresh clones green until
+# redistributable paper artifacts are intentionally published.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+qbank-validate:
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty
+
+# Real-paper QBank benchmark lane against the checked-in bank.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+memory-benchmark-real-papers:
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty --top-n 100
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/tests/fixtures/real-paper-bank --qbank-top-n 100 --out target/memory-benchmark/real-paper-fixture.json
+
+# Smoke top-50 QBank selection path for the default checked-in bank.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+memory-benchmark-qbank-smoke:
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty --top-n 50
+
+# Mix generated and QBank reports deterministically.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+memory-benchmark-score-mix:
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate baseline --suite generated --seed {{memory_benchmark_seed}} --fixtures 25 --out target/memory-benchmark/baseline-generated-smoke.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/tests/fixtures/real-paper-bank --qbank-top-n 50 --out target/memory-benchmark/real-paper-fixture.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin score_mix -- --name smoke --input generated:0.60:target/memory-benchmark/baseline-generated-smoke.json --input qbank:0.40:target/memory-benchmark/real-paper-fixture.json --out target/memory-benchmark/mixed-fixture.json
+
+# LOCAL ONLY: live QBank/Jnoccio smoke. Requires local Jnoccio credentials and
+# must never be wired into CI or proof lanes.
+qbank-live-local:
+	cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover --query "open access hard answerable scientific paper" --run-root .jekko/daemon/paper-qbank-live-local/discovery
+
 # Chase preflight lane for the sandboxed AutoResearch memory benchmark.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 memory-benchmark-chase-preflight:
 	mkdir -p .jekko/daemon/memory-benchmark-chase/preflight-candidates
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin generate_suite -- --split public-dev --seed {{memory_benchmark_seed}} --fixtures 500 --out target/memory-benchmark/generated-public-dev.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate ledger_first --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate ledger_first --suite real-papers --paper-bank crates/memory-benchmark/tests/fixtures/real-paper-bank --qbank-top-n 100 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first-qbank.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin score_mix -- --name ledger_first --input generated:0.60:.jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json --input qbank:0.40:.jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first-qbank.json --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate hybrid_index --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/hybrid_index.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate temporal_graph --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/temporal_graph.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate compression_first --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/compression_first.json
@@ -370,7 +406,7 @@ memory-benchmark-chase-preflight:
 # Composed memory-benchmark fast lane.
 memory-benchmark-fast: memory-benchmark-check memory-benchmark-test memory-benchmark-determinism
 
-memory-benchmark-full: memory-benchmark-fast memory-benchmark-generated
+memory-benchmark-full: memory-benchmark-fast memory-benchmark-generated qbank-validate memory-benchmark-qbank-smoke
 
 # Local mirror of .github/workflows/jankurai.yml. Catches CI failures
 # before push. Run individual sub-lanes (`just ci-local-audit`, etc.) for

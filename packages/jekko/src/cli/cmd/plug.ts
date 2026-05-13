@@ -5,7 +5,7 @@ import { ConfigPaths } from "@/config/paths"
 import { Global } from "@jekko-ai/core/global"
 import { installPlugin, patchPluginConfig, readPluginManifest } from "../../plugin/install"
 import { resolvePluginTarget } from "../../plugin/shared"
-import { errorMessage } from "../../util/error"
+import { errorCause, errorMessage } from "../../util/error"
 import { Filesystem } from "@/util/filesystem"
 import { Process } from "@/util/process"
 import { UI } from "../ui"
@@ -75,12 +75,6 @@ const defaultPlugDeps: PlugDeps = {
   global: Global.Path.config,
 }
 
-function cause(err: unknown) {
-  if (!err || typeof err !== "object") return
-  if (!("cause" in err)) return
-  return (err as { cause?: unknown }).cause
-}
-
 function summarizeInstallFailure(hit: unknown): InstallFailure {
   if (!(hit instanceof Process.RunFailedError)) {
     return {
@@ -132,7 +126,7 @@ export function createPlugTask(input: PlugInput, dep: PlugDeps = defaultPlugDeps
     const target = await installPlugin(mod, dep)
     if (!target.ok) {
       install.stop("Install failed", 1)
-      logInstallFailure(dep, mod, summarizeInstallFailure(cause(target.error) ?? target.error))
+      logInstallFailure(dep, mod, summarizeInstallFailure(errorCause(target.error) ?? target.error))
       return false
     }
     install.stop("Plugin package ready")
@@ -144,7 +138,7 @@ export function createPlugTask(input: PlugInput, dep: PlugDeps = defaultPlugDeps
       if (manifest.code === "manifest_read_failed") {
         inspect.stop("Manifest read failed", 1)
         dep.log.error(`Installed "${mod}" but failed to read ${manifest.file}`)
-        dep.log.error(errorMessage(cause(manifest.error) ?? manifest.error))
+        dep.log.error(errorMessage(errorCause(manifest.error) ?? manifest.error))
         return false
       }
 

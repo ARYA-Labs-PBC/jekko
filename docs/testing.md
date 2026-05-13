@@ -6,6 +6,7 @@ Run the narrowest proof lane that matches the change:
 - `just score` for repo-score and documentation-dimension checks.
 - `just security` for security-lane fixes that are not blocked by external evidence requirements.
 - `just ux-qa` for rendered UI evidence.
+- `just tui-ci` for the CI-safe TUI surface and `just tui-startup-smoke` for the fast host-binary boot check. See `docs/testing-tui.md` for the boot and loading regressions.
 
 Keep the proof receipt with the task entry:
 

@@ -37,11 +37,7 @@ impl ArxivProvider {
     }
 }
 
-impl Default for ArxivProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::providers::default_from_new!(ArxivProvider);
 
 fn capture_tag(input: &str, tag: &str) -> Option<String> {
     let re = Regex::new(&format!(r"(?s)<{tag}[^>]*>(.*?)</{tag}>")).ok()?;

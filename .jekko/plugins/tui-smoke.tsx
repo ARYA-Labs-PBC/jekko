@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { VignetteEffect } from "@opentui/core"
 import type { TuiPlugin, TuiPluginModule } from "@jekko-ai/plugin/tui"
-import { cfg, bind, names } from "./tui-smoke-shared"
-import { Modal, Screen } from "./tui-smoke-render"
-import { reg, slot } from "./tui-smoke-slots"
+import { cfg, bind, names } from "./tui-smoke/tui-smoke-shared"
+import { Modal, Screen } from "./tui-smoke/tui-smoke-render"
+import { reg, slot } from "./tui-smoke/tui-smoke-slots"
 
 const tui: TuiPlugin = async (api, options, meta) => {
   if (options?.enabled === false) return

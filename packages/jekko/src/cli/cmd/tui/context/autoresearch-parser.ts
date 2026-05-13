@@ -141,11 +141,13 @@ export function parseBestState(json: string): BestState | null {
     const obj = JSON.parse(json)
     return parseBestStateValue(obj)
   } catch {
+    // jankurai:allow HLT-001-DEAD-MARKER reason=parse-boundary-at-external-json-ingestion expires=2027-01-01
     return null
   }
 }
 
 function parseBestStateValue(value: unknown, source?: BestState["source"]): BestState | null {
+  // jankurai:allow HLT-001-DEAD-MARKER reason=parse-boundary-type-guard-at-external-data-shape expires=2027-01-01
   if (!value || typeof value !== "object") return null
   const record = value as Record<string, unknown>
 
@@ -159,6 +161,7 @@ function parseBestStateValue(value: unknown, source?: BestState["source"]): Best
     if (parsed) return parsed
   }
 
+  // jankurai:allow HLT-001-DEAD-MARKER reason=parse-boundary-no-matching-nested-key-found expires=2027-01-01
   return null
 }
 
@@ -171,6 +174,7 @@ function readBestStateCandidate(record: Record<string, unknown>, source?: BestSt
       record.currentScore ??
       record.value,
   )
+  // jankurai:allow HLT-001-DEAD-MARKER reason=parse-boundary-score-field-not-numeric expires=2027-01-01
   if (!Number.isFinite(score)) return null
 
   const laneId = String(
@@ -196,8 +200,10 @@ function readBestStateCandidate(record: Record<string, unknown>, source?: BestSt
 export function parseExecScore(json: string): ExecScore | null {
   try {
     const obj = JSON.parse(json)
+    // jankurai:allow HLT-001-DEAD-MARKER reason=parse-boundary-type-guard-at-external-json-ingestion expires=2027-01-01
     if (!obj || typeof obj !== "object") return null
     const total = Number(obj.total ?? obj.score ?? obj.total_score)
+    // jankurai:allow HLT-001-DEAD-MARKER reason=parse-boundary-total-field-not-numeric expires=2027-01-01
     if (!Number.isFinite(total)) return null
     const breakdown: Record<string, number> = {}
     const raw = obj.breakdown ?? obj.scores ?? obj.dimensions ?? {}
@@ -209,6 +215,7 @@ export function parseExecScore(json: string): ExecScore | null {
     }
     return { total, breakdown }
   } catch {
+    // jankurai:allow HLT-001-DEAD-MARKER reason=parse-boundary-at-external-json-ingestion expires=2027-01-01
     return null
   }
 }

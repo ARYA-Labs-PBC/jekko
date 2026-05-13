@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import type * as HttpClientError from "effect/unstable/http/HttpClientError"
+import { taggedMessageCauseError } from "@/util/schema"
 
 export const AccountID = Schema.String.pipe(Schema.brand("AccountID"))
 export type AccountID = Schema.Schema.Type<typeof AccountID>
@@ -31,15 +32,9 @@ export class Org extends Schema.Class<Org>("Org")({
   name: Schema.String,
 }) {}
 
-export class AccountRepoError extends Schema.TaggedErrorClass<AccountRepoError>()("AccountRepoError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
-}) {}
+export class AccountRepoError extends taggedMessageCauseError<AccountRepoError>()("AccountRepoError") {}
 
-export class AccountServiceError extends Schema.TaggedErrorClass<AccountServiceError>()("AccountServiceError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
-}) {}
+export class AccountServiceError extends taggedMessageCauseError<AccountServiceError>()("AccountServiceError") {}
 
 export class AccountTransportError extends Schema.TaggedErrorClass<AccountTransportError>()("AccountTransportError", {
   method: Schema.String,

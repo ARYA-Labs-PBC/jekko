@@ -28,7 +28,7 @@ import { NotFoundError } from "@/storage/storage"
 import { errorData } from "@/util/error"
 import { WorkspaceContext } from "./workspace-context"
 import { EffectBridge } from "@/effect/bridge"
-import { withStatics } from "@/util/schema"
+import { taggedMessageCauseError, withStatics } from "@/util/schema"
 import { zod as effectZod, zodObject } from "@/util/effect-zod"
 
 export const Info = WorkspaceInfoSchema
@@ -127,10 +127,7 @@ export class SyncTimeoutError extends Schema.TaggedErrorClass<SyncTimeoutError>(
   state: Schema.Record(Schema.String, Schema.Number),
 }) {}
 
-export class SyncAbortedError extends Schema.TaggedErrorClass<SyncAbortedError>()("WorkspaceSyncAbortedError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
-}) {}
+export class SyncAbortedError extends taggedMessageCauseError<SyncAbortedError>()("WorkspaceSyncAbortedError") {}
 
 export type CreateError = Auth.AuthError
 export type SessionWarpError =

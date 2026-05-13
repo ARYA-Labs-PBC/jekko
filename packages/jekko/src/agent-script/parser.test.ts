@@ -102,6 +102,9 @@ ZYAL_ARM RUN_FOREVER id=test`
       "executable-benchmark.zyal",
       "generated-challenge.zyal",
       "prompt-scoring.zyal",
+      "qbank-advanced.zyal",
+      "qbank-simple.zyal",
+      "qbank-ultra.zyal",
     ])
     for (const file of files) {
       const parsed = await Effect.runPromise(parseZyal(fs.readFileSync(path.join(examplesDir, file), "utf8")))
@@ -375,6 +378,9 @@ ZYAL_ARM RUN_FOREVER id=one`
       "memory-benchmark/executable-benchmark.zyal",
       "memory-benchmark/generated-challenge.zyal",
       "memory-benchmark/prompt-scoring.zyal",
+      "memory-benchmark/qbank-advanced.zyal",
+      "memory-benchmark/qbank-simple.zyal",
+      "memory-benchmark/qbank-ultra.zyal",
     ])
     for (const file of files) {
       const text = fs.readFileSync(path.join(examplesDir, file), "utf8")

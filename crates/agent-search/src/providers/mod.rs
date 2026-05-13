@@ -19,6 +19,18 @@ pub mod semantic_scholar;
 pub mod tavily;
 pub mod unpaywall;
 
+macro_rules! default_from_new {
+    ($ty:ty) => {
+        impl Default for $ty {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+}
+
+pub(crate) use default_from_new;
+
 pub(crate) fn client() -> Client {
     Client::builder()
         .user_agent("agent-search/0.1")
