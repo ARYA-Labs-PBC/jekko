@@ -7,7 +7,7 @@ memory_benchmark_seed := env_var_or_default("MEMORY_BENCHMARK_SEED", "public-dev
 
 # fast deterministic build/test targets, caches, and narrow proof lanes for agent iteration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
-fast: workspace-fast
+fast: zyal-spec-check workspace-fast
 
 # one-command setup lane for local iteration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -263,8 +263,14 @@ tui-binary-smoke: jekko-build-host-fast
 # CI-safe TUI lane: no production keys, no browser lane.
 tui-ci: tui-binary-smoke
 	bun --cwd packages/jekko test test/cli/tui/ test/cli/cmd/tui/
+	JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_clears_loading_screen_quickly -- --nocapture
 	JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
 	JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
+
+# Local host-binary tuiwright startup proof. This is the fastest gate for
+# catching plugin-loading hangs on the built Mac/host binary.
+tui-startup-smoke: jekko-build-host-fast
+	JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_clears_loading_screen_quickly -- --nocapture
 
 # Copy approved local Jekko/Jnoccio keys from home-level env files into the
 # canonical outside-repo live TUI test env file, redacting all output.
@@ -307,6 +313,11 @@ zyalc-check:
 # jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 zyalc-test:
 	cargo test --manifest-path crates/zyalc/Cargo.toml --locked --tests --no-fail-fast
+
+# Narrow lane for the canonical ZYAL spec generator.
+# jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+zyal-spec-check:
+	bun --cwd packages/jekko ./script/generate-zyal-spec.ts --check
 
 # Build + drift-check across every registered .zyal source.
 # jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-build narrow-targets=true

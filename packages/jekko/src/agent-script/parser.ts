@@ -3,13 +3,13 @@ import { Effect, Schema } from "effect"
 import * as yaml from "yaml"
 import { createHash } from "crypto"
 import {
-  assertZyalTopLevelKeys,
   buildZyalPreview,
   ZyalArm,
   ZyalScriptSchema,
   type ZyalParsed,
   type ZyalScript,
 } from "./schema"
+import { assertKnownZyalKeys } from "./schema-spec"
 import { ZYAL_RUNTIME_SENTINEL_VERSION } from "./version"
 
 const ZYAL_RUNTIME_SENTINEL_VERSION_RE = escapeRegExp(ZYAL_RUNTIME_SENTINEL_VERSION)
@@ -209,8 +209,7 @@ function parseZyalSync(text: string, options: { source?: string; requireArm?: bo
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new ZyalParseError("ZYAL body must be a YAML mapping")
   }
-  assertZyalTopLevelKeys(parsed as Record<string, unknown>)
-  assertZyalNestedKeys(parsed as Record<string, unknown>)
+  assertKnownZyalKeys(parsed)
   const withMeta = { ...parsed, id: open.groups.id }
   const armScan = parseArm(block)
   if (options.requireArm !== false && armScan.kind !== "found") {
@@ -1685,6 +1684,47 @@ function validateZyalSemantics(spec: ZyalScript) {
     if (spec.research.budgets?.max_cost_usd !== undefined && spec.research.budgets.max_cost_usd <= 0) {
       throw new ZyalParseError("research.budgets.max_cost_usd must be positive")
     }
+    if (spec.research.paper_scan?.domains) {
+      for (const [i, value] of spec.research.paper_scan.domains.entries()) {
+        if (!value.trim()) throw new ZyalParseError(`research.paper_scan.domains[${i}] must not be empty`)
+      }
+    }
+    if (spec.research.paper_scan?.queries) {
+      for (const [i, value] of spec.research.paper_scan.queries.entries()) {
+        if (!value.trim()) throw new ZyalParseError(`research.paper_scan.queries[${i}] must not be empty`)
+      }
+    }
+    if (spec.research.paper_scan?.max_papers !== undefined) {
+      requirePositiveInteger(spec.research.paper_scan.max_papers, "research.paper_scan.max_papers")
+    }
+    if (spec.research.context_packing?.target_fill_ratio !== undefined) {
+      const value = spec.research.context_packing.target_fill_ratio
+      if (value <= 0 || value > 1) throw new ZyalParseError("research.context_packing.target_fill_ratio must be > 0 and <= 1")
+    }
+    if (spec.research.context_packing?.output_reserve_tokens !== undefined) {
+      requirePositiveInteger(spec.research.context_packing.output_reserve_tokens, "research.context_packing.output_reserve_tokens")
+    }
+    if (spec.research.context_packing?.safe_window_tokens !== undefined) {
+      requirePositiveInteger(spec.research.context_packing.safe_window_tokens, "research.context_packing.safe_window_tokens")
+    }
+    if (spec.research.question_bank?.work_items) {
+      for (const [i, item] of spec.research.question_bank.work_items.entries()) {
+        if (!item.id.trim()) throw new ZyalParseError(`research.question_bank.work_items[${i}].id must not be empty`)
+        if (!item.publication_hash.trim()) throw new ZyalParseError(`research.question_bank.work_items[${i}].publication_hash must not be empty`)
+      }
+    }
+    if (spec.research.agent_trials?.question_generators !== undefined) {
+      requirePositiveInteger(spec.research.agent_trials.question_generators, "research.agent_trials.question_generators")
+    }
+    if (spec.research.agent_trials?.answerers !== undefined) {
+      requirePositiveInteger(spec.research.agent_trials.answerers, "research.agent_trials.answerers")
+    }
+    if (spec.research.audit?.critics !== undefined) {
+      requirePositiveInteger(spec.research.audit.critics, "research.audit.critics")
+    }
+    if (spec.research.audit?.focused_auditors !== undefined) {
+      requirePositiveInteger(spec.research.audit.focused_auditors, "research.audit.focused_auditors")
+    }
   }
 
   if (spec.jankurai) {
@@ -1730,6 +1770,10 @@ function validateZyalSemantics(spec: ZyalScript) {
     ) {
       throw new ZyalParseError("jankurai.regression.max_score_drop must be a finite non-negative number")
     }
+  }
+
+  if (spec.taint) {
+    assertTaintNestedKeys({ taint: spec.taint } as Record<string, unknown>)
   }
 
   // ─── v2.2: fleet — single-session worker cap of 20 ─────────────────
@@ -2023,6 +2067,13 @@ function assertResearchNestedKeys(input: Record<string, unknown>) {
     "evidence",
     "safety",
     "budgets",
+    "paper_scan",
+    "full_text",
+    "dedupe",
+    "context_packing",
+    "question_bank",
+    "agent_trials",
+    "audit",
   ])
   if (research.version !== "v1") {
     throw new ZyalParseError(`research.version must be v1`)
@@ -2055,6 +2106,53 @@ function assertResearchNestedKeys(input: Record<string, unknown>) {
   if (research.budgets !== undefined) {
     const budgets = expectRecord(research.budgets, "research.budgets")
     assertKeys("research.budgets", budgets, ["max_queries", "max_pages", "max_cost_usd"])
+  }
+  if (research.paper_scan !== undefined) {
+    const scan = expectRecord(research.paper_scan, "research.paper_scan")
+    assertKeys("research.paper_scan", scan, ["enabled", "domains", "queries", "open_access", "max_papers", "output_root", "raw_receipts"])
+    if (scan.domains !== undefined && !Array.isArray(scan.domains)) throw new ZyalParseError("research.paper_scan.domains must be a list")
+    if (scan.queries !== undefined && !Array.isArray(scan.queries)) throw new ZyalParseError("research.paper_scan.queries must be a list")
+  }
+  if (research.full_text !== undefined) {
+    const fullText = expectRecord(research.full_text, "research.full_text")
+    assertKeys("research.full_text", fullText, ["enabled", "store", "raw_receipts", "extraction_receipts", "license_policy"])
+  }
+  if (research.dedupe !== undefined) {
+    const dedupe = expectRecord(research.dedupe, "research.dedupe")
+    assertKeys("research.dedupe", dedupe, ["enabled", "state_root", "duplicate_policy", "hash_keys"])
+    if (dedupe.hash_keys !== undefined && !Array.isArray(dedupe.hash_keys)) throw new ZyalParseError("research.dedupe.hash_keys must be a list")
+  }
+  if (research.context_packing !== undefined) {
+    const packing = expectRecord(research.context_packing, "research.context_packing")
+    assertKeys("research.context_packing", packing, ["strategy", "target_fill_ratio", "output_reserve_tokens", "safe_window_tokens"])
+  }
+  if (research.question_bank !== undefined) {
+    const questionBank = expectRecord(research.question_bank, "research.question_bank")
+    assertKeys("research.question_bank", questionBank, ["output_root", "papers_root", "challenges_root", "rejected_root", "work_items", "acceptance"])
+    if (questionBank.work_items !== undefined) {
+      if (!Array.isArray(questionBank.work_items)) throw new ZyalParseError("research.question_bank.work_items must be a list")
+      questionBank.work_items.forEach((item, index) => {
+        const workItem = expectRecord(item, `research.question_bank.work_items[${index}]`)
+        assertKeys(`research.question_bank.work_items[${index}]`, workItem, ["id", "publication_hash", "paper_path", "challenge_path", "role"])
+      })
+    }
+    if (questionBank.acceptance !== undefined) {
+      const acceptance = expectRecord(questionBank.acceptance, "research.question_bank.acceptance")
+      assertKeys("research.question_bank.acceptance", acceptance, [
+        "min_auditor_agreement",
+        "min_answerability",
+        "max_blind_correct_rate_for_hard",
+        "reject_if_ambiguous",
+      ])
+    }
+  }
+  if (research.agent_trials !== undefined) {
+    const trials = expectRecord(research.agent_trials, "research.agent_trials")
+    assertKeys("research.agent_trials", trials, ["question_generators", "answerers", "model_profile"])
+  }
+  if (research.audit !== undefined) {
+    const audit = expectRecord(research.audit, "research.audit")
+    assertKeys("research.audit", audit, ["critics", "focused_auditors", "min_auditor_agreement", "min_answerability"])
   }
 }
 

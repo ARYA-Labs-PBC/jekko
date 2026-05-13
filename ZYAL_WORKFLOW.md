@@ -25,6 +25,14 @@ coordination notes live above.
 
 ## Recent receipts
 
+### 2026-05-12T00:00:00Z — Fixed — codex — Canonical ZYAL spec + semantic bug-finder examples
+
+- Added `docs/ZYAL/SPEC.md` as the canonical human-facing schema for `ZYAL_CONTRACT_VERSION = 2.6.0`, with generator/check tooling and test-map/generated-zone routing.
+- Added semantic bug-finder examples `18-semantic-bug-finder-basic.zyal`, `19-semantic-bug-finder-advanced.zyal`, and `20-semantic-bug-finder-ultra.zyal`.
+- Verification: `bun --cwd packages/jekko ./script/generate-zyal-spec.ts --check`, `bun --cwd packages/jekko test src/agent-script/schema-spec.test.ts src/agent-script/parser.test.ts`, `rtk cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml all_tracked_zyal_files_parse_and_preview`, `rtk just fast`, `rtk just score`, and `rtk git diff --check` all passed.
+
+— codex
+
 ### 2026-05-09T05:29:02Z — Fixed — codex — Jnoccio TUI pbcopy paste unlock
 
 - Fixed the real TUI paste fallback: keypress input now preserves uppercase `evt.sequence`, prompt/dialog/service normalization strips whitespace, `%`, CSI paste controls, and `200`/`201` bracketed-paste marker remnants before submit/decrypt/cache.

@@ -1,5 +1,13 @@
 # ZYAL Changelog
 
+## Unreleased
+
+- Added the canonical human-facing schema at `docs/ZYAL/SPEC.md` together with
+  generator/check tooling so parser/schema drift cannot go silent.
+- Added three semantic bug-finder runbooks: basic, advanced, and ultra.
+- Kept the contract version at `2.6.0`; this is a docs/spec-governance update,
+  not a schema bump.
+
 ## 2.6.0 - 2026-05-12
 
 - Added first-class `jankurai:` syntax for host-enforced audit, repair-plan

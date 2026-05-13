@@ -1,6 +1,7 @@
 # ZYAL Version Contract
 
 - Contract version: `2.6.0`
+- Canonical schema: [`SPEC.md`](SPEC.md)
 - Release tag: `v1.0.0`
 - Runtime sentinel version: `<<<ZYAL v1:daemon ...>>>`
 - `research.version`: `v1`
@@ -15,6 +16,13 @@ and compare the branch against `origin/main`.
 
 The runtime sentinel remains `v1`; only the ZYAL contract and preview surface
 advance to `2.6.0`.
+
+## Compatibility rules
+
+- `VERSION.md` is release metadata only. The human-facing schema lives in `SPEC.md`.
+- Keep `ZYAL_CONTRACT_VERSION` at `2.6.0` until a parser/schema change requires a real contract bump.
+- Adding or removing schema keys is a compatibility event and needs parser, preview, docs, and tests to move together.
+- The runtime sentinel stays at `v1` until the shipped daemon envelope changes.
 
 ## Extension migration (2.5.0)
 

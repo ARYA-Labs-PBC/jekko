@@ -4,6 +4,10 @@
 
 ZYAL is the **host-enforced agent operating contract** embedded in Jekko. It is a strict, declarative YAML runbook that gives the *host* — never the model — total control over the lifecycle of unbounded agentic work. Every daemon run is bounded, observable, durable, evidence-gated, and subject to human approval at critical gates.
 
+## Canonical Schema Reference
+
+The canonical human-facing schema now lives in [`docs/ZYAL/SPEC.md`](docs/ZYAL/SPEC.md). This mission document stays as product narrative and operating context; it should not be treated as the source of truth for field definitions or compatibility rules.
+
 ## The Problem We're Solving
 
 Today's AI coding assistants are **single-turn request machines**. You ask, it answers, you verify. This works for small tasks but collapses at the scale that matters: refactoring a monorepo, fixing 200 failing tests, implementing a feature across 50 files, auditing an entire codebase for security vulnerabilities, or running a continuous integration daemon that never sleeps.
