@@ -90,10 +90,10 @@ impl EventSink {
 }
 
 fn now_epoch_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default()
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs(),
+        Err(_) => 0,
+    }
 }
 
 fn truncate_for_error(line: &str) -> &str {

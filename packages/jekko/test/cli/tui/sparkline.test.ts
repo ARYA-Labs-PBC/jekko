@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { sparkline, SPARKLINE_GLYPHS, SPARKLINE_PLACEHOLDER } from "../../../src/cli/cmd/tui/feature-plugins/jankurai/sparkline"
+import { sparkline, SPARKLINE_GLYPHS, SPARKLINE_BLANK_GLYPH } from "../../../src/cli/cmd/tui/feature-plugins/jankurai/sparkline"
 
 describe("sparkline", () => {
-  test("empty values render placeholders for the full width", () => {
-    expect(sparkline([], 6)).toBe(SPARKLINE_PLACEHOLDER.repeat(6))
+  test("empty values render blank glyphs for the full width", () => {
+    expect(sparkline([], 6)).toBe(SPARKLINE_BLANK_GLYPH.repeat(6))
   })
 
   test("zero width is empty string", () => {
@@ -31,15 +31,15 @@ describe("sparkline", () => {
     expect(out[out.length - 1]).toBe(SPARKLINE_GLYPHS[SPARKLINE_GLYPHS.length - 1]!)
   })
 
-  test("left-pad with placeholders when fewer samples than width", () => {
+  test("left-pad with blank glyphs when fewer samples than width", () => {
     const out = sparkline([10, 20], 5)
     expect(out.length).toBe(5)
-    expect(out.slice(0, 3)).toBe(SPARKLINE_PLACEHOLDER.repeat(3))
+    expect(out.slice(0, 3)).toBe(SPARKLINE_BLANK_GLYPH.repeat(3))
   })
 
-  test("non-finite values render as placeholders inline", () => {
+  test("non-finite values render as blank glyphs inline", () => {
     const out = sparkline([1, Number.NaN, 5], 3)
     expect(out.length).toBe(3)
-    expect(out[1]).toBe(SPARKLINE_PLACEHOLDER)
+    expect(out[1]).toBe(SPARKLINE_BLANK_GLYPH)
   })
 })

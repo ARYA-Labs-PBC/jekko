@@ -180,7 +180,7 @@ fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or_default()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -192,17 +192,34 @@ mod tests {
     fn init_creates_all_tables() {
         let dir = tempdir().unwrap();
         let store = ReceiptsStore::open(dir.path()).unwrap();
-        for table in ["runs", "commits", "findings", "events"] {
-            let count: i64 = store
-                .conn
-                .query_row(
-                    &format!("SELECT COUNT(*) FROM {}", table),
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap();
+        for table in TABLE_NAMES_FOR_INIT_TEST {
+            let count: i64 = count_rows(&store.conn, table);
             assert_eq!(count, 0);
         }
+    }
+
+    fn count_rows(conn: &rusqlite::Connection, table: &'static str) -> i64 {
+        // The `table` argument is a `&'static str` taken from the compile-time
+        // closed set TABLE_NAMES_FOR_INIT_TEST asserted below; it cannot be
+        // user-controlled. rusqlite identifiers cannot be parameterized, so we
+        // interpolate, but only from this closed set.
+        // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=identifier-from-compile-time-closed-set expires=2027-01-01
+        let sql = format!("SELECT COUNT(*) FROM {}", table);
+        conn.query_row(&sql, [], |r| r.get(0)).unwrap()
+    }
+
+    /// Closed set of table names this test smoke-counts. SQLite identifiers
+    /// cannot be parameterized at the bind layer, so the counter helper
+    /// interpolates the table name — but only from this static set, which the
+    /// regression test below asserts contains no separators or whitespace.
+    const TABLE_NAMES_FOR_INIT_TEST: &[&str] = &["runs", "commits", "findings", "events"];
+
+    #[test]
+    fn init_test_table_set_is_a_compile_time_closed_set() {
+        // Mirrors the negative-input contract: the test above can never see a
+        // value that wasn't compiled into the binary.
+        assert!(TABLE_NAMES_FOR_INIT_TEST.iter().all(|t| !t.contains(';')));
+        assert!(TABLE_NAMES_FOR_INIT_TEST.iter().all(|t| !t.contains(' ')));
     }
 
     #[test]

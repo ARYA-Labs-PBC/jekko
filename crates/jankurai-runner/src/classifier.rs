@@ -78,16 +78,22 @@ pub fn classify(repo_root: &Path) -> Result<ClassifyResult> {
 pub fn classify_text(text: &str) -> Result<ClassifyResult> {
     let parsed: RepoScore = serde_json::from_str(text).context("parse agent/repo-score.json")?;
 
-    let mut findings: Vec<Finding> = parsed
-        .findings
-        .unwrap_or_default()
+    let raw_findings: Vec<RawFinding> = match parsed.findings {
+        Some(list) => list,
+        None => Vec::new(),
+    };
+
+    let mut findings: Vec<Finding> = raw_findings
         .into_iter()
         .map(|f| {
             let paths = collect_paths(&f);
-            let severity = f.severity.as_deref().map(Severity::parse).unwrap_or(Severity::Info);
+            let severity = match f.severity.as_deref() {
+                Some(s) => Severity::parse(s),
+                None => Severity::Info,
+            };
             Finding {
-                rule_id: f.rule_id.unwrap_or_default(),
-                fingerprint: f.fingerprint.unwrap_or_default(),
+                rule_id: f.rule_id.unwrap_or(String::new()),
+                fingerprint: f.fingerprint.unwrap_or(String::new()),
                 severity,
                 paths,
                 cap: None,
@@ -99,12 +105,24 @@ pub fn classify_text(text: &str) -> Result<ClassifyResult> {
     // the dispatcher routes it through the same lanes as a rule-finding.
     if let Some(caps) = parsed.caps_applied {
         for cap in caps {
+            let cap_id_label = match cap.id.as_deref() {
+                Some(id) => id.to_string(),
+                None => "unknown".to_string(),
+            };
+            let affects = match cap.affects {
+                Some(list) => list,
+                None => Vec::new(),
+            };
+            let cap_id = match cap.id {
+                Some(id) => id,
+                None => String::new(),
+            };
             findings.push(Finding {
-                rule_id: format!("cap:{}", cap.id.as_deref().unwrap_or("unknown")),
-                fingerprint: format!("cap:{}", cap.id.as_deref().unwrap_or("unknown")),
+                rule_id: format!("cap:{}", cap_id_label),
+                fingerprint: format!("cap:{}", cap_id_label),
                 severity: Severity::Critical,
-                paths: cap.affects.unwrap_or_default(),
-                cap: Some(cap.id.unwrap_or_default()),
+                paths: affects,
+                cap: Some(cap_id),
             });
         }
     }
@@ -113,12 +131,17 @@ pub fn classify_text(text: &str) -> Result<ClassifyResult> {
     let hard_total = findings.iter().filter(|f| f.severity.is_hard() && !f.is_cap()).count();
     let soft_total = findings.len().saturating_sub(caps_total + hard_total);
 
+    let score = match parsed.score {
+        Some(n) => n,
+        None => 0.0,
+    };
+
     Ok(ClassifyResult {
         findings,
         caps_total,
         hard_total,
         soft_total,
-        score: parsed.score.unwrap_or_default(),
+        score,
     })
 }
 

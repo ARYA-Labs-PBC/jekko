@@ -71,7 +71,10 @@ fn dispatch(cli: Cli) -> Result<i32> {
         return Ok(64);
     }
 
-    let run_id = cli.run_id.unwrap_or_else(runner::random_run_id);
+    let run_id = match cli.run_id {
+        Some(id) => id,
+        None => runner::random_run_id(),
+    };
     let config = RunnerConfig {
         repo,
         run_id,

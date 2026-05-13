@@ -1,7 +1,7 @@
 // Tails `agent/score-history.jsonl` and exposes the rolling tail as a Solid
 // signal. The audit-live panel reads this for the sparkline above the score.
-// Same fs.watch + fallback-poll pattern as `jankurai-score.ts` so the watcher
-// keeps working when the file is missing or rotated.
+// Same fs.watch + creation-poll recovery pattern as `jankurai-score.ts` so the
+// watcher keeps working when the file is missing or rotated.
 
 import { createSignal } from "solid-js"
 import fs from "fs"

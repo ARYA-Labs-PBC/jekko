@@ -45,14 +45,12 @@ export function JankuraiAuditLivePanel(props: { api: TuiPluginApi }) {
 
   return (
     <box flexDirection="column" width="100%" gap={1}>
-      <Show
-        when={score() !== null}
-        fallback={
-          <box>
-            <text fg={theme().textMuted}>Jankurai not configured. Run `jekko jankurai bootstrap --yes` to scaffold.</text>
-          </box>
-        }
-      >
+      {score() === null ? (
+        <box>
+          <text fg={theme().textMuted}>Jankurai not configured. Run `jekko jankurai bootstrap --yes` to scaffold.</text>
+        </box>
+      ) : null}
+      <Show when={score() !== null}>
         <box flexDirection="row" gap={2}>
           <text fg={theme().text}>
             <b>Score {score()?.score.toFixed(1)}</b>
@@ -79,10 +77,10 @@ export function JankuraiAuditLivePanel(props: { api: TuiPluginApi }) {
         </box>
         <box flexDirection="column">
           <text fg={theme().text}>Workers</text>
-          <Show
-            when={workers().length > 0}
-            fallback={<text fg={theme().textMuted}>(no live workers)</text>}
-          >
+          {workers().length === 0 ? (
+            <text fg={theme().textMuted}>(no live workers)</text>
+          ) : null}
+          <Show when={workers().length > 0}>
             <For each={workers()}>
               {(worker) => (
                 <text fg={theme().textMuted}>

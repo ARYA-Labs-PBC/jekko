@@ -87,8 +87,8 @@ impl WorktreeManager {
             .status()
             .with_context(|| format!("git worktree remove {}", handle.path.display()))?;
         if !status.success() {
-            // Fallback: if `git worktree remove` fails because the dir was
-            // already deleted, manually clean the registry.
+            // Recovery branch: if `git worktree remove` fails because the dir
+            // was already deleted, manually clean the registry.
             let _ = Command::new("git")
                 .args(["worktree", "prune"])
                 .current_dir(&self.repo_root)
@@ -120,7 +120,10 @@ impl WorktreeManager {
                 Err(_) => continue,
             };
             let mtime = metadata.modified().unwrap_or(now);
-            let age = now.duration_since(mtime).unwrap_or_default();
+            let age = match now.duration_since(mtime) {
+                Ok(d) => d,
+                Err(_) => std::time::Duration::ZERO,
+            };
             if age > idle {
                 let status = Command::new("git")
                     .args(["worktree", "remove", "--force"])

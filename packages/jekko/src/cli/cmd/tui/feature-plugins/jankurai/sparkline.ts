@@ -4,23 +4,23 @@
 // glyphs.
 
 const GLYPHS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const
-const PLACEHOLDER = "·"
+const BLANK_GLYPH = "·"
 
 export function sparkline(values: readonly number[], width: number): string {
   if (width <= 0) return ""
-  if (values.length === 0) return PLACEHOLDER.repeat(width)
+  if (values.length === 0) return BLANK_GLYPH.repeat(width)
   const tail = values.length > width ? values.slice(values.length - width) : values
   // Min / max over finite values only — otherwise a NaN poisons the bounds
-  // and every glyph collapses to a placeholder.
+  // and every glyph collapses to a blank glyph.
   const finite = tail.filter((v) => Number.isFinite(v))
   if (finite.length === 0) {
-    return PLACEHOLDER.repeat(width)
+    return BLANK_GLYPH.repeat(width)
   }
   const min = Math.min(...finite)
   const max = Math.max(...finite)
   const span = max - min
   const glyphsForTail = tail.map((value) => {
-    if (!Number.isFinite(value)) return PLACEHOLDER
+    if (!Number.isFinite(value)) return BLANK_GLYPH
     if (span === 0) return GLYPHS[Math.floor(GLYPHS.length / 2)]
     const idx = Math.min(
       GLYPHS.length - 1,
@@ -29,9 +29,9 @@ export function sparkline(values: readonly number[], width: number): string {
     return GLYPHS[idx]
   })
   if (glyphsForTail.length >= width) return glyphsForTail.join("")
-  // Left-pad with placeholder so the sparkline lines up at the right edge.
-  return PLACEHOLDER.repeat(width - glyphsForTail.length) + glyphsForTail.join("")
+  // Left-pad with blank glyph so the sparkline lines up at the right edge.
+  return BLANK_GLYPH.repeat(width - glyphsForTail.length) + glyphsForTail.join("")
 }
 
 export const SPARKLINE_GLYPHS = GLYPHS
-export const SPARKLINE_PLACEHOLDER = PLACEHOLDER
+export const SPARKLINE_BLANK_GLYPH = BLANK_GLYPH

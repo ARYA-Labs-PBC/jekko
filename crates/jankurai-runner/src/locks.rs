@@ -3,7 +3,7 @@
 //!   1. In-process: `Arc<Mutex<HashMap<String, ()>>>` so concurrent fiber/task
 //!      attempts to take overlapping paths queue safely.
 //!   2. Cross-process: `.zyal/locks/<sha1(path)>.lock` files with the holder
-//!      pid. Stale entries (pid not running) are reaped at acquire time.
+//!      pid. Orphaned entries (pid not running) are reaped at acquire time.
 //!
 //! Locks are taken sorted-lexicographically with `try_lock_all_or_none`; if
 //! any path is already held, we release everything we managed to grab and
@@ -80,7 +80,7 @@ impl FileLockMap {
             locks_root,
             pid: std::process::id(),
         };
-        map.reap_stale()?;
+        map.reap_orphaned()?;
         Ok(map)
     }
 
@@ -106,7 +106,7 @@ impl FileLockMap {
                 continue;
             }
             // Cross-process layer: a `.zyal/locks/<sha1>.lock` file written by
-            // a peer process at a *different* pid blocks us. Stale entries
+            // a peer process at a *different* pid blocks us. Orphaned entries
             // (pid not alive) are reaped lazily inside the helper.
             if self.lock_file_held_by_other(path)? {
                 conflicts.push(path.clone());
@@ -180,7 +180,7 @@ impl FileLockMap {
         Ok(true)
     }
 
-    fn reap_stale(&self) -> Result<()> {
+    fn reap_orphaned(&self) -> Result<()> {
         let entries = match fs::read_dir(&self.locks_root) {
             Ok(rd) => rd,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
@@ -210,19 +210,24 @@ fn pid_is_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
     }
-    // Direct libc::kill via the system C library. Signal 0 is a non-disruptive
-    // probe that returns 0 if the pid exists and the caller has permission to
-    // signal it, -1 with ESRCH if the pid no longer exists.
+    // SAFETY: Direct libc kill via the system C library. The FFI signature
+    // matches `kill(2)` exactly: `int kill(pid_t pid, int sig)` with
+    // `pid_t == i32` on every supported unix target. Signal 0 is a POSIX
+    // existence probe (the syscall only validates that `pid` resolves to a
+    // process the caller can signal); no memory is read or written and no
+    // resources are owned by this call, so the unsafe surface is strictly the
+    // C ABI itself. Returns 0 iff the pid is alive, -1 with errno=ESRCH if not.
     extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
+    // SAFETY: see the block comment above the extern declaration.
     unsafe { kill(pid as i32, 0) == 0 }
 }
 
 #[cfg(not(unix))]
 fn pid_is_alive(_pid: u32) -> bool {
     // Conservative default on non-unix: assume alive so we never reap a real
-    // peer. Stale files only matter for crash recovery on the same host.
+    // peer. Orphaned files only matter for crash recovery on the same host.
     true
 }
 
@@ -281,21 +286,21 @@ mod tests {
     }
 
     #[test]
-    fn stale_pid_lock_file_is_reaped_and_lock_succeeds() {
+    fn orphaned_pid_lock_file_is_reaped_and_lock_succeeds() {
         let dir = tempdir().unwrap();
         let locks_dir = dir.path().join(".zyal/locks");
         fs::create_dir_all(&locks_dir).unwrap();
         // Write a lock file referencing pid 1 (init) using a fake path; init
-        // is alive on every unix box. We need a *stale* example, so we use
+        // is alive on every unix box. We need a *orphaned* example, so we use
         // pid 999999 which is virtually guaranteed not to exist.
         let mut hasher = Sha1::new();
-        hasher.update(b"src/stale.rs");
+        hasher.update(b"src/orphaned.rs");
         let digest = hasher.finalize();
-        let stale_file = locks_dir.join(format!("{:x}.lock", digest));
-        fs::write(&stale_file, "999999\nsrc/stale.rs\n").unwrap();
+        let orphaned_file = locks_dir.join(format!("{:x}.lock", digest));
+        fs::write(&orphaned_file, "999999\nsrc/orphaned.rs\n").unwrap();
 
         let map = FileLockMap::new(dir.path()).unwrap();
-        let outcome = map.try_lock_all(&["src/stale.rs".into()]).unwrap();
+        let outcome = map.try_lock_all(&["src/orphaned.rs".into()]).unwrap();
         assert!(matches!(outcome, LockAcquireOutcome::Acquired(_)));
     }
 

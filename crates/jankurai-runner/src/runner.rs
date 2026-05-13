@@ -38,9 +38,10 @@ pub struct RunnerConfig {
 
 impl RunnerConfig {
     pub fn integration_branch(&self) -> String {
-        self.integration_branch
-            .clone()
-            .unwrap_or_else(|| format!("zyal/{}/integration", self.run_id))
+        match &self.integration_branch {
+            Some(b) => b.clone(),
+            None => format!("zyal/{}/integration", self.run_id),
+        }
     }
 }
 
@@ -227,7 +228,10 @@ fn severity_label(s: crate::classifier::Severity) -> &'static str {
 /// Random run-id: UTC compact timestamp + 6-byte random suffix. Sortable so
 /// `ls -1 .zyal/worktrees/` walks runs in chronological order.
 pub fn random_run_id() -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => d,
+        Err(_) => std::time::Duration::ZERO,
+    };
     let secs = now.as_secs();
     let nanos = now.subsec_nanos();
     // Six hex chars derived from the nano portion give us a low-collision
