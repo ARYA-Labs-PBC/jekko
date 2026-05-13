@@ -99,6 +99,7 @@ ZYAL_ARM RUN_FOREVER id=test`
     expect(files).toEqual([
       "autoresearch-basic.zyal",
       "autoresearch-chase.zyal",
+      "cogcore-stream-papers.zyal",
       "executable-benchmark.zyal",
       "generated-challenge.zyal",
       "prompt-scoring.zyal",
@@ -375,6 +376,7 @@ ZYAL_ARM RUN_FOREVER id=one`
       "26-semantic-feature-maker-insane.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
+      "memory-benchmark/cogcore-stream-papers.zyal",
       "memory-benchmark/executable-benchmark.zyal",
       "memory-benchmark/generated-challenge.zyal",
       "memory-benchmark/prompt-scoring.zyal",

@@ -1311,6 +1311,11 @@ const topLevelChildren = {
   budgets: budgetsNode,
   triggers: triggersNode,
   rollback: rollbackNode,
+  promotion_gates: recordNode(
+    "Promotion gate policy consumed by domain-specific reducers.",
+    scalar("Reducer-specific gate value."),
+    { status: "preview" },
+  ),
   done: doneNode,
   repo_intelligence: objectNode(repoIntelNode.description, repoIntelNode.kind === "object" ? repoIntelNode.children : {}, { status: "preview" }),
   fleet: fleetNode,

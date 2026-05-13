@@ -61,6 +61,7 @@ export const ZyalSpec = Schema.Struct({
   budgets: Schema.optional(Power.ZyalBudgets),
   triggers: Schema.optional(Power.ZyalTriggers),
   rollback: Schema.optional(Power.ZyalRollback),
+  promotion_gates: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   done: Schema.optional(Power.ZyalDone),
   repo_intelligence: Schema.optional(Power.ZyalRepoIntelligence),
   fleet: Schema.optional(Power.ZyalFleet),

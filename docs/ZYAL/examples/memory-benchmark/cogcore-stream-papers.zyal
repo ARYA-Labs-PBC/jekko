@@ -1,0 +1,105 @@
+# ZYAL v2.6 - Cogcore Paper Stream Smoke
+
+<<<ZYAL v1:daemon id=cogcore-stream-papers>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Cogcore paper stream smoke"
+  objective: |
+    Convert the checked real-paper QBank into cogcore StoredEvent JSONL,
+    ingest the stream through the memory-benchmark cogcore adapter, and write a
+    deterministic smoke report before any long-running paper daemon is armed.
+  risk:
+    - Answer keys must not be emitted as memory text
+    - Fixture/dev-only QBank output is smoke-only and cannot arm chase-daemon
+    - Runtime receipts stay under .jekko/daemon/cogcore-stream-papers
+
+loop:
+  policy: once
+  continue_on: [compaction]
+  pause_on: [checkpoint_failed]
+
+stop:
+  all:
+    - shell:
+        command: "test -f .jekko/daemon/cogcore-stream-papers/reports/cogcore-events.jsonl"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/cogcore-stream-papers/reports/cogcore-smoke.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+permissions:
+  research: deny
+  websearch: deny
+  webfetch: deny
+  edit: ask
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-workspace
+      tool: read
+      decision: allow
+    - id: shell-qbank-cogcore
+      tool: shell
+      command_regex: "^(rtk )?cargo run --manifest-path crates/(qbank-builder|memory-benchmark)/Cargo.toml "
+      decision: allow
+  command_floor:
+    always_block:
+      - "git push"
+      - "git push --force"
+      - "sudo "
+      - 'curl .* \| sh'
+      - 'wget .* \| sh'
+
+fan_out:
+  strategy: scatter_gather
+  split:
+    shell: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- emit-cogcore --bank crates/memory-benchmark/data/real-paper-bank --out .jekko/daemon/cogcore-stream-papers/reports/cogcore-events.jsonl"
+  worker:
+    agent: build
+    isolation: same_session
+    timeout: 5m
+    max_parallel: 1
+  reduce:
+    strategy: custom_shell
+    command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin cogcore_bench -- --events .jekko/daemon/cogcore-stream-papers/reports/cogcore-events.jsonl --out .jekko/daemon/cogcore-stream-papers/reports/cogcore-smoke.json"
+  on_partial_failure: abort
+
+memory:
+  stores:
+    cogcore_stream_receipts:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+
+sandbox:
+  paths:
+    - path: crates/memory-benchmark/data/real-paper-bank
+      access: read
+    - path: .jekko/daemon/cogcore-stream-papers
+      access: write
+  network:
+    outbound: deny
+
+done:
+  require:
+    - cogcore_event_stream_written
+    - cogcore_smoke_report_written
+  forbid:
+    - answer_key_observed
+    - chase_daemon_armed
+
+checkpoint:
+  verify:
+    - command: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- emit-cogcore --bank crates/memory-benchmark/data/real-paper-bank --out target/cogcore-stream-papers/events.jsonl && cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin cogcore_bench -- --events target/cogcore-stream-papers/events.jsonl --out target/cogcore-stream-papers/report.json"
+      timeout: 5m
+      assert: { exit_code: 0 }
+<<<END_ZYAL id=cogcore-stream-papers>>>
+ZYAL_ARM RUN_FOREVER id=cogcore-stream-papers

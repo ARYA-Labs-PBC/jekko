@@ -60,6 +60,7 @@ const SUPPORTED_FEATURE_KEYS = new Set([
   "budgets",
   "triggers",
   "rollback",
+  "promotion_gates",
   "done",
   "repo_intelligence",
   "fleet",
