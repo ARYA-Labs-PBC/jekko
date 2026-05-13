@@ -24,16 +24,19 @@ describe("ZYAL schema spec", () => {
     expect(readFileSync(specPath, "utf8")).toBe(`${renderZyalSpecMarkdown()}\n`)
   })
 
-  test("examples README stays on the documented count and includes the new bug-finder rows", () => {
+  test("examples README stays on the documented count and includes the new feature-maker rows", () => {
     const readme = readFileSync(examplesReadmePath, "utf8")
-    expect(readme).toContain("Twenty-seven flagship runbooks")
-    expect(readme.match(/^\| \[`/gm)?.length).toBe(27)
+    expect(readme).toContain("Thirty flagship runbooks")
+    expect(readme.match(/^\| \[`/gm)?.length).toBe(30)
     expect(readme).toContain("[`18-semantic-bug-finder-basic.zyal`](18-semantic-bug-finder-basic.zyal)")
     expect(readme).toContain("[`19-semantic-bug-finder-advanced.zyal`](19-semantic-bug-finder-advanced.zyal)")
     expect(readme).toContain("[`20-semantic-bug-finder-ultra.zyal`](20-semantic-bug-finder-ultra.zyal)")
     expect(readme).toContain("[`21-semantic-improvement-finder-simple.zyal`](21-semantic-improvement-finder-simple.zyal)")
     expect(readme).toContain("[`22-semantic-improvement-finder-advanced.zyal`](22-semantic-improvement-finder-advanced.zyal)")
     expect(readme).toContain("[`23-semantic-improvement-finder-insane.zyal`](23-semantic-improvement-finder-insane.zyal)")
+    expect(readme).toContain("[`24-semantic-feature-maker-simple.zyal`](24-semantic-feature-maker-simple.zyal)")
+    expect(readme).toContain("[`25-semantic-feature-maker-advanced.zyal`](25-semantic-feature-maker-advanced.zyal)")
+    expect(readme).toContain("[`26-semantic-feature-maker-insane.zyal`](26-semantic-feature-maker-insane.zyal)")
   })
 
   test("version metadata matches version.ts", () => {

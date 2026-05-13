@@ -1199,12 +1199,16 @@ Canonical human-facing schema for the ZYAL `2.6.0` contract.
 | [`21-semantic-improvement-finder-simple.zyal`](examples/21-semantic-improvement-finder-simple.zyal) | Single-worker improvement loop with KPI evidence, behavior-equivalence proof, and rollback |
 | [`22-semantic-improvement-finder-advanced.zyal`](examples/22-semantic-improvement-finder-advanced.zyal) | Weighted improvement triage with Jankurai proof routing, experiment lanes, memory, taint, and rollback |
 | [`23-semantic-improvement-finder-insane.zyal`](examples/23-semantic-improvement-finder-insane.zyal) | Full-power improvement fleet with dispatch, research, sandbox, security, approvals, and critic review |
+| [`24-semantic-feature-maker-simple.zyal`](examples/24-semantic-feature-maker-simple.zyal) | Single-worker feature recommendation with repo intelligence, evidence graph, first slice, and rollback |
+| [`25-semantic-feature-maker-advanced.zyal`](examples/25-semantic-feature-maker-advanced.zyal) | Weighted feature triage with repo intelligence, experiments, research, taint, and proof-map-backed review |
+| [`26-semantic-feature-maker-insane.zyal`](examples/26-semantic-feature-maker-insane.zyal) | Full-power feature-maker fleet with dispatch, workflow, approvals, research, sandbox, security, and critic review |
 
 ## Preview Notes
 
 - Parser validation happens before schema decode so malformed keys are rejected early.
 - `quality`, `experiments`, `research`, and `taint` are preview-heavy surfaces whose docs intentionally over-explain the host contract.
 - `jankurai`, `fleet`, `dispatch`, and `sandbox` are the main routing and containment primitives used by the shipped examples.
+- `repo_intelligence`, `evidence_graph`, `workflow`, and `approvals` anchor the feature-maker runbooks.
 
 _Generated from `packages/jekko/src/agent-script/schema-spec.ts`._
 

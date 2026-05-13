@@ -366,6 +366,9 @@ ZYAL_ARM RUN_FOREVER id=one`
       "21-semantic-improvement-finder-simple.zyal",
       "22-semantic-improvement-finder-advanced.zyal",
       "23-semantic-improvement-finder-insane.zyal",
+      "24-semantic-feature-maker-simple.zyal",
+      "25-semantic-feature-maker-advanced.zyal",
+      "26-semantic-feature-maker-insane.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
       "memory-benchmark/executable-benchmark.zyal",
@@ -575,6 +578,149 @@ ZYAL_ARM RUN_FOREVER id=one`
       "reject_revert",
       "edit",
     ])
+  })
+
+  test("accepts the simple semantic feature-maker example", async () => {
+    const parsed = await Effect.runPromise(
+      parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/24-semantic-feature-maker-simple.zyal"), "utf8")),
+    )
+    expect(parsed.preview.repo_intel_enabled).toBe(true)
+    expect(parsed.preview.repo_intel_summary).toContain("scale:medium")
+    expect(parsed.preview.repo_intel_summary).toContain("indexes:13")
+    expect(parsed.preview.evidence_graph_enabled).toBe(true)
+    expect(parsed.preview.evidence_graph_summary).toContain("nodes:4")
+    expect(parsed.preview.workflow_enabled).toBe(true)
+    expect(parsed.preview.workflow_summary).toContain("state_machine")
+    expect(parsed.preview.workflow_summary).toContain("states:4")
+    expect(parsed.preview.approval_gate_count).toBe(1)
+    expect(parsed.preview.evidence_summary).toContain("feature_thesis")
+    expect(parsed.preview.evidence_summary).toContain("proof_command")
+    expect(parsed.preview.rollback_enabled).toBe(true)
+    expect(parsed.spec.repo_intelligence?.scope_control?.require_scope_before_edit).toBe(true)
+    expect(parsed.spec.evidence_graph?.edges?.map((edge) => edge.kind)).toEqual([
+      "implies",
+      "must_prove",
+      "validates",
+    ])
+    expect(parsed.spec.done?.require).toContain("docs/ZYAL/FEATURE_MAKER.md")
+  })
+
+  test("accepts the advanced semantic feature-maker example", async () => {
+    const parsed = await Effect.runPromise(
+      parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/25-semantic-feature-maker-advanced.zyal"), "utf8")),
+    )
+    expect(parsed.preview.repo_intel_enabled).toBe(true)
+    expect(parsed.preview.repo_intel_summary).toContain("scale:large")
+    expect(parsed.preview.repo_intel_summary).toContain("indexes:13")
+    expect(parsed.preview.repo_intel_summary).toContain("scoped")
+    expect(parsed.preview.dispatch_enabled).toBe(true)
+    expect(parsed.preview.dispatch_lane_count).toBe(8)
+    expect(parsed.preview.dispatch_summary).toContain("lanes:8")
+    expect(parsed.preview.dispatch_summary).toContain("default:mission_gap")
+    expect(parsed.preview.experiments_enabled).toBe(true)
+    expect(parsed.preview.experiments_summary).toContain("primary:best_verified_patch")
+    expect(parsed.preview.research_enabled).toBe(true)
+    expect(parsed.preview.research_summary).toContain("mode:mixed")
+    expect(parsed.preview.research_summary).toContain("autonomy:require_plan")
+    expect(parsed.preview.research_provider_summary).toContain("prefer:official_api,primary_source,privacy_first")
+    expect(parsed.preview.research_evidence_summary).toContain("citations")
+    expect(parsed.preview.research_safety_summary).toContain("prompt_injection:quarantine")
+    expect(parsed.preview.taint_enabled).toBe(true)
+    expect(parsed.preview.taint_label_count).toBe(4)
+    expect(parsed.preview.taint_forbid_count).toBe(1)
+    expect(parsed.preview.jankurai_enabled).toBe(true)
+    expect(parsed.preview.jankurai_verification_summary).toContain("test_map")
+    expect(parsed.preview.workflow_summary).toContain("state_machine")
+    expect(parsed.preview.workflow_summary).toContain("states:5")
+    expect(parsed.preview.evidence_graph_summary).toContain("nodes:6")
+    expect(parsed.preview.approvals_summary).toContain("feature_review:reviewer")
+    expect(parsed.spec.dispatch?.lanes?.map((lane) => lane.id)).toEqual([
+      "mission_gap",
+      "latent_data",
+      "api_platform",
+      "ux_workflow",
+      "core_ip",
+      "enterprise_readiness",
+      "developer_platform",
+      "reliability_as_feature",
+    ])
+    expect(parsed.spec.approvals?.gates?.feature_review?.decisions).toEqual([
+      "approve_push",
+      "reject_revert",
+      "edit",
+    ])
+  })
+
+  test("accepts the insane semantic feature-maker example", async () => {
+    const parsed = await Effect.runPromise(
+      parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/26-semantic-feature-maker-insane.zyal"), "utf8")),
+    )
+    expect(parsed.preview.repo_intel_enabled).toBe(true)
+    expect(parsed.preview.repo_intel_summary).toContain("scale:billion_loc")
+    expect(parsed.preview.repo_intel_summary).toContain("indexes:14")
+    expect(parsed.preview.dispatch_enabled).toBe(true)
+    expect(parsed.preview.dispatch_lane_count).toBe(13)
+    expect(parsed.preview.dispatch_summary).toContain("lanes:13")
+    expect(parsed.preview.fleet_max_workers).toBe(12)
+    expect(parsed.preview.fleet_summary).toContain("max:12")
+    expect(parsed.preview.fleet_summary).toContain("jnoccio:on")
+    expect(parsed.preview.experiments_enabled).toBe(true)
+    expect(parsed.preview.research_enabled).toBe(true)
+    expect(parsed.preview.research_summary).toContain("autonomy:require_plan")
+    expect(parsed.preview.research_summary).toContain("parallel:8")
+    expect(parsed.preview.research_provider_summary).toContain("prefer:official_api,primary_source,privacy_first")
+    expect(parsed.preview.memory_store_count).toBe(3)
+    expect(parsed.preview.memory_summary).toContain("opportunity_bank:run")
+    expect(parsed.preview.memory_summary).toContain("feature_dossier:repo")
+    expect(parsed.preview.memory_summary).toContain("critic_review:task")
+    expect(parsed.preview.workflow_summary).toContain("state_machine")
+    expect(parsed.preview.workflow_summary).toContain("states:6")
+    expect(parsed.preview.approval_gate_count).toBe(1)
+    expect(parsed.preview.approvals_summary).toContain("feature_review:reviewer")
+    expect(parsed.preview.sandbox_enabled).toBe(true)
+    expect(parsed.preview.sandbox_summary).toContain("net:allowlist")
+    expect(parsed.preview.security_enabled).toBe(true)
+    expect(parsed.preview.security_summary).toContain("zones:2")
+    expect(parsed.preview.security_summary).toContain("scan:input")
+    expect(parsed.preview.security_summary).toContain("scan:output")
+    expect(parsed.preview.observability_enabled).toBe(true)
+    expect(parsed.preview.observability_summary).toContain("metrics:2")
+    expect(parsed.preview.observability_summary).toContain("budget:$12")
+    expect(parsed.preview.observability_summary).toContain("report:enabled")
+    expect(parsed.preview.taint_enabled).toBe(true)
+    expect(parsed.preview.taint_label_count).toBe(4)
+    expect(parsed.preview.taint_forbid_count).toBe(2)
+    expect(parsed.preview.taint_summary).toContain("labels:4")
+    expect(parsed.preview.taint_summary).toContain("forbid:2")
+    expect(parsed.preview.jankurai_enabled).toBe(true)
+    expect(parsed.preview.jankurai_verification_summary).toContain("test_map")
+    expect(parsed.preview.capabilities_rule_count).toBe(4)
+    expect(parsed.preview.capabilities_summary).toContain("rules:4")
+    expect(parsed.preview.capabilities_summary).toContain("floor:2")
+    expect(parsed.preview.quality_enabled).toBe(true)
+    expect(parsed.preview.quality_summary).toContain("anti_vibe")
+    expect(parsed.preview.quality_summary).toContain("checks:3")
+    expect(parsed.spec.dispatch?.lanes?.map((lane) => lane.id)).toEqual([
+      "mission_gap",
+      "latent_data",
+      "api_platform",
+      "ux_workflow",
+      "core_ip",
+      "enterprise_readiness",
+      "developer_platform",
+      "reliability_as_feature",
+      "integration",
+      "customer_request",
+      "competitor_research",
+      "architecture_incubator",
+      "random_deep_dive",
+    ])
+    expect(parsed.spec.approvals?.gates?.feature_review?.decisions).toEqual([
+      "approve_push",
+      "reject_revert",
+      "edit",
+    ])
+    expect(parsed.spec.done?.require).toContain(".jekko/daemon/feature-review/candidate.patch")
   })
 
   test("accepts first-class paper question bank research blocks", async () => {

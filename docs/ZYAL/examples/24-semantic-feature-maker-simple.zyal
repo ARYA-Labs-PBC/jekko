@@ -1,0 +1,238 @@
+# ZYAL v2.6 - Simple semantic feature maker
+#
+# One low-risk feature per PR. Build the Project Atlas view, prove the gap,
+# ship the first vertical slice, verify, and open a draft PR only after
+# rollback is known.
+
+<<<ZYAL v1:daemon id=semantic-feature-maker-simple>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Semantic feature maker simple"
+  objective: |
+    Recommend one safe feature at a time from evidence. Build a project atlas,
+    turn the atlas into a feature thesis, prove the capability gap against the
+    current repo, implement the first vertical slice, add tests, validate the
+    integration path, and record rollback and PR evidence before promotion.
+  risk:
+    - a feature thesis can drift away from actual repo constraints if atlas evidence is weak
+    - the first slice can overreach unless the proof plan stays narrow
+    - tests can cover the slice but miss the integration path without a vertical validation step
+
+loop:
+  policy: bounded
+  sleep: 3s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [checkpoint_failed, no_progress]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+stop:
+  all:
+    - git_clean:
+        allow_untracked: false
+    - shell:
+        command: "test -f docs/ZYAL/FEATURE_MAKER.md && test -f target/zyal/feature-maker/feature-dossier.md && test -f target/zyal/feature-maker/proof-report.md"
+        timeout: 5m
+        assert:
+          exit_code: 0
+
+context:
+  strategy: hard
+  compact_every: 2
+  hard_clear_every: 4
+  preserve:
+    - objective
+    - feature_thesis
+    - capability_gap
+    - first_vertical_slice
+    - proof_command
+
+repo_intelligence:
+  scale: medium
+  indexes:
+    - README.md
+    - MISSION.md
+    - ROADMAP.md
+    - docs/adr/
+    - package.json
+    - Cargo.toml
+    - vite.config.ts
+    - routes/
+    - api/
+    - db/migrations/
+    - tests/
+    - Dockerfile
+    - .github/workflows/
+  generated_zones:
+    - target/zyal/feature-maker/project-atlas.json
+    - target/zyal/feature-maker/capability-graph.json
+  scope_control:
+    require_scope_before_edit: true
+    max_initial_scope_files: 6
+    expand_scope_requires_evidence: true
+  blast_radius:
+    compute_on: [packages/, crates/, app/]
+    pause_when_score_gte: 0.35
+
+evidence_graph:
+  nodes:
+    mission_link:
+      type: doc_claim
+      required: true
+    capability_gap:
+      type: repo_fact
+      required: true
+    user_workflow:
+      type: workflow
+      required: true
+    proof_plan:
+      type: verification
+      required: true
+  edges:
+    - from: mission_link
+      to: capability_gap
+      kind: implies
+    - from: capability_gap
+      to: proof_plan
+      kind: must_prove
+    - from: user_workflow
+      to: proof_plan
+      kind: validates
+  merge_witness: target/zyal/feature-maker/feature-dossier.md
+
+workflow:
+  type: state_machine
+  initial: discover
+  states:
+    discover:
+      agent: plan
+      writes: scratch_only
+      produces: [project_atlas, feature_thesis, feature_dossier]
+      transitions:
+        - to: implement
+          when:
+            evidence_exists: project_atlas
+    implement:
+      agent: build
+      writes: isolated_worktree
+      requires: [feature_thesis, capability_gap]
+      produces: [first_vertical_slice, tests_added]
+      transitions:
+        - to: validate
+          when:
+            all_checks_pass: true
+    validate:
+      agent: critic
+      writes: scratch_only
+      requires: [first_vertical_slice, tests_added]
+      produces: [proof_command]
+      transitions:
+        - to: review
+          when:
+            approval_granted: feature_review
+    review:
+      agent: plan
+      writes: scratch_only
+      requires: [proof_command, rollback_note]
+      produces: [pr_evidence]
+      terminal: true
+
+evidence:
+  require_before_promote:
+    - type: feature_thesis
+      must_exist: true
+    - type: capability_gap
+      must_exist: true
+    - type: repo_evidence
+      must_exist: true
+    - type: user_workflow
+      must_exist: true
+    - type: first_vertical_slice
+      must_exist: true
+    - type: tests_added
+      must_exist: true
+    - type: proof_command
+      must_pass: true
+    - type: rollback_note
+      must_exist: true
+    - type: pr_evidence
+      must_exist: true
+  bundle_format: markdown
+  sign: sha256
+  archive: true
+
+approvals:
+  gates:
+    feature_review:
+      required_role: reviewer
+      timeout: 1d
+      on_timeout: escalate
+      decisions: [approve_push, reject_revert, edit]
+      require_evidence: [feature_thesis, proof_command, pr_evidence]
+      auto_approve_if:
+        risk_score_lt: 0.2
+        all_checks_pass: true
+  escalation:
+    chain: [reviewer, tech_lead]
+    auto_escalate_after: 6h
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "bun --cwd packages/jekko test src/agent-script/schema-spec.test.ts src/agent-script/parser.test.ts"
+      timeout: 2m
+      assert:
+        exit_code: 0
+    - command: "cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml all_tracked_zyal_files_parse_and_preview"
+      timeout: 10m
+      assert:
+        exit_code: 0
+  git:
+    add:
+      - docs/ZYAL/examples/24-semantic-feature-maker-simple.zyal
+      - docs/ZYAL/FEATURE_MAKER.md
+    commit_message: "docs: feature maker simple"
+    push: ask
+
+rollback:
+  required_when:
+    risk_score_gte: 0.15
+  plan_required: true
+  verify_command: "git apply --reverse --check < .jekko/daemon/rollback.patch"
+  on_failure_after_merge: revert_commit
+
+done:
+  require:
+    - target/zyal/feature-maker/project-atlas.json
+    - target/zyal/feature-maker/capability-graph.json
+    - target/zyal/feature-maker/opportunity-bank.md
+    - target/zyal/feature-maker/feature-dossier.md
+    - target/zyal/feature-maker/proof-report.md
+    - docs/ZYAL/FEATURE_MAKER.md
+  forbid:
+    - broad_rewrite
+    - missing_tests
+    - missing_rollback_note
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: ask
+
+hooks:
+  after_checkpoint:
+    - run: "gh pr create --draft --fill --title 'semantic feature maker simple'"
+      timeout: 5m
+      on_fail: pause
+
+ui:
+  theme: jekko-gold
+  banner: feature-maker
+<<<END_ZYAL id=semantic-feature-maker-simple>>>
+ZYAL_ARM RUN_FOREVER id=semantic-feature-maker-simple

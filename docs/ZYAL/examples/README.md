@@ -1,6 +1,6 @@
 # ZYAL Powerful Examples
 
-Twenty-seven flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
+Thirty flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
 
 | File | Demonstrates | Power blocks |
 |---|---|---|
@@ -26,6 +26,9 @@ Twenty-seven flagship runbooks that show what ZYAL v2.6 makes possible. Each is 
 | [`21-semantic-improvement-finder-simple.zyal`](21-semantic-improvement-finder-simple.zyal) | Single-worker semantic improvement loop with KPI evidence, behavior-equivalence proof, and rollback | `quality`, `evidence`, `budgets`, `rollback`, `checkpoint`, `hooks` |
 | [`22-semantic-improvement-finder-advanced.zyal`](22-semantic-improvement-finder-advanced.zyal) | Weighted improvement triage with Jankurai proof routing, experiment lanes, memory, taint, and rollback | `jankurai`, `experiments`, `memory`, `evidence`, `taint`, `rollback`, `hooks` |
 | [`23-semantic-improvement-finder-insane.zyal`](23-semantic-improvement-finder-insane.zyal) | Full-power improvement fleet with dispatch, research, sandbox, security, approvals, and critic review | `dispatch`, `fleet`, `experiments`, `research`, `memory`, `taint`, `sandbox`, `security`, `observability`, `approvals`, `workflow` |
+| [`24-semantic-feature-maker-simple.zyal`](24-semantic-feature-maker-simple.zyal) | Single-worker feature recommendation with atlas evidence, first slice, and rollback | `repo_intelligence`, `evidence_graph`, `workflow`, `approvals`, `evidence`, `rollback` |
+| [`25-semantic-feature-maker-advanced.zyal`](25-semantic-feature-maker-advanced.zyal) | Weighted feature triage with dispatch, research taint quarantine, Jankurai proof routing, and review gates | `repo_intelligence`, `dispatch`, `experiments`, `research`, `taint`, `jankurai`, `workflow`, `approvals` |
+| [`26-semantic-feature-maker-insane.zyal`](26-semantic-feature-maker-insane.zyal) | Full-power feature maker with fleet, memory, sandbox, security, observability, and critic review | `repo_intelligence`, `dispatch`, `fleet`, `experiments`, `research`, `memory`, `workflow`, `approvals`, `sandbox`, `security`, `observability`, `taint`, `jankurai` |
 | [`memory-benchmark/prompt-scoring.zyal`](memory-benchmark/prompt-scoring.zyal) | Judge-population prompt scoring for the tracked memory benchmark corpus | `fan_out`, `memory`, `evidence`, `security`, `observability` |
 | [`memory-benchmark/autoresearch-basic.zyal`](memory-benchmark/autoresearch-basic.zyal) | Basic sandboxed AutoResearch memory benchmark with four workers and best-verified-patch reduction | `fan_out`, `experiments`, `memory`, `sandbox`, `observability` |
 | [`memory-benchmark/executable-benchmark.zyal`](memory-benchmark/executable-benchmark.zyal) | Deterministic Rust harness scoring for baseline, candidate, and reference memory systems | `fan_out`, `experiments`, `evidence`, `sandbox`, `observability` |
