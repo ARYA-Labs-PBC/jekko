@@ -26,11 +26,14 @@ describe("ZYAL schema spec", () => {
 
   test("examples README stays on the documented count and includes the new bug-finder rows", () => {
     const readme = readFileSync(examplesReadmePath, "utf8")
-    expect(readme).toContain("Twenty-four flagship runbooks")
-    expect(readme.match(/^\| \[`/gm)?.length).toBe(24)
+    expect(readme).toContain("Twenty-seven flagship runbooks")
+    expect(readme.match(/^\| \[`/gm)?.length).toBe(27)
     expect(readme).toContain("[`18-semantic-bug-finder-basic.zyal`](18-semantic-bug-finder-basic.zyal)")
     expect(readme).toContain("[`19-semantic-bug-finder-advanced.zyal`](19-semantic-bug-finder-advanced.zyal)")
     expect(readme).toContain("[`20-semantic-bug-finder-ultra.zyal`](20-semantic-bug-finder-ultra.zyal)")
+    expect(readme).toContain("[`21-semantic-improvement-finder-simple.zyal`](21-semantic-improvement-finder-simple.zyal)")
+    expect(readme).toContain("[`22-semantic-improvement-finder-advanced.zyal`](22-semantic-improvement-finder-advanced.zyal)")
+    expect(readme).toContain("[`23-semantic-improvement-finder-insane.zyal`](23-semantic-improvement-finder-insane.zyal)")
   })
 
   test("version metadata matches version.ts", () => {

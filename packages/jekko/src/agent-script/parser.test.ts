@@ -363,6 +363,9 @@ ZYAL_ARM RUN_FOREVER id=one`
       "18-semantic-bug-finder-basic.zyal",
       "19-semantic-bug-finder-advanced.zyal",
       "20-semantic-bug-finder-ultra.zyal",
+      "21-semantic-improvement-finder-simple.zyal",
+      "22-semantic-improvement-finder-advanced.zyal",
+      "23-semantic-improvement-finder-insane.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
       "memory-benchmark/executable-benchmark.zyal",
@@ -488,6 +491,90 @@ ZYAL_ARM RUN_FOREVER id=one`
     ])
     expect(parsed.spec.research?.paper_scan?.enabled).toBe(true)
     expect(parsed.spec.jankurai?.verification?.proof_from_test_map).toBe(true)
+  })
+
+  test("accepts the simple semantic improvement-finder example", async () => {
+    const parsed = await Effect.runPromise(
+      parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/21-semantic-improvement-finder-simple.zyal"), "utf8")),
+    )
+    expect(parsed.preview.quality_enabled).toBe(true)
+    expect(parsed.preview.evidence_enabled).toBe(true)
+    expect(parsed.preview.rollback_enabled).toBe(true)
+    expect(parsed.preview.hook_count).toBeGreaterThan(0)
+    expect(parsed.preview.evidence_summary).toContain("baseline_kpi")
+    expect(parsed.preview.evidence_summary).toContain("behavior_equivalence_proof")
+    expect(parsed.spec.budgets?.run?.iterations).toBe(10)
+    expect(parsed.spec.evidence?.require_before_promote?.map((item) => item.type)).toEqual([
+      "improvement_hypothesis",
+      "baseline_kpi",
+      "behavior_equivalence_proof",
+      "after_kpi",
+      "kpi_delta",
+      "burden_delta",
+      "proof_command",
+      "rollback_note",
+      "pr_evidence",
+    ])
+  })
+
+  test("accepts the advanced semantic improvement-finder example", async () => {
+    const parsed = await Effect.runPromise(
+      parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/22-semantic-improvement-finder-advanced.zyal"), "utf8")),
+    )
+    expect(parsed.preview.jankurai_enabled).toBe(true)
+    expect(parsed.preview.jankurai_verification_summary).toContain("test_map")
+    expect(parsed.preview.experiments_enabled).toBe(true)
+    expect(parsed.preview.fleet_max_workers).toBe(3)
+    expect(parsed.preview.taint_enabled).toBe(true)
+    expect(parsed.preview.memory_store_count).toBeGreaterThanOrEqual(4)
+    expect(parsed.preview.evidence_summary).toContain("behavior_equivalence_proof")
+    expect(parsed.preview.evidence_summary).toContain("rollback_note")
+    expect(parsed.spec.experiments?.lanes?.map((lane) => lane.id)).toEqual([
+      "safe_simplification",
+      "speed_profile",
+      "memory_reduction",
+      "security_hardening",
+      "dependency_surface",
+    ])
+    expect(parsed.spec.budgets?.run?.iterations).toBe(10)
+    expect(parsed.spec.jankurai?.verification?.proof_from_test_map).toBe(true)
+  })
+
+  test("accepts the insane semantic improvement-finder example", async () => {
+    const parsed = await Effect.runPromise(
+      parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/23-semantic-improvement-finder-insane.zyal"), "utf8")),
+    )
+    expect(parsed.preview.dispatch_enabled).toBe(true)
+    expect(parsed.preview.dispatch_lane_count).toBe(8)
+    expect(parsed.preview.fleet_max_workers).toBe(12)
+    expect(parsed.preview.research_enabled).toBe(true)
+    expect(parsed.preview.sandbox_enabled).toBe(true)
+    expect(parsed.preview.security_enabled).toBe(true)
+    expect(parsed.preview.observability_enabled).toBe(true)
+    expect(parsed.preview.approvals_summary).toContain("improvement_review:critic")
+    expect(parsed.preview.workflow_summary).toContain("state_machine")
+    expect(parsed.preview.workflow_summary).toContain("states:3")
+    expect(parsed.preview.roles_count).toBe(4)
+    expect(parsed.preview.channels_count).toBe(4)
+    expect(parsed.preview.imports_count).toBe(4)
+    expect(parsed.preview.reasoning_privacy_enabled).toBe(true)
+    expect(parsed.preview.unsupported_feature_policy_enabled).toBe(true)
+    expect(parsed.preview.evidence_summary).toContain("candidate_patch")
+    expect(parsed.spec.dispatch?.lanes?.map((lane) => lane.id)).toEqual([
+      "simplification",
+      "speed",
+      "memory",
+      "security-no-burden",
+      "dependency-surface",
+      "dead-code",
+      "api-friction",
+      "random-deep-dive",
+    ])
+    expect(parsed.spec.approvals?.gates?.improvement_review?.decisions).toEqual([
+      "approve_push",
+      "reject_revert",
+      "edit",
+    ])
   })
 
   test("accepts first-class paper question bank research blocks", async () => {

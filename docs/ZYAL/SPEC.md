@@ -1196,6 +1196,9 @@ Canonical human-facing schema for the ZYAL `2.6.0` contract.
 | [`18-semantic-bug-finder-basic.zyal`](examples/18-semantic-bug-finder-basic.zyal) | Single-worker bug-finder with fail-first gates, PR hook, and hard resets |
 | [`19-semantic-bug-finder-advanced.zyal`](examples/19-semantic-bug-finder-advanced.zyal) | Weighted selection, incubator routing, taint, and proof-map-backed verification |
 | [`20-semantic-bug-finder-ultra.zyal`](examples/20-semantic-bug-finder-ultra.zyal) | Full-power dispatch/fleet/research/memory/taint loop with deep-dive lanes |
+| [`21-semantic-improvement-finder-simple.zyal`](examples/21-semantic-improvement-finder-simple.zyal) | Single-worker improvement loop with KPI evidence, behavior-equivalence proof, and rollback |
+| [`22-semantic-improvement-finder-advanced.zyal`](examples/22-semantic-improvement-finder-advanced.zyal) | Weighted improvement triage with Jankurai proof routing, experiment lanes, memory, taint, and rollback |
+| [`23-semantic-improvement-finder-insane.zyal`](examples/23-semantic-improvement-finder-insane.zyal) | Full-power improvement fleet with dispatch, research, sandbox, security, approvals, and critic review |
 
 ## Preview Notes
 

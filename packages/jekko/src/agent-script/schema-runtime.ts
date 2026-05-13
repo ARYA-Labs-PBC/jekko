@@ -80,6 +80,8 @@ export const ZyalEvidence = Schema.Struct({
 export type ZyalEvidence = Schema.Schema.Type<typeof ZyalEvidence>
 
 export const ZyalApprovalDecision = Schema.Union([
+  Schema.Literal("approve_push"),
+  Schema.Literal("reject_revert"),
   Schema.Literal("approve"),
   Schema.Literal("reject"),
   Schema.Literal("edit"),

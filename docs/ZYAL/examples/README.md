@@ -1,6 +1,6 @@
 # ZYAL Powerful Examples
 
-Twenty-four flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
+Twenty-seven flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
 
 | File | Demonstrates | Power blocks |
 |---|---|---|
@@ -23,6 +23,9 @@ Twenty-four flagship runbooks that show what ZYAL v2.6 makes possible. Each is a
 | [`18-semantic-bug-finder-basic.zyal`](18-semantic-bug-finder-basic.zyal) | Single-worker semantic bug finder with invariant-first edits, failing-test discipline, one bug per PR, PR hook, and hard context resets | `quality`, `evidence`, `checkpoint`, `hooks`, `rollback`, `permissions` |
 | [`19-semantic-bug-finder-advanced.zyal`](19-semantic-bug-finder-advanced.zyal) | Weighted bug triage with Jankurai read-first files, incubator routing, proof-map-backed verification, taint, rollback, and PR gating | `jankurai`, `experiments`, `memory`, `evidence`, `taint`, `rollback`, `hooks` |
 | [`20-semantic-bug-finder-ultra.zyal`](20-semantic-bug-finder-ultra.zyal) | Full-power bug-finding fleet with dispatch, research, memory, taint, sandbox, security, contract-drift, and deep-dive lanes | `dispatch`, `fleet`, `experiments`, `research`, `memory`, `taint`, `sandbox`, `security`, `jankurai` |
+| [`21-semantic-improvement-finder-simple.zyal`](21-semantic-improvement-finder-simple.zyal) | Single-worker semantic improvement loop with KPI evidence, behavior-equivalence proof, and rollback | `quality`, `evidence`, `budgets`, `rollback`, `checkpoint`, `hooks` |
+| [`22-semantic-improvement-finder-advanced.zyal`](22-semantic-improvement-finder-advanced.zyal) | Weighted improvement triage with Jankurai proof routing, experiment lanes, memory, taint, and rollback | `jankurai`, `experiments`, `memory`, `evidence`, `taint`, `rollback`, `hooks` |
+| [`23-semantic-improvement-finder-insane.zyal`](23-semantic-improvement-finder-insane.zyal) | Full-power improvement fleet with dispatch, research, sandbox, security, approvals, and critic review | `dispatch`, `fleet`, `experiments`, `research`, `memory`, `taint`, `sandbox`, `security`, `observability`, `approvals`, `workflow` |
 | [`memory-benchmark/prompt-scoring.zyal`](memory-benchmark/prompt-scoring.zyal) | Judge-population prompt scoring for the tracked memory benchmark corpus | `fan_out`, `memory`, `evidence`, `security`, `observability` |
 | [`memory-benchmark/autoresearch-basic.zyal`](memory-benchmark/autoresearch-basic.zyal) | Basic sandboxed AutoResearch memory benchmark with four workers and best-verified-patch reduction | `fan_out`, `experiments`, `memory`, `sandbox`, `observability` |
 | [`memory-benchmark/executable-benchmark.zyal`](memory-benchmark/executable-benchmark.zyal) | Deterministic Rust harness scoring for baseline, candidate, and reference memory systems | `fan_out`, `experiments`, `evidence`, `sandbox`, `observability` |

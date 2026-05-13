@@ -5,6 +5,7 @@
 - Added the canonical human-facing schema at `docs/ZYAL/SPEC.md` together with
   generator/check tooling so parser/schema drift cannot go silent.
 - Added three semantic bug-finder runbooks: basic, advanced, and ultra.
+- Added three semantic improvement-finder runbooks: simple, advanced, and insane.
 - Kept the contract version at `2.6.0`; this is a docs/spec-governance update,
   not a schema bump.
 

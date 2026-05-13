@@ -1,0 +1,153 @@
+# ZYAL v2.6 - Simple semantic improvement finder
+#
+# Single-worker improvement loop. One measurable, low-risk improvement per PR.
+
+<<<ZYAL v1:daemon id=semantic-improvement-finder-simple>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Semantic improvement finder simple"
+  objective: |
+    Find one safe improvement at a time. Record the improvement hypothesis,
+    baseline KPI, behavior-equivalence proof, after KPI, burden delta, rollback
+    note, and PR evidence. Promote only when the improvement is measurable and
+    does not reduce functionality, seed behavior, capability, future
+    extensibility, security posture, or maintainability.
+  risk:
+    - optimization can become a semantic behavior change without equivalence proof
+    - simplification can remove future extension seams if burden is not measured
+    - KPI gains can be fake if baseline and after measurements drift
+
+loop:
+  policy: bounded
+  sleep: 3s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [checkpoint_failed, no_progress]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+stop:
+  all:
+    - git_clean:
+        allow_untracked: false
+
+context:
+  strategy: hard
+  compact_every: 2
+  hard_clear_every: 4
+  preserve:
+    - objective
+    - current_improvement
+    - baseline_kpi
+    - after_kpi
+    - proof_command
+
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_assertion_weakening: true
+    block_silent_catch: true
+    block_fake_data_fallback: true
+    block_ts_ignore: true
+  diff_budget:
+    max_files_changed: 8
+    max_added_lines: 300
+    on_violation: require_approval
+  checks:
+    - name: no-test-skip
+      pattern: "\\.skip\\(|test\\.only\\(|describe\\.only\\("
+      scope: file_diff
+      on_violation: block_promotion
+    - name: no-fake-data
+      pattern: "fake data|stubbed fallback"
+      scope: file_diff
+      on_violation: warn
+
+requirements:
+  must:
+    - write the improvement hypothesis before editing code
+    - capture a baseline KPI before the patch
+    - capture a behavior-equivalence proof before promotion
+    - keep the patch minimal
+    - record the proof command and expected output
+    - include burden and risk checks in the PR body
+    - include rollback notes in the PR body
+    - include PR evidence before promotion
+    - reset context after each shipped improvement
+    - open exactly one improvement per PR
+
+evidence:
+  require_before_promote:
+    - type: improvement_hypothesis
+      must_exist: true
+    - type: baseline_kpi
+      must_exist: true
+    - type: behavior_equivalence_proof
+      must_pass: true
+    - type: after_kpi
+      must_exist: true
+    - type: kpi_delta
+      must_exist: true
+    - type: burden_delta
+      must_exist: true
+    - type: proof_command
+      must_pass: true
+    - type: rollback_note
+      must_exist: true
+    - type: pr_evidence
+      must_exist: true
+
+budgets:
+  run:
+    iterations: 10
+    wall_clock: 2h
+    on_exhaust: pause
+  task:
+    iterations: 2
+    on_exhaust: park
+  iteration:
+    tool_calls: 25
+    diff_lines: 600
+    on_exhaust: pause
+
+rollback:
+  required_when:
+    risk_score_gte: 0.25
+  plan_required: true
+  verify_command: "git apply --reverse --check < .jekko/daemon/rollback.patch"
+  on_failure_after_merge: revert_commit
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "bun --cwd packages/jekko test src/agent-script/schema-spec.test.ts src/agent-script/parser.test.ts"
+      timeout: 2m
+      assert: { exit_code: 0 }
+  git:
+    add: ["."]
+    commit_message: "fix: semantic improvement <id>"
+    push: ask
+
+hooks:
+  after_checkpoint:
+    - run: "gh pr create --draft --fill --title 'semantic improvement finder'"
+      timeout: 5m
+      on_fail: pause
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: ask
+
+ui:
+  theme: jekko-gold
+  banner: forever
+<<<END_ZYAL id=semantic-improvement-finder-simple>>>
+ZYAL_ARM RUN_FOREVER id=semantic-improvement-finder-simple
