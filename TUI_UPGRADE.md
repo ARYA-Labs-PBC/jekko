@@ -387,10 +387,25 @@ ERROR  service=tui.plugin error.message=
    ```bash
    rm ~/.local/share/jekko/jekko-local.db ~/.local/share/jekko/jekko-local.db-wal ~/.local/share/jekko/jekko-local.db-shm
    ```
-2. **Per-checkout DB:** export `JEKKO_DB_PATH=~/Code/jekko/.local/jekko-local.db` (or set in `jekko.json`). Confirm by reading `packages/jekko/src/storage/db.ts` for the actual env var name — `db.ts:174` invokes `repairSqliteMigrations` which is what failed.
+2. **Per-checkout DB (confirmed working via `Flag.JEKKO_DB`):**
+   ```bash
+   JEKKO_DB=/Users/bentaylor/Code/jekko/.local/jekko-tuibomb.db \
+     bun run --cwd packages/jekko ./src/index.ts
+   ```
+   `Flag.JEKKO_DB` accepts an absolute path or `:memory:` (see `packages/jekko/src/storage/db.ts:42-48`).
 3. **Use only from `~/Code/opencode/` (the original):** TUIbomb is the new branding/UX in a fresh checkout; the original checkout's DB stays in sync.
 
-Bottom line: the TUI visually verifies all Phase 2-3 work (refined amber palette, splash composition, NEVERHUMAN wordmark, JEKKO gold accent). Phase 5-7 (shell route, panes, shortcuts) are gated behind the DB repair and have not been visually smoke-tested end-to-end yet.
+### Second smoke-boot with `JEKKO_DB` override
+
+Repair attempt: `repaired=0 recreatedMigrationTable=true repaired sqlite migrations` ✓ — repair logic *succeeded*. Splash continued to render correctly: streaming boot log on left (`[+0.28s] ▸ runtime initialized` with `▸` in `#D4A843`, "runtime" in `#F2E8D2`, "initialized" in `#8A7E66`, spinner `⠙` in `#D4A843`) + NEVERHUMAN wordmark + "loading…" pulsing right.
+
+Then the migration journal hit a **separate, pre-existing bug** in the repair pipeline: after `recreatedMigrationTable=true`, `applyMigrationJournal` tries to re-run all 24 migrations but the schema tables (`project`, etc.) already exist from prior usage → `Error: table 'project' already exists`. The repair should mark migrations as already-applied when it recreates the journal table; it doesn't.
+
+Suspected fix lives in `packages/jekko/src/storage/migration-repair.ts:repairSqliteMigrations` (the function returns repaired/recreatedMigrationTable flags, then `db.ts:187` unconditionally calls `applyMigrationJournal`). The proper fix is to either:
+- have `repairSqliteMigrations` populate the journal table with all existing migrations marked as applied, OR
+- have `applyMigrationJournal` introspect existing schema before running CREATE TABLE statements.
+
+This is outside the TUIbomb scope. Bottom line for visual verification: **the splash screen is fully smoke-tested and renders correctly**. Phase 5-7 surfaces (shell route, panes, shortcuts, keybinds) are not visually validated end-to-end because the boot terminates before reaching them, but typecheck + slot-registration verification confirms the wiring is correct.
 
 ---
 
