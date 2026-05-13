@@ -30,7 +30,10 @@ pub mod scoring;
 pub mod triangulate;
 pub mod types;
 
-pub use case::{BenchCase, CaseOracle, EpisodeStep, OracleKind, Split, SuiteConfig};
+pub use case::{
+    BenchCase, CaseOracle, CompoundCase, CompoundQuery, EpisodeStep, HardeningCase, OracleKind,
+    Split, SuiteConfig,
+};
 pub use result::{
     Citation, ClaimRecord, ClaimStatus, ContextMetric, OmissionNote, RecallResult, Redaction,
     SkillCall,

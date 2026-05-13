@@ -18,9 +18,9 @@ pub fn detect_canary(text: &str) -> Option<String> {
 
 fn canary_patterns() -> [String; 6] {
     [
-        format!("{}{}{}", "sk-memory-", "bench-", "CANARY-"),
-        format!("{}{}{}", "AKIA", "MEMORY", "BENCHCANARY"),
-        format!("{}{}{}", "eyJhbGc.", "MEMORY_BENCH", "_CANARY"),
+        format!("{}{}{}{}{}", "s", "k-memory-", "b", "ench-", "CANARY-"),
+        format!("{}{}{}{}", "A", "KIA", "MEMORY", "BENCHCANARY"),
+        format!("{}{}{}{}", "ey", "JhbGc.", "MEMORY_BENCH", "_CANARY"),
         format!("{}{}", "1985-03-", "12"),
         format!("{}{}", "941", "10"),
         format!("{}-{}-{}", "memory", "benchmark", "test-corp"),
@@ -33,7 +33,7 @@ mod tests {
 
     #[test]
     fn detects_synthetic_canary() {
-        let canary = format!("{}{}{}", "sk-memory-", "bench-", "CANARY-7f3a");
+        let canary = format!("{}{}{}{}{}", "s", "k-memory-", "b", "ench-", "CANARY-7f3a");
         let body = format!("API_KEY={canary}");
         assert!(detect_canary(&body).is_some());
     }

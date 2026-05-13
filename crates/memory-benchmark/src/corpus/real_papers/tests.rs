@@ -3,6 +3,9 @@ use crate::adapters::baseline;
 use crate::MemorySystem;
 use crate::{Query, QueryIntent};
 use std::path::Path;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn legacy_fixture_challenge_still_loads() {
@@ -100,6 +103,92 @@ fn answer_key_is_not_observed_as_memory_event() {
 }
 
 #[test]
+fn production_missing_paper_fails_without_fixture_fallback() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    std::env::remove_var("memory_benchmark_dev_qbank");
+    let loaded = LoadedChallenge {
+        paper: None,
+        challenge: fixture_challenge("missing-paper", 1.0, 0.0),
+    };
+    let mut adapter = baseline::Adapter::default();
+    let err = super::run::observe_paper(&mut adapter, &loaded).expect_err("missing paper fails");
+    assert!(err.contains("missing paper JSON for paper"));
+}
+
+#[test]
+fn dev_fixture_qbank_mode_passes_and_marks_report_dev_only() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    std::env::set_var("memory_benchmark_dev_qbank", "1");
+    let root = temp_qbank_dir("dev-fixture-qbank-mode");
+    std::fs::create_dir_all(root.join("challenges")).expect("create challenges");
+    std::fs::write(
+        root.join("challenges/manifest.json"),
+        r#"[
+  {
+    "challenge_hash": "qbank-dev",
+    "publication_hash": "paper-dev",
+    "question": "What is the fixture-only result?",
+    "answer_key": { "canonical": "fixture-only result", "must_include": ["fixture-only"] },
+    "support_sections": ["s1"],
+    "acceptance": { "accepted": true, "reason": "fixture", "answerability": 1.0, "focused_correct_rate": 1.0, "blind_correct_rate": 0.0 }
+  }
+]"#,
+    )
+    .expect("write manifest");
+    let mut adapter = baseline::Adapter::default();
+    let config = crate::SuiteConfig {
+        qbank_top_n: 1,
+        ..crate::SuiteConfig::default()
+    };
+    let report = super::run::run_candidate("baseline", &mut adapter, &root, &config)
+        .expect("dev fixture report");
+    assert!(report.json.contains("\"dev_only\":true"));
+    assert!(report.json.contains("\"qbank_trusted\":false"));
+    std::env::remove_var("memory_benchmark_dev_qbank");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn validate_bank_requires_papers_unless_dev_mode_is_explicit() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    std::env::remove_var("memory_benchmark_dev_qbank");
+    let root = temp_qbank_dir("validate-requires-paper");
+    std::fs::create_dir_all(root.join("challenges")).expect("create challenges");
+    std::fs::write(
+        root.join("challenges/manifest.json"),
+        r#"[
+  {
+    "challenge_hash": "qbank-prod",
+    "publication_hash": "paper-prod",
+    "question": "What is the result?",
+    "answer_key": "result",
+    "support_sections": ["s1"],
+    "acceptance": { "accepted": true, "answerability": 1.0, "focused_correct_rate": 1.0, "blind_correct_rate": 0.0 }
+  }
+]"#,
+    )
+    .expect("write manifest");
+    let prod = super::validation::validate_bank(&root, false, 50).expect("validate prod");
+    assert!(
+        prod.errors
+            .iter()
+            .any(|err| err.contains("missing redistributable paper JSON for paper-prod")),
+        "errors: {:?}",
+        prod.errors
+    );
+
+    std::env::set_var("memory_benchmark_dev_qbank", "1");
+    let dev = super::validation::validate_bank(&root, false, 50).expect("validate dev");
+    assert!(dev.errors.is_empty(), "dev errors: {:?}", dev.errors);
+    assert!(dev
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("dev_only fixture qbank mode enabled")));
+    std::env::remove_var("memory_benchmark_dev_qbank");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn top_n_sort_uses_hardness_then_rates_then_hashes() {
     let mut a = fixture_challenge("a", 0.9, 0.1);
     let b = fixture_challenge("b", 0.8, 0.0);
@@ -154,4 +243,10 @@ fn fixture_challenge(hash: &str, difficulty: f32, blind: f32) -> PaperChallenge 
         }],
         context_pack: ContextPack::default(),
     }
+}
+
+fn temp_qbank_dir(name: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("memory-benchmark-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    root
 }

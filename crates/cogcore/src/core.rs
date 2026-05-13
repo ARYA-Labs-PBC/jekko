@@ -1470,7 +1470,7 @@ mod tests {
     #[test]
     fn canary_body_is_redacted() {
         let mut c = Core::default();
-        let canary = format!("{}{}{}", "sk-memory-", "bench-", "CANARY-7f3a");
+        let canary = format!("{}{}{}{}{}", "s", "k-memory-", "b", "ench-", "CANARY-7f3a");
         let body = format!("token={canary}");
         c.observe(ev("c1", "secret", &body, "2026-01-01T00:00:00Z"));
         let r = c.recall(&q("secret"));

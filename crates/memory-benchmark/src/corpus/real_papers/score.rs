@@ -2,6 +2,7 @@ use super::super::model::{
     wanted_section_ids, LoadedChallenge, NumericTolerance, PaperChallenge, PaperRecord,
     PaperSection,
 };
+use super::allow_fixture_qbank;
 use crate::{AxisScores, ClaimModality, Event, EventKind, MemorySystem, PrivacyClass, Source};
 
 pub(crate) fn observe_paper(
@@ -11,7 +12,13 @@ pub(crate) fn observe_paper(
     let challenge = &loaded.challenge;
     let paper = match &loaded.paper {
         Some(paper) => paper.clone(),
-        None => fixture_paper_from_challenge(challenge),
+        None if allow_fixture_qbank() => fixture_paper_from_challenge(challenge),
+        None => {
+            return Err(format!(
+                "missing paper JSON for {}",
+                challenge.publication_hash
+            ));
+        }
     };
     if !paper.redistributable {
         return Err(format!(

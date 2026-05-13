@@ -1,9 +1,11 @@
 use super::model::{
     stable_challenge_hash, stable_section_hash, BankValidation, ContextPack, PaperChallenge,
+    PaperRecord,
 };
 use super::parse::{collect_json_files, read_challenges, read_paper};
 use crate::qbank_hash::sha256_hex;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::path::Path;
 
 pub fn validate_bank(
@@ -20,6 +22,7 @@ pub fn validate_bank(
     collect_json_files(&root.join("rejected"), &mut rejected_paths)?;
 
     let mut seen_publications = BTreeSet::new();
+    let mut papers_by_hash = BTreeMap::new();
     for path in &paper_paths {
         match read_paper(path) {
             Ok(paper) => {
@@ -44,11 +47,13 @@ pub fn validate_bank(
                         ));
                     }
                 }
+                papers_by_hash.insert(paper.publication_hash.clone(), paper);
             }
             Err(err) => result.errors.push(err),
         }
     }
 
+    let allow_fixture_qbank = env::var("memory_benchmark_dev_qbank").ok().as_deref() == Some("1");
     let mut accepted = Vec::new();
     let mut seen_challenges = BTreeSet::new();
     for path in &challenge_paths {
@@ -74,6 +79,11 @@ pub fn validate_bank(
                             path.display()
                         ));
                     }
+                    if let Err(err) =
+                        validate_paper_presence(&challenge, &papers_by_hash, allow_fixture_qbank)
+                    {
+                        result.errors.push(format!("{}: {err}", path.display()));
+                    }
                     accepted.push(challenge);
                 }
             }
@@ -96,7 +106,63 @@ pub fn validate_bank(
             .errors
             .push("bank has no accepted challenges".to_string());
     }
+    if allow_fixture_qbank {
+        result
+            .warnings
+            .push("dev_only fixture qbank mode enabled".to_string());
+    }
     Ok(result)
+}
+
+fn validate_paper_presence(
+    challenge: &PaperChallenge,
+    papers_by_hash: &BTreeMap<String, PaperRecord>,
+    allow_fixture_qbank: bool,
+) -> Result<(), String> {
+    let Some(paper) = papers_by_hash.get(&challenge.publication_hash) else {
+        if allow_fixture_qbank {
+            return Ok(());
+        }
+        return Err(format!(
+            "missing redistributable paper JSON for {}",
+            challenge.publication_hash
+        ));
+    };
+    if !paper.redistributable {
+        return Err(format!(
+            "paper {} is not redistributable",
+            challenge.publication_hash
+        ));
+    }
+    for support in &challenge.support {
+        if support.section_hash.is_empty() {
+            if allow_fixture_qbank {
+                continue;
+            }
+            return Err(format!(
+                "support section {} for {} lacks section_hash",
+                support.section_id, challenge.publication_hash
+            ));
+        }
+        let Some(section) = paper
+            .sections
+            .iter()
+            .find(|section| section.section_id == support.section_id)
+        else {
+            return Err(format!(
+                "support section {} missing from paper {}",
+                support.section_id, challenge.publication_hash
+            ));
+        };
+        let expected = stable_section_hash(&section.text);
+        if support.section_hash != expected {
+            return Err(format!(
+                "support section {} hash mismatch for {}",
+                support.section_id, challenge.publication_hash
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_challenge_hash(challenge: &PaperChallenge) -> Result<(), String> {

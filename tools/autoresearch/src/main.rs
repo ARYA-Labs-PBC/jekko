@@ -18,7 +18,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
+use memory_benchmark::json::{self, Json};
+
 const STATE_DIR: &str = ".jekko/daemon/memory-benchmark-chase";
+const FIXTURE_QBANK_DEV_ONLY: bool = true;
 const DEFAULT_WORKER_COUNT: usize = 4;
 
 mod llm;
@@ -57,6 +60,7 @@ fn print_help() {
            --candidate NAME       (default cogcore)\n\
            --cycle-id ID          (default derived from receipt count)\n\
            --unsafe-allow-skeleton  (required for daemon while reducer/worktrees are incomplete)\n\
+           --use-dirty-source-dev-only  (copy dirty benchmark/cogcore sources into worktrees; receipts are dev_only)\n\
            --state-dir PATH       (default .jekko/daemon/memory-benchmark-chase)\n"
     );
 }
@@ -69,6 +73,7 @@ struct Flags {
     state_dir: Option<String>,
     seed: Option<String>,
     unsafe_allow_skeleton: bool,
+    use_dirty_source_dev_only: bool,
 }
 
 fn parse_flags(args: &[String]) -> Flags {
@@ -98,6 +103,10 @@ fn parse_flags(args: &[String]) -> Flags {
             }
             "--unsafe-allow-skeleton" => {
                 f.unsafe_allow_skeleton = true;
+                i += 1;
+            }
+            "--use-dirty-source-dev-only" => {
+                f.use_dirty_source_dev_only = true;
                 i += 1;
             }
             _ => {
@@ -164,7 +173,7 @@ fn cmd_tick(args: &[String]) -> Result<(), String> {
         let out_dir = state.join(format!("reports/lanes/{worker_id}"));
         fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir {out_dir:?}: {e}"))?;
         let lane_root = worktree_root.join(&worker_id);
-        prepare_worktree(&repo_root, &lane_root)?;
+        prepare_worktree(&repo_root, &lane_root, f.use_dirty_source_dev_only)?;
         write_worker_patch(&lane_root, prop)?;
 
         let out = out_dir.join("northstar.json");
@@ -180,7 +189,7 @@ fn cmd_tick(args: &[String]) -> Result<(), String> {
             continue;
         }
         let report = fs::read_to_string(&out).map_err(|e| format!("read {out:?}: {e}"))?;
-        let total = extract_total(&report).unwrap_or(0.0);
+        let total = extract_total(&report)?;
         fs::write(out_dir.join("config.rs"), &prop.patch_content)
             .map_err(|e| format!("write config.rs: {e}"))?;
         lane_results.push(LaneResult {
@@ -216,10 +225,19 @@ fn cmd_tick(args: &[String]) -> Result<(), String> {
         )?;
     }
 
-    run_reducer(&repo_root, &state, &shadow_path)?;
+    let run_is_dev_only = f.use_dirty_source_dev_only || FIXTURE_QBANK_DEV_ONLY;
+    let reference_reports = run_reference_reports(&repo_root, &state, &cycle_id)?;
+    run_reducer(&repo_root, &state, &shadow_path, &reference_reports)?;
 
     let receipt_path = state.join(format!("receipts/{cycle_id}.json"));
-    let receipt = build_receipt(&cycle_id, workers, candidate, &lane_results);
+    let receipt = build_receipt(
+        &cycle_id,
+        workers,
+        candidate,
+        &lane_results,
+        run_is_dev_only,
+        &reference_reports,
+    );
     fs::write(&receipt_path, receipt).map_err(|e| format!("write receipt: {e}"))?;
 
     if let Some(best_lane) = best_in_cycle {
@@ -282,7 +300,14 @@ fn cmd_forensics(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn prepare_worktree(repo_root: &Path, lane_root: &Path) -> Result<(), String> {
+fn prepare_worktree(
+    repo_root: &Path,
+    lane_root: &Path,
+    use_dirty_source_dev_only: bool,
+) -> Result<(), String> {
+    if !use_dirty_source_dev_only {
+        ensure_trusted_paths_clean(repo_root)?;
+    }
     if lane_root.exists() {
         let _ = Command::new("git")
             .current_dir(repo_root)
@@ -314,8 +339,33 @@ fn prepare_worktree(repo_root: &Path, lane_root: &Path) -> Result<(), String> {
     if !status.success() {
         return Err(format!("git worktree add failed for {lane_root:?}"));
     }
-    sync_worktree_path(repo_root, lane_root, "crates/memory-benchmark")?;
-    sync_worktree_path(repo_root, lane_root, "crates/cogcore")?;
+    if use_dirty_source_dev_only {
+        sync_worktree_path(repo_root, lane_root, "crates/memory-benchmark")?;
+        sync_worktree_path(repo_root, lane_root, "crates/cogcore")?;
+    }
+    Ok(())
+}
+
+fn ensure_trusted_paths_clean(repo_root: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .arg("status")
+        .arg("--porcelain")
+        .arg("--")
+        .arg("crates/memory-benchmark")
+        .arg("crates/cogcore")
+        .arg("tools/autoresearch")
+        .output()
+        .map_err(|e| format!("git status trusted paths: {e}"))?;
+    if !output.status.success() {
+        return Err("git status trusted paths failed".to_string());
+    }
+    if !output.stdout.is_empty() {
+        return Err(format!(
+            "trusted paths are dirty; commit first or pass --use-dirty-source-dev-only (non-promotable):\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        ));
+    }
     Ok(())
 }
 
@@ -368,7 +418,12 @@ fn write_worker_patch(
         .map_err(|e| format!("write patch {patch_path:?}: {e}"))
 }
 
-fn run_reducer(repo_root: &Path, state: &Path, shadow_path: &Path) -> Result<(), String> {
+fn run_reducer(
+    repo_root: &Path,
+    state: &Path,
+    shadow_path: &Path,
+    reference_reports: &[PathBuf],
+) -> Result<(), String> {
     let mut command = Command::new("cargo");
     command
         .current_dir(repo_root)
@@ -398,13 +453,11 @@ fn run_reducer(repo_root: &Path, state: &Path, shadow_path: &Path) -> Result<(),
         .arg("--curriculum")
         .arg(state.join("curriculum-proposals.json"))
         .arg("--shadow-report")
-        .arg(shadow_path)
-        .arg("--reference-report")
-        .arg("target/memory-benchmark/reference-context-pack-score.json")
-        .arg("--reference-report")
-        .arg("target/memory-benchmark/reference-evidence-ledger-score.json")
-        .arg("--reference-report")
-        .arg("target/memory-benchmark/reference-claim-skeptic-score.json")
+        .arg(shadow_path);
+    for reference in reference_reports {
+        command.arg("--reference-report").arg(reference);
+    }
+    command
         .arg("--out")
         .arg(state.join("reports/final-score.json"))
         .arg("--markdown")
@@ -416,6 +469,26 @@ fn run_reducer(repo_root: &Path, state: &Path, shadow_path: &Path) -> Result<(),
         return Err(format!("chase_reduce failed with {status:?}"));
     }
     Ok(())
+}
+
+fn run_reference_reports(
+    repo_root: &Path,
+    state: &Path,
+    cycle_id: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let root = state.join("reports/references").join(cycle_id);
+    fs::create_dir_all(&root).map_err(|e| format!("mkdir references: {e}"))?;
+    let mut reports = Vec::new();
+    for candidate in [
+        "reference_context_pack",
+        "reference_evidence_ledger",
+        "reference_claim_skeptic",
+    ] {
+        let out = root.join(format!("{candidate}.json"));
+        run_northstar(repo_root, candidate, "reference-public-0001", &out, "", "")?;
+        reports.push(out);
+    }
+    Ok(reports)
 }
 
 fn run_northstar(
@@ -496,7 +569,7 @@ fn run_northstar(
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {parent:?}: {e}"))?;
     }
-    let wrapped = wrap_report(&report, patch_content, patch_path)?;
+    let wrapped = wrap_report(&report, patch_content, patch_path, FIXTURE_QBANK_DEV_ONLY)?;
     fs::write(&out, wrapped).map_err(|e| format!("write {out:?}: {e}"))?;
     Ok(())
 }
@@ -524,6 +597,9 @@ fn run_bench(
         .arg(suite);
     for (flag, value) in extra {
         command.arg(flag).arg(value);
+    }
+    if suite == "real-papers" {
+        command.env("memory_benchmark_dev_qbank", "1");
     }
     command.arg("--out").arg(out);
     let status = command.status().map_err(|e| format!("spawn cargo: {e}"))?;
@@ -565,38 +641,31 @@ fn run_score_mix(
     Ok(())
 }
 
-fn wrap_report(report: &Path, patch_content: &str, patch_path: &str) -> Result<String, String> {
-    let mut text = fs::read_to_string(report).map_err(|e| format!("read {report:?}: {e}"))?;
-    let trimmed = text.trim_end();
-    if !trimmed.ends_with('}') {
+fn wrap_report(
+    report: &Path,
+    patch_content: &str,
+    patch_path: &str,
+    dev_only: bool,
+) -> Result<String, String> {
+    let text = fs::read_to_string(report).map_err(|e| format!("read {report:?}: {e}"))?;
+    let mut parsed = json::parse(&text).map_err(|e| format!("parse {report:?}: {e}"))?;
+    let Json::Object(ref mut obj) = parsed else {
         return Err(format!("northstar report is not a JSON object: {report:?}"));
+    };
+    if !patch_content.is_empty() {
+        obj.insert("patch".to_string(), Json::Str(patch_content.to_string()));
     }
-    text = trimmed.trim_end_matches('}').to_string();
-    text.push_str(",\"patch\":");
-    text.push_str(&json_string_literal(patch_content));
-    text.push_str(",\"patch_path\":");
-    text.push_str(&json_string_literal(patch_path));
-    text.push('}');
-    text.push('\n');
-    Ok(text)
-}
-
-fn json_string_literal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
+    if !patch_path.is_empty() {
+        obj.insert("patch_path".to_string(), Json::Str(patch_path.to_string()));
     }
-    out.push('"');
-    out
+    obj.insert("dev_only".to_string(), Json::Bool(dev_only));
+    if dev_only {
+        obj.insert(
+            "dev_only_reason".to_string(),
+            Json::Str("checked-in qbank uses fixture papers".to_string()),
+        );
+    }
+    Ok(format!("{}\n", parsed.to_string()))
 }
 
 #[derive(Clone)]
@@ -620,23 +689,38 @@ fn count_receipts(dir: &Path) -> usize {
         .unwrap_or(0)
 }
 
-fn extract_total(json: &str) -> Option<f64> {
-    // Naive: find `"total":<number>` outside the nested fixtures list.
-    let key = "\"total\":";
-    let start = json.find(key)? + key.len();
-    let rest = &json[start..];
-    let end = rest
-        .find(|c: char| c == ',' || c == '}')
-        .unwrap_or(rest.len());
-    rest[..end].trim().parse::<f64>().ok()
+fn extract_total(text: &str) -> Result<f64, String> {
+    let parsed = json::parse(text).map_err(|e| format!("parse lane report: {e}"))?;
+    let Json::Object(obj) = parsed else {
+        return Err("lane report is not a JSON object".to_string());
+    };
+    match obj.get("total") {
+        Some(Json::Float(value)) => Ok(*value),
+        Some(Json::Int(value)) => Ok(*value as f64),
+        other => Err(format!(
+            "lane report missing numeric top-level total: {other:?}"
+        )),
+    }
 }
 
-fn build_receipt(cycle_id: &str, workers: usize, candidate: &str, scores: &[LaneResult]) -> String {
+fn build_receipt(
+    cycle_id: &str,
+    workers: usize,
+    candidate: &str,
+    scores: &[LaneResult],
+    dev_only: bool,
+    reference_reports: &[PathBuf],
+) -> String {
     let mut top = BTreeMap::new();
     top.insert("cycle_id".to_string(), format!("\"{cycle_id}\""));
     top.insert("candidate".to_string(), format!("\"{candidate}\""));
     top.insert("workers".to_string(), workers.to_string());
+    top.insert("dev_only".to_string(), dev_only.to_string());
     top.insert("attempted".to_string(), scores.len().to_string());
+    top.insert(
+        "reference_report_count".to_string(),
+        reference_reports.len().to_string(),
+    );
     let best_total: f64 = scores.first().map(|lane| lane.total).unwrap_or(0.0);
     top.insert("best_total".to_string(), format!("{:.4}", best_total));
     let median = if scores.is_empty() {
@@ -659,4 +743,44 @@ fn build_receipt(cycle_id: &str, workers: usize, candidate: &str, scores: &[Lane
     body.push('}');
     body.push('\n');
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_total_uses_only_top_level_total() {
+        let report = r#"{"total":80.0,"nested":{"total":1000.0}}"#;
+        assert_eq!(extract_total(report).unwrap(), 80.0);
+    }
+
+    #[test]
+    fn wrap_report_marks_dev_only_and_preserves_patch_metadata() {
+        let dir = env::temp_dir().join(format!("autoresearch-wrap-report-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let report = dir.join("northstar.json");
+        fs::write(&report, r#"{"name":"northstar","total":80.0}"#).unwrap();
+
+        let wrapped = wrap_report(
+            &report,
+            "diff --git a/crates/cogcore/src/config.rs b/crates/cogcore/src/config.rs\n",
+            "config.patch",
+            true,
+        )
+        .unwrap();
+        let parsed = json::parse(&wrapped).unwrap();
+        let Json::Object(obj) = parsed else {
+            panic!("wrapped report must be an object");
+        };
+        assert!(matches!(obj.get("dev_only"), Some(Json::Bool(true))));
+        assert!(matches!(obj.get("patch"), Some(Json::Str(_))));
+        assert_eq!(
+            obj.get("patch_path"),
+            Some(&Json::Str("config.patch".to_string()))
+        );
+
+        let _ = fs::remove_file(report);
+        let _ = fs::remove_dir(dir);
+    }
 }

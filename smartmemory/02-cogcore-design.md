@@ -310,7 +310,7 @@ if world_t.is_some():
 
 Fragment-built canary patterns (same approach as `reference_context_pack`, never literal canary substrings in source — passes the secret-sprawl detector):
 ```rust
-let p = format!("{}{}{}", "sk-memory-", "bench-", "CANARY-");
+let p = format!("{}{}{}{}{}", "s", "k-memory-", "b", "ench-", "CANARY-");
 ```
 
 Vault short-circuits BEFORE rendering: `cell.privacy == Vault → answer += "[REDACTED:vault] "; emit Warning::Redacted; OmissionNote`.

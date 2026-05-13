@@ -77,6 +77,35 @@ pub struct BenchCase {
 }
 
 #[derive(Debug, Clone)]
+pub struct HardeningCase {
+    pub id: String,
+    pub subject: String,
+    pub base_events: Vec<Event>,
+    pub reinforcements: Vec<Event>,
+    pub query: Query,
+    pub oracle: CaseOracle,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompoundCase {
+    pub id: String,
+    pub block: FixtureBlock,
+    pub domain: Domain,
+    pub events: Vec<Event>,
+    pub queries: Vec<CompoundQuery>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompoundQuery {
+    pub label: String,
+    pub query: Query,
+    pub oracle: CaseOracle,
+    pub hop_depth: u8,
+    pub depth_weight: f32,
+    pub control: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum EpisodeStep {
     Teach,
     Distract,

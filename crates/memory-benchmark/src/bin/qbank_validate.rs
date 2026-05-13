@@ -46,6 +46,10 @@ fn main() {
         Json::Str(validation.manifest_hash),
     );
     top.insert(
+        "dev_only".to_string(),
+        Json::Bool(env::var("memory_benchmark_dev_qbank").ok().as_deref() == Some("1")),
+    );
+    top.insert(
         "errors".to_string(),
         json::arr_str(validation.errors.iter().cloned()),
     );

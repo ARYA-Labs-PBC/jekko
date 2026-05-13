@@ -52,6 +52,10 @@ pub fn load_bank(root: &Path, config: &SuiteConfig) -> Result<Vec<LoadedChalleng
     Ok(loaded)
 }
 
+pub(crate) fn allow_fixture_qbank() -> bool {
+    env::var("memory_benchmark_dev_qbank").ok().as_deref() == Some("1")
+}
+
 pub fn run_candidate(
     candidate: &str,
     adapter: &mut dyn MemorySystem,
@@ -59,13 +63,14 @@ pub fn run_candidate(
     config: &SuiteConfig,
 ) -> Result<CandidateReport, String> {
     let loaded = load_bank(bank, config)?;
+    let dev_only = allow_fixture_qbank();
     if loaded.is_empty() {
         return Err(format!(
             "no accepted challenge JSON found under {}",
             bank.display()
         ));
     }
-    if loaded.len() < 50 && env::var("memory_benchmark_dev_qbank").ok().as_deref() != Some("1") {
+    if loaded.len() < 50 && !dev_only {
         return Err(format!(
             "real-papers bank at {} has only {} accepted challenges (need 50 unless memory_benchmark_dev_qbank=1)",
             bank.display(),
@@ -127,6 +132,11 @@ pub fn run_candidate(
     top.insert(
         "qbank_top_n".to_string(),
         Json::Int(config.qbank_top_n as i64),
+    );
+    top.insert("dev_only".to_string(), Json::Bool(dev_only));
+    top.insert(
+        "qbank_trusted".to_string(),
+        Json::Bool(!dev_only && loaded.len() >= 50),
     );
     top.insert("total".to_string(), Json::Float(total as f64));
     top.insert("axes".to_string(), axes_to_json(&avg));

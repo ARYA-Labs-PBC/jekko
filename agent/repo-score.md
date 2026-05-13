@@ -7,15 +7,15 @@
 - Target stack ID: `rust-ts-vite-react-postgres-bounded-python`
 - Target stack: `Rust core + TypeScript/React/Vite + PostgreSQL + generated contracts + exception-only Python AI/data service`
 - Repo: `.`
-- Run ID: `1778671228`
-- Started at: `1778671228`
-- Elapsed: `3109` ms
+- Run ID: `1778686538`
+- Started at: `1778686538`
+- Elapsed: `3163` ms
 - Scope: `full`
-- Raw score: `90`
-- Final score: `90`
+- Raw score: `79`
+- Final score: `64`
 - Decision: `advisory`
 - Minimum score: `85`
-- Caps applied: `none`
+- Caps applied: `fallback-soup-in-product-code, future-hostile-dead-language-in-product-code`
 
 ## Hard Rule Caps
 
@@ -34,8 +34,8 @@
 | `too-much-python-in-product-surface` | 72 | no |
 | `boundary-reclassification-evidence-gap` | 72 | no |
 | `vibe-placeholders-in-product-code` | 68 | no |
-| `fallback-soup-in-product-code` | 70 | no |
-| `future-hostile-dead-language-in-product-code` | 64 | no |
+| `fallback-soup-in-product-code` | 70 | yes |
+| `future-hostile-dead-language-in-product-code` | 64 | yes |
 | `severe-duplication-in-product-code` | 70 | no |
 | `generated-zone-mutation-risk` | 76 | no |
 | `direct-db-access-from-wrong-layer` | 66 | no |
@@ -70,9 +70,9 @@
 
 ## Copy-Code Redundancy
 
-- Status: `review` hard=`0` warning=`8` files=`463`
+- Status: `review` hard=`0` warning=`10` files=`480`
 - Policy: min-lines=`10` min-tokens=`100` max-findings=`50` include-tests=`false` strict=`false`
-- Duplicate volume: lines=`37` tokens=`120` bytes=`1246`
+- Duplicate volume: lines=`46` tokens=`142` bytes=`1425`
 
 - Notes:
   - hard classes are limited to exact active-source file matches and substantial exact same-name units
@@ -82,12 +82,14 @@
 | Kind | Severity | Language | Lines | Tokens | Instances | Reason |
 | --- | --- | --- | ---: | ---: | --- | --- |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 17 | 54 | `crates/memory-benchmark/src/corpus/real_papers/model.rs:91-108, crates/qbank-builder/src/lib.rs:169-186` | `same body appears under different names across files` |
-| `ExactUnitSameName` | `Warning` | `rust` | 7 | 29 | `crates/memory-benchmark/src/corpus/real_papers/score.rs:251-258, crates/memory-benchmark/src/corpus/real_papers/validation.rs:138-145` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 7 | 29 | `crates/memory-benchmark/src/corpus/real_papers/score.rs:271-278, crates/memory-benchmark/src/corpus/real_papers/validation.rs:208-215` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 7 | 17 | `crates/cogcore/src/hash.rs:11-18, crates/memory-benchmark/src/hash.rs:12-19` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 5 | 11 | `crates/jankurai-runner/src/locks.rs:53-58, crates/jankurai-runner/src/locks.rs:66-71` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `typescript` | 2 | 9 | `packages/jekko/src/cli/cmd/debug/agent.ts:116-118, packages/jekko/src/cli/cmd/tui/context/jankurai-baseline.ts:40-42, packages/jekko/src/cli/cmd/tui/context/jankurai-history.ts:65-67` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `typescript` | 2 | 9 | `packages/jekko/src/cli/cmd/tui/context/jankurai-baseline.ts:40-42, packages/jekko/src/cli/cmd/tui/context/jankurai-history.ts:65-67` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 2 | 5 | `crates/cogcore/src/hash.rs:21-23, crates/memory-benchmark/src/hash.rs:29-31` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 2 | 4 | `crates/memory-benchmark/src/corpus/real_papers/model.rs:87-89, crates/qbank-builder/src/lib.rs:139-141` | `same body appears under different names across files` |
-| `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 2 | `crates/memory-benchmark/src/corpus/real_papers/json_helpers.rs:65-66, crates/memory-benchmark/src/corpus/real_papers/json_helpers.rs:83-84, crates/memory-benchmark/src/corpus/real_papers/json_helpers.rs:90-91` | `same body appears under different names across files` |
+| `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 2 | `crates/memory-benchmark/src/corpus/real_papers/json_helpers.rs:68-69, crates/memory-benchmark/src/corpus/real_papers/json_helpers.rs:89-90, crates/memory-benchmark/src/corpus/real_papers/json_helpers.rs:96-97` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 1 | 2 | `crates/memory-benchmark/src/types.rs:263-264, crates/memory-benchmark/src/types.rs:302-303` | `same-name semantic unit copied across multiple files` |
 
 ## Dimensions
@@ -98,7 +100,7 @@
 | Contract and boundary integrity | 13 | 98 | 12.74 | contract surface found; generated contract artifacts found |
 | Proof lanes and test routing | 12 | 100 | 12.00 | one-command setup/validation lane found; deterministic fast lane found |
 | Security and supply-chain posture | 12 | 86 | 10.32 | lockfile present; secret or dependency scan tooling found |
-| Code shape and semantic surface | 12 | 100 | 12.00 | largest authored code file: packages/jekko/src/cli/cmd/tui/app.tsx (342 LOC); most code files stay under 300 LOC |
+| Code shape and semantic surface | 12 | 3 | 0.36 | largest authored code file: crates/cogcore/src/core.rs (1538 LOC); code file exceeds 500 LOC |
 | Data truth and workflow safety | 8 | 95 | 7.60 | database surface present; structured db boundary manifest present |
 | Observability and repair evidence | 8 | 88 | 7.04 | observability libraries or patterns found; ops/observability directory present |
 | Context economy and agent instructions | 7 | 100 | 7.00 | root `AGENTS.md` present; root `AGENTS.md` stays short |
@@ -184,7 +186,76 @@ No audited runtime boundary reclassifications declared.
 
 ## Findings
 
-No findings.
+1. `medium` `shape` `.`
+   Rule: `HLT-001-DEAD-MARKER`
+   Check: `HLT-001-DEAD-MARKER:shape` `soft` confidence `0.76`
+   Route: TLR `Entropy`, lane `fast`, owner `tools`
+   Docs: `docs/audit-rubric.md#future-hostile-language-rule`
+   Reason: `Code shape and semantic surface` scored 3 below the standard floor of 85
+   Fix: split large or ambiguous authored code into smaller semantic modules with focused tests
+   Rerun: `just fast`
+   Fingerprint: `sha256:03df68abb0bb6a0f0c16a965f5cb9580bf2187b53902f7d6f98ff79528493667`
+   Evidence: largest authored code file: crates/cogcore/src/core.rs (1538 LOC), code file exceeds 500 LOC, code file exceeds 1000 LOC, most code files stay under 300 LOC
+2. `high` `vibe` `crates/cogcore/src/core.rs:326`
+   Rule: `HLT-001-DEAD-MARKER`
+   Check: `HLT-001-DEAD-MARKER:vibe` `hard` confidence `0.88`
+   Route: TLR `Entropy`, lane `fast`, owner `tools`
+   Docs: `docs/audit-rubric.md#future-hostile-language-rule`
+   Reason: fallback soup detected in product code
+   Fix: collapse fallback chains into explicit typed states with bounded retry policy, telemetry, and documented repair guidance
+   Rerun: `just fast`
+   Fingerprint: `sha256:5c802549b99a4f764ba6fca32e6a8c520f8a91ea757edc9d2f37d47e56cb4536`
+   Evidence: crates/cogcore/src/core.rs:326 .unwrap_or_default();
+3. `high` `vibe` `crates/cogcore/src/core.rs:636`
+   Rule: `HLT-001-DEAD-MARKER`
+   Check: `HLT-001-DEAD-MARKER:vibe` `hard` confidence `0.88`
+   Route: TLR `Entropy`, lane `fast`, owner `tools`
+   Docs: `docs/audit-rubric.md#future-hostile-language-rule`
+   Reason: future-hostile/dead-language term `fallback` appears in product/runtime code
+   Fix: remove or rename the marker, implement the intended behavior, model a typed unsupported state, or move docs/generated/vendor/product-copy text into an allowlisted context
+   Rerun: `just fast`
+   Fingerprint: `sha256:d03272416eeee13efda0bd567d740ea149f60f333657e83abf5648318021b59c`
+   Evidence: crates/cogcore/src/core.rs:636, future-hostile/dead-language term `fallback` appears
+4. `high` `vibe` `crates/cogcore/src/core.rs:824`
+   Rule: `HLT-001-DEAD-MARKER`
+   Check: `HLT-001-DEAD-MARKER:vibe` `hard` confidence `0.88`
+   Route: TLR `Entropy`, lane `fast`, owner `tools`
+   Docs: `docs/audit-rubric.md#future-hostile-language-rule`
+   Reason: future-hostile/dead-language term `stale` appears in product/runtime code
+   Fix: remove or rename the marker, implement the intended behavior, model a typed unsupported state, or move docs/generated/vendor/product-copy text into an allowlisted context
+   Rerun: `just fast`
+   Fingerprint: `sha256:b8f941c51ca00f1f42849522bd806b6a7e46af04eb3a6b6e53a04008aa8f05ea`
+   Evidence: crates/cogcore/src/core.rs:824, future-hostile/dead-language term `stale` appears
+5. `high` `vibe` `crates/cogcore/src/core.rs:1257`
+   Rule: `HLT-001-DEAD-MARKER`
+   Check: `HLT-001-DEAD-MARKER:vibe` `hard` confidence `0.88`
+   Route: TLR `Entropy`, lane `fast`, owner `tools`
+   Docs: `docs/audit-rubric.md#future-hostile-language-rule`
+   Reason: future-hostile/dead-language term `deprecated` appears in product/runtime code
+   Fix: remove or rename the marker, implement the intended behavior, model a typed unsupported state, or move docs/generated/vendor/product-copy text into an allowlisted context
+   Rerun: `just fast`
+   Fingerprint: `sha256:f741873e8a1309998d56d1fd02f3cb4b3247d5165abe2844b5c09540fabff53d`
+   Evidence: crates/cogcore/src/core.rs:1257, future-hostile/dead-language term `deprecated` appears
+6. `high` `vibe` `crates/cogcore/src/core.rs:1449`
+   Rule: `HLT-001-DEAD-MARKER`
+   Check: `HLT-001-DEAD-MARKER:vibe` `hard` confidence `0.88`
+   Route: TLR `Entropy`, lane `fast`, owner `tools`
+   Docs: `docs/audit-rubric.md#future-hostile-language-rule`
+   Reason: future-hostile/dead-language term `old` appears in product/runtime code
+   Fix: remove or rename the marker, implement the intended behavior, model a typed unsupported state, or move docs/generated/vendor/product-copy text into an allowlisted context
+   Rerun: `just fast`
+   Fingerprint: `sha256:41f98d4674faf777c0449e7d43e7b6392a37f5513265f74589f592a8d3757040`
+   Evidence: crates/cogcore/src/core.rs:1449, future-hostile/dead-language term `old` appears
+7. `high` `vibe` `crates/cogcore/src/core.rs:1484`
+   Rule: `HLT-001-DEAD-MARKER`
+   Check: `HLT-001-DEAD-MARKER:vibe` `hard` confidence `0.88`
+   Route: TLR `Entropy`, lane `fast`, owner `tools`
+   Docs: `docs/audit-rubric.md#future-hostile-language-rule`
+   Reason: future-hostile/dead-language term `old` appears in product/runtime code
+   Fix: remove or rename the marker, implement the intended behavior, model a typed unsupported state, or move docs/generated/vendor/product-copy text into an allowlisted context
+   Rerun: `just fast`
+   Fingerprint: `sha256:9c53be71ef591365f0ad7362be9a898c3513f4d07274d36e1f911200cc6ecff5`
+   Evidence: crates/cogcore/src/core.rs:1484, future-hostile/dead-language term `old` appears
 
 ## Policy
 
@@ -194,4 +265,9 @@ No findings.
 
 ## Agent Fix Queue
 
-No queued fixes.
+1. `high` `HLT-001-DEAD-MARKER` `crates/cogcore/src/core.rs` - collapse fallback chains into explicit typed states with bounded retry policy, telemetry, and documented repair guidance
+   Route: `Entropy`/`fast`
+2. `high` `HLT-001-DEAD-MARKER` `crates/cogcore/src/core.rs` - remove or rename the marker, implement the intended behavior, model a typed unsupported state, or move docs/generated/vendor/product-copy text into an allowlisted context
+   Route: `Entropy`/`fast`
+3. `medium` `HLT-001-DEAD-MARKER` `.` - split large or ambiguous authored code into smaller semantic modules with focused tests
+   Route: `Entropy`/`fast`
