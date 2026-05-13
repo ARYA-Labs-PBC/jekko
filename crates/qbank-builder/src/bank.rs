@@ -1,6 +1,4 @@
-use super::{
-    sha256_hex, AcceptanceRecord, ChallengeRecord, ContextPack, PaperRecord,
-};
+use super::{sha256_hex, AcceptanceRecord, ChallengeRecord, ContextPack, PaperRecord};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -110,6 +108,17 @@ pub fn read_challenges(root: &Path) -> Result<Vec<ChallengeRecord>, String> {
     let challenge_root = root.join("challenges");
     let mut paths = Vec::new();
     collect_json_files(&challenge_root, &mut paths)?;
+    let mut out = Vec::new();
+    for path in paths {
+        out.push(read_json(&path)?);
+    }
+    Ok(out)
+}
+
+pub fn read_papers(root: &Path) -> Result<Vec<PaperRecord>, String> {
+    let paper_root = root.join("papers");
+    let mut paths = Vec::new();
+    collect_json_files(&paper_root, &mut paths)?;
     let mut out = Vec::new();
     for path in paths {
         out.push(read_json(&path)?);

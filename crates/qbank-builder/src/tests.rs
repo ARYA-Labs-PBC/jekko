@@ -34,6 +34,57 @@ fn sample_paper() -> PaperRecord {
     }
 }
 
+fn accepted_challenge(paper: &PaperRecord, canonical: &str, accepted: bool) -> ChallengeRecord {
+    finalize_challenge(ChallengeRecord {
+        schema_version: CHALLENGE_SCHEMA_VERSION.to_string(),
+        challenge_hash: String::new(),
+        publication_hash: paper.publication_hash.clone(),
+        domain: "science".to_string(),
+        topics: vec!["alpha".to_string()],
+        difficulty_score: 0.8,
+        difficulty_components: BTreeMap::new(),
+        question: "Which calibrated fixture value does the result section state?".to_string(),
+        answer_key: AnswerKey {
+            canonical: canonical.to_string(),
+            must_include: vec![canonical.to_string()],
+            must_not_include: vec![],
+            aliases: vec![],
+            numeric_tolerances: vec![],
+            unit_tolerances: vec![],
+        },
+        support: vec![SupportRef {
+            section_id: paper.sections[0].section_id.clone(),
+            section_hash: paper.sections[0].section_hash.clone(),
+            quote_hash: None,
+        }],
+        context_pack: ContextPack {
+            safe_window_tokens: 128_000,
+            target_fill_ratio: 0.82,
+            output_reserve_tokens: 4096,
+            estimated_tokens: 10,
+            target_section_ids: vec![paper.sections[0].section_id.clone()],
+            distractor_section_ids: vec![paper.sections[1].section_id.clone()],
+        },
+        generator_agents: vec![],
+        blind_answer_attempts: vec![],
+        focused_answer_attempts: vec![],
+        critic_attempts: vec![],
+        audit_attempts: vec![],
+        acceptance: AcceptanceRecord {
+            accepted,
+            auditor_agreement: 1.0,
+            answerability: 1.0,
+            blind_correct_rate: 0.0,
+            focused_correct_rate: 1.0,
+            ambiguity_flag: false,
+            hash_mismatch: false,
+            redistributable: true,
+            reason: None,
+        },
+        artifact_hash: None,
+    })
+}
+
 #[test]
 fn hashes_are_stable_and_prefixed() {
     let paper = canonicalize_paper(sample_paper()).expect("paper");
@@ -142,4 +193,35 @@ fn challenge_sort_is_deterministic() {
             .collect::<Vec<_>>(),
         vec!["c", "a", "b"]
     );
+}
+
+#[test]
+fn cogcore_events_are_deterministic_and_omit_answer_keys() {
+    let paper = canonicalize_paper(sample_paper()).expect("paper");
+    let accepted = accepted_challenge(&paper, "secret answer key should not leak", true);
+    let rejected = accepted_challenge(&paper, "rejected answer should not leak", false);
+
+    let events = cogcore_events_for_papers(
+        std::slice::from_ref(&paper),
+        &[rejected.clone(), accepted.clone()],
+    );
+    let again = cogcore_events_for_papers(&[paper], &[accepted, rejected]);
+
+    assert_eq!(events, again);
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| event.id.is_empty()));
+    assert_eq!(events[0].kind, "Claim");
+    assert_eq!(events[0].subject, "Alpha Paper");
+    assert!(events[0].tags.contains(&"topic:alpha".to_string()));
+    assert!(events[1].tags.contains(&"section:s2".to_string()));
+
+    let jsonl = events
+        .iter()
+        .map(|event| serde_json::to_string(event).expect("json"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(jsonl.contains("Alpha equals one in the calibrated fixture."));
+    assert!(!jsonl.contains("Which calibrated fixture value"));
+    assert!(!jsonl.contains("secret answer key should not leak"));
+    assert!(!jsonl.contains("rejected answer should not leak"));
 }

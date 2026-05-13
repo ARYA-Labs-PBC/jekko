@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 pub const PAPER_SCHEMA_VERSION: &str = "opencode-paper-v1";
 pub const CHALLENGE_SCHEMA_VERSION: &str = "opencode-qbank-challenge-v1";
-
 mod bank;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -123,6 +122,30 @@ pub struct WorkItem {
     pub publication_hash: String,
     pub challenge_hash: Option<String>,
     pub prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CogcoreEventRecord {
+    pub id: String,
+    pub kind: String,
+    pub subject: String,
+    pub body: String,
+    pub tx_time: String,
+    pub valid_from: Option<String>,
+    pub valid_to: Option<String>,
+    pub privacy_class: String,
+    pub claim_modality: Option<String>,
+    pub tags: Vec<String>,
+    pub sources: Vec<CogcoreSourceRef>,
+    pub supersedes: Vec<String>,
+    pub contradicts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CogcoreSourceRef {
+    pub uri: String,
+    pub citation: String,
+    pub quality: f32,
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -256,10 +279,98 @@ pub fn finalize_challenge(mut challenge: ChallengeRecord) -> ChallengeRecord {
     challenge
 }
 
+pub fn cogcore_events_for_papers(
+    papers: &[PaperRecord],
+    challenges: &[ChallengeRecord],
+) -> Vec<CogcoreEventRecord> {
+    let mut sorted_papers = papers.to_vec();
+    sorted_papers.sort_by(|left, right| left.publication_hash.cmp(&right.publication_hash));
+    let accepted_challenges = challenges
+        .iter()
+        .filter(|challenge| acceptance_passes(&challenge.acceptance))
+        .collect::<Vec<_>>();
+    let mut topics_by_section: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for challenge in accepted_challenges {
+        for support in &challenge.support {
+            let key = (
+                challenge.publication_hash.clone(),
+                support.section_id.clone(),
+            );
+            let topics = topics_by_section.entry(key).or_default();
+            for topic in &challenge.topics {
+                if !topics.contains(topic) {
+                    topics.push(topic.clone());
+                }
+            }
+            topics.sort();
+        }
+    }
+
+    let mut out = Vec::new();
+    for paper in &sorted_papers {
+        for section in &paper.sections {
+            let topics = topics_by_section
+                .get(&(paper.publication_hash.clone(), section.section_id.clone()))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            out.push(cogcore_section_event(paper, section, topics));
+        }
+    }
+    out
+}
+
+fn cogcore_section_event(
+    paper: &PaperRecord,
+    section: &PaperSection,
+    topics: &[String],
+) -> CogcoreEventRecord {
+    let tx_time = paper
+        .published_at
+        .clone()
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
+    let mut tags = vec![
+        "qbank".to_string(),
+        "paper-section".to_string(),
+        format!("publication:{}", paper.publication_hash),
+        format!("section:{}", section.section_id),
+        format!("section_hash:{}", section.section_hash),
+    ];
+    tags.extend(topics.iter().map(|topic| format!("topic:{topic}")));
+    CogcoreEventRecord {
+        id: String::new(),
+        kind: "Claim".to_string(),
+        subject: paper.title.clone(),
+        body: section.text.clone(),
+        tx_time: tx_time.clone(),
+        valid_from: Some(tx_time),
+        valid_to: None,
+        privacy_class: "Public".to_string(),
+        claim_modality: Some("AssertedBySource".to_string()),
+        tags,
+        sources: vec![paper_source_ref(paper, section)],
+        supersedes: Vec::new(),
+        contradicts: Vec::new(),
+    }
+}
+
+fn paper_source_ref(paper: &PaperRecord, section: &PaperSection) -> CogcoreSourceRef {
+    let uri = paper.license.source_url.clone().unwrap_or_else(|| {
+        format!(
+            "qbank://paper/{}/{}",
+            paper.publication_hash, section.section_id
+        )
+    });
+    CogcoreSourceRef {
+        uri,
+        citation: format!("{} :: {}", paper.title, section.title),
+        quality: 0.95,
+    }
+}
+
 pub use bank::{
     acceptance_passes, bank_subdir, challenge_sort_key, collect_json_files, ensure_bank_layout,
-    manifest_hash, pack_context, read_challenges, read_json, sorted_challenges, token_estimate,
-    write_json_pretty,
+    manifest_hash, pack_context, read_challenges, read_json, read_papers, sorted_challenges,
+    token_estimate, write_json_pretty,
 };
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use qbank_builder::{
-    acceptance_passes, canonicalize_paper, ensure_bank_layout, finalize_challenge, manifest_hash,
-    read_challenges, read_json, sorted_challenges, write_json_pretty, ChallengeRecord, PaperRecord,
-    WorkItem,
+    acceptance_passes, canonicalize_paper, cogcore_events_for_papers, ensure_bank_layout,
+    finalize_challenge, manifest_hash, read_challenges, read_json, read_papers, sorted_challenges,
+    write_json_pretty, ChallengeRecord, PaperRecord, WorkItem,
 };
 use serde_json::json;
 use std::env;
@@ -29,6 +29,7 @@ async fn run() -> Result<(), String> {
         "pack-context" => pack_context_command(&args[2..]),
         "reduce" => reduce(&args[2..]),
         "publish" => publish_manifest(&args[2..]),
+        "emit-cogcore" => emit_cogcore(&args[2..]),
         "--help" | "-h" => {
             print_help();
             Ok(())
@@ -39,7 +40,7 @@ async fn run() -> Result<(), String> {
 
 fn print_help() {
     eprintln!(
-        "qbank <discover|publish-paper|make-work|pack-context|reduce|publish> [--bank path] [--run-root path]"
+        "qbank <discover|publish-paper|make-work|pack-context|reduce|publish|emit-cogcore> [--bank path] [--run-root path]"
     );
 }
 
@@ -179,6 +180,31 @@ fn publish_manifest(args: &[String]) -> Result<(), String> {
         "top_challenge_hashes": challenges.iter().map(|challenge| challenge.challenge_hash.clone()).collect::<Vec<_>>()
     });
     write_json_pretty(&bank.join("manifests").join("latest.json"), &manifest)
+}
+
+fn emit_cogcore(args: &[String]) -> Result<(), String> {
+    let bank = match path_value(args, "--bank") {
+        Some(value) => value,
+        None => PathBuf::from("crates/memory-benchmark/data/real-paper-bank"),
+    };
+    let out = match path_value(args, "--out") {
+        Some(value) => value,
+        None => bank.join("cogcore-events.jsonl"),
+    };
+    ensure_bank_layout(&bank)?;
+    let papers = read_papers(&bank)?;
+    let challenges = read_challenges(&bank)?;
+    let events = cogcore_events_for_papers(&papers, &challenges);
+    let mut lines = String::new();
+    for event in events {
+        lines.push_str(&serde_json::to_string(&event).map_err(|err| err.to_string())?);
+        lines.push('\n');
+    }
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("create {}: {err}", parent.display()))?;
+    }
+    std::fs::write(&out, lines).map_err(|err| format!("write {}: {err}", out.display()))
 }
 
 fn value(args: &[String], flag: &str) -> Option<String> {
