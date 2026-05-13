@@ -25,6 +25,19 @@ coordination notes live above.
 
 ## Recent receipts
 
+### 2026-05-13T04:24:17Z — Fixed — codex — ZYAL feature-maker hardening + stacked PR
+
+- Branch: `codex/zyal-feature-maker-examples`
+- Hardening commit: `d6b5cd19a` (`docs: harden ZYAL feature-maker runbooks`)
+- Stack base branch: `codex/zyal-feature-maker-base` at `9126016ae`
+- Parent PR: https://github.com/neverhuman/jekko/pull/3
+- Child PR: https://github.com/neverhuman/jekko/pull/2, retargeted to `codex/zyal-feature-maker-base`
+- Scope: corrected workflow condition spec docs to string references, added runtime validation for `approval_granted` transition gates, synchronized README inventory to all 31 tracked `.zyal` examples, added `project_atlas_summary` evidence to the feature-maker runbooks, required push-before-PR hooks, and hardened the insane sandbox/reviewer/done gates.
+- Validation passed: `rtk bun --cwd packages/jekko ./script/generate-zyal-spec.ts --write`; `rtk bun --cwd packages/jekko ./script/generate-zyal-spec.ts --check`; `rtk bun --cwd packages/jekko test src/agent-script/schema-spec.test.ts src/agent-script/parser.test.ts`; `rtk cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml all_tracked_zyal_files_parse_and_preview`; `rtk just fast`; `rtk git diff --check`.
+- Notes: no ZYAL schema bump; unrelated dirty workspace files were left unstaged and untouched.
+
+— codex
+
 ### 2026-05-12T00:00:00Z — Fixed — codex — Canonical ZYAL spec + semantic bug-finder examples
 
 - Added `docs/ZYAL/SPEC.md` as the canonical human-facing schema for `ZYAL_CONTRACT_VERSION = 2.6.0`, with generator/check tooling and test-map/generated-zone routing.
