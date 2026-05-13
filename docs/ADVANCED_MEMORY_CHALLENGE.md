@@ -7,6 +7,7 @@ This benchmark evaluates whether a memory system can learn novel technical domai
 - **T0 Public Smoke:** fixed 100-fixture deterministic suite for public CI.
 - **T1 Generated Public/Private:** seeded synthetic worlds with exact Rust oracles. Public dev seed: `public-dev-0001`. Private seeds are runtime-only.
 - **T2 Stress:** large generated streams for context budget, economics, latency, state growth, rebuild, and determinism pressure.
+- **T3 Real-Paper QBank:** checked-in, hash-addressed open-access paper and challenge artifacts under `crates/memory-benchmark/data/real-paper-bank`, selected by deterministic top-N hardness ranking.
 
 Primary score is deterministic Rust execution. LLM-as-judge and prompt population scoring are qualitative diagnostics only.
 
@@ -58,15 +59,40 @@ Rust oracles check unit-vector algebra, finite operation tables, theorem invalid
 Anti-gaming rules:
 
 - Candidate-visible inputs must not include expected answers or pathology labels.
+- Real-paper QBank inputs observe publication sections and context distractors only; `answer_key` is used only by the Rust grader after recall.
 - Remembering that a secret existed is allowed; exposing raw, transformed, partial, encoded, split, metadata, or derived identifiers is not.
 - Forgetting must clean descendants unless independently supported by non-secret sources.
 - Reference adapters are calibration bands, not perfect oracles: baseline 25-55 on generated suites, references 72-90, oracle retriever 90-98.
+
+## Real-Paper QBank
+
+Native QBank artifacts replace the old OpenQG-only path. `qbank_validate`
+checks schema shape, stable SHA-256 hashes, redistributable license policy,
+acceptance thresholds, duplicate suppression, context-pack token limits, and
+deterministic sorting. Accepted challenges are ranked by `difficulty_score`
+descending, focused correctness descending, blind correctness ascending,
+publication hash ascending, then challenge hash ascending.
+
+The default benchmark slice is top 100 accepted challenges:
+
+```bash
+cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out target/memory-benchmark/real-paper-top100.json
+```
+
+AutoResearch lanes can mix generated and QBank reports with deterministic
+weights, defaulting to `generated=0.60` and `qbank=0.40`, so `scoreboard.tsv`,
+`best-state.json`, and `promotion-decision.json` keep live best score, start
+score, and delta visible while optimizing both synthetic exact oracles and
+hard real-paper recall.
 
 ## Commands
 
 ```bash
 just memory-benchmark-fast
 just memory-benchmark-generated
+cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty
 cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate baseline --suite generated --seed public-dev-0001 --fixtures 500 --out target/memory-benchmark/baseline-generated.json
+cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out target/memory-benchmark/real-paper-top100.json
+cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin score_mix -- --name mixed --input generated:0.60:target/memory-benchmark/baseline-generated.json --input qbank:0.40:target/memory-benchmark/real-paper-top100.json --out target/memory-benchmark/mixed.json
 cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin population_report -- --baseline target/memory-benchmark/baseline-public.json --exec target/memory-benchmark/baseline-generated.json --out target/memory-benchmark/final-score.json --markdown target/memory-benchmark/final-score.md --comparison target/memory-benchmark/comparison-matrix.json --triangulation target/memory-benchmark/triangulation.json --curriculum target/memory-benchmark/curriculum-proposals.json
 ```

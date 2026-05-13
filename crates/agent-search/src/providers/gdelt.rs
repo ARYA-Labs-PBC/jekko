@@ -33,11 +33,7 @@ impl GdeltProvider {
     }
 }
 
-impl Default for GdeltProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::providers::default_from_new!(GdeltProvider);
 
 #[async_trait]
 impl SearchProvider for GdeltProvider {

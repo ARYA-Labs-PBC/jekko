@@ -65,6 +65,11 @@ export function routeNavigate(route: ReturnType<typeof useRoute>, name: string, 
     return
   }
 
+  if (name === "shell") {
+    route.navigate({ type: "shell" })
+    return
+  }
+
   route.navigate({ type: "plugin", id: name, data: params })
 }
 
@@ -79,6 +84,7 @@ export function routeCurrent(route: ReturnType<typeof useRoute>): TuiPluginApi["
       },
     }
   }
+  if (route.data.type === "shell") return { name: "shell" }
 
   return {
     name: route.data.id,

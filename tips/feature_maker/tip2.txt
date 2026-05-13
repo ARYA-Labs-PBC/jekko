@@ -1,0 +1,1164 @@
+Yes — the ambitious version is a **capability-upgrade agent**, not a bug-finder. Your bug-finder baseline is invariant/counterexample-driven: infer what the repo promises, find where the promise breaks, prove it with a failing case, then patch minimally.  The feature-upgrade version should do the analogous higher-level thing:
+
+> “What capability does this project’s mission, architecture, domain model, data, and user workflow imply — but not yet deliver — and can I design a credible, testable path to add it?”
+
+That means the core product is not “RAG over a repo.” It is a **repo intelligence system**: graph + hybrid search + code intelligence + runtime/test evidence + planning agents + verification harness.
+
+## 1. Canonical files to inspect in a Rust/Vite/TypeScript/React/SQL/Docker repo
+
+The agent should start from a canonical file taxonomy, because each file type tells a different story: mission, domain, build surface, runtime surface, user surface, API surface, data surface, and proof surface.
+
+| Layer                                  | Canonical files / directories                                                                                                                                                                                                                                                                 | What they reveal                                                                                                                                                                                                                                                        |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Mission / product intent**           | `README.md`, `docs/`, `MISSION.md`, `VISION.md`, `MOONSHOT.md`, `ROADMAP.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, `CODEOWNERS`, `TODO.md`, `NOTES.md`, `docs/rfcs/`, `docs/adr/`                                                                                     | What the project claims to be, who it serves, what is unfinished, what risks or constraints matter. ADRs are especially useful because they capture significant architectural decisions, context, and consequences. ([Architectural Decision Records][1])               |
+| **Rust backend**                       | `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.cargo/config.toml`, `src/main.rs`, `src/lib.rs`, `src/bin/`, `crates/*/Cargo.toml`, `build.rs`, `examples/`, `benches/`, `tests/`, `sqlx-data.json`                                                                                      | Crate boundaries, binaries, libraries, features, dependencies, internal APIs, public APIs, feature flags, and test intent. `Cargo.toml` is the Cargo manifest containing package metadata needed to compile a Rust package. ([Rust Documentation][2])                   |
+| **TypeScript / React / Vite frontend** | `package.json`, lockfile, `tsconfig*.json`, `vite.config.ts`, `index.html`, `src/main.tsx`, `src/App.tsx`, `src/routes/`, `src/pages/`, `src/components/`, `src/hooks/`, `src/lib/`, `src/api/`, `src/stores/`, `vitest.config.ts`, `playwright.config.ts`, `.eslintrc*`, `tailwind.config.*` | App entrypoint, routes, screens, user flows, UI state, API clients, generated types, build scripts, and quality gates. `package.json` carries package metadata, dependencies, and scripts; Vite explicitly supports `vite.config.ts`. ([npm Docs][3])                   |
+| **API / contracts**                    | `openapi.yaml`, `openapi.json`, `asyncapi.yaml`, `graphql.schema`, `schema.graphql`, `proto/`, `buf.yaml`, `api/`, `contracts/`, generated clients, SDK folders                                                                                                                               | What the project exposes, consumes, promises, and could platformize. OpenAPI gives a language-agnostic description of HTTP APIs, while AsyncAPI describes event-driven APIs. ([Swagger][4])                                                                             |
+| **SQL / data model**                   | `migrations/`, `schema.sql`, `seed.sql`, `fixtures/`, `db/`, `database/`, `prisma/schema.prisma`, `diesel.toml`, `sqlx.toml`, query files, RLS policy files                                                                                                                                   | Durable domain model, invariants, capability gaps, unexposed workflows, missing admin screens, missing analytics, possible IP. PostgreSQL’s information schema and system catalogs are useful for introspecting database objects and schema metadata. ([PostgreSQL][5]) |
+| **Docker / runtime / deployment**      | `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `compose.yaml`, `compose.override.yml`, `entrypoint.sh`, `scripts/`, `.env.example`, `.env.template`, `k8s/`, `helm/`, `terraform/`, `fly.toml`, `render.yaml`, `railway.json`                                                           | How the project actually runs, what services exist, whether dev/prod differ, what background jobs and databases exist. A Dockerfile is a text document of commands Docker reads to assemble an image. ([Docker Documentation][6])                                       |
+| **CI / proof surface**                 | `.github/workflows/*.yml`, `.gitlab-ci.yml`, `Makefile`, `justfile`, `Taskfile.yml`, `scripts/test*`, `scripts/build*`, `coverage/`, `clippy.toml`                                                                                                                                            | How maintainers prove correctness. GitHub Actions workflows live in `.github/workflows`, are YAML files checked into the repo, and can build, test, deploy, or run scheduled/manual tasks. ([GitHub Docs][7])                                                           |
+| **Observability / operations**         | `otel-config.yaml`, `prometheus.yml`, `grafana/`, `dashboards/`, `runbooks/`, `alerts/`, `SLO.md`, `ops/`                                                                                                                                                                                     | Production reality, success metrics, bottlenecks, and safe rollout strategy. OpenTelemetry provides APIs, SDKs, agents, and collectors for traces, metrics, and logs. ([OpenTelemetry][8])                                                                              |
+| **Architecture maps**                  | `docs/architecture.md`, `docs/diagrams/`, `c4/`, `structurizr.dsl`, `adr/`, `rfcs/`                                                                                                                                                                                                           | System boundaries, containers, components, dependencies, and historical design intent. The C4 model is explicitly organized around context, containers, components, and code. ([C4 model][9])                                                                           |
+
+The agent should not treat these files equally. `README.md`, `docs/`, root manifests, API contracts, database migrations, app entrypoints, route definitions, and CI workflows are **orientation files**. They establish the project’s shape before the agent goes deep.
+
+## 2. The right mental model: “project capability graph”
+
+A normal bug agent builds a **code map**. A feature-upgrade agent needs a **capability graph**.
+
+Core node types:
+
+```text
+ProductGoal
+Persona
+UseCase
+Capability
+Workflow
+Screen
+Route
+Component
+APIEndpoint
+Event
+Command
+Handler
+DomainEntity
+Table
+Column
+Migration
+BackgroundJob
+ExternalIntegration
+ConfigFlag
+Test
+Metric
+DocClaim
+Issue
+ADR
+PR
+Owner
+Risk
+```
+
+Core edge types:
+
+```text
+documents
+implements
+calls
+renders
+reads
+writes
+emits
+consumes
+validates
+authorizes
+tested_by
+observed_by
+owned_by
+depends_on
+blocks
+extends
+contradicts
+promises
+missing_from
+```
+
+Example graph query:
+
+```text
+Find capabilities mentioned in README/docs/ROADMAP
+that have domain tables and backend handlers
+but no frontend route, no e2e test, and no observability metric.
+```
+
+That query is a goldmine. It finds “latent capabilities” the project already partially supports.
+
+Another:
+
+```text
+Find domain entities with high centrality in SQL + Rust
+that are absent from public API contracts and docs.
+```
+
+That often finds core IP that exists internally but is not yet productized.
+
+## 3. Best architecture for the agent system
+
+Build this as a layered intelligence system, not as one giant LLM prompt.
+
+```text
+                 ┌──────────────────────────────┐
+                 │   Feature Opportunity Agent   │
+                 └──────────────┬───────────────┘
+                                │
+          ┌─────────────────────┼─────────────────────┐
+          │                     │                     │
+  Mission/Docs Agent     Architecture Agent     User Workflow Agent
+          │                     │                     │
+          └─────────────┬───────┴───────────┬─────────┘
+                        │                   │
+                 Capability Graph      Hybrid Retrieval
+                        │                   │
+         ┌──────────────┴──────────────┐    │
+         │                             │    │
+   Code/Symbol Graph              Runtime/Test Evidence
+         │                             │
+  AST/LSP/CodeQL/CPG              CI/logs/OTel/tests
+```
+
+The important design choice: **all agent conclusions must be grounded in artifacts**. Every proposed feature should point to docs, code, schema, tests, user flows, or runtime evidence.
+
+### Layer A — repository cartographer
+
+This layer classifies the repo before reasoning.
+
+It should detect:
+
+```text
+workspace layout
+package manager
+Rust crates
+frontend apps
+backend apps
+database engine
+migration tool
+API contract files
+Docker services
+CI commands
+test commands
+route structure
+auth/session model
+external integrations
+observability setup
+```
+
+For Rust, use `cargo metadata`, `Cargo.toml`, crate targets, features, and source entrypoints. For TypeScript/React/Vite, use `package.json`, lockfiles, `tsconfig`, `vite.config.ts`, route files, and generated clients. For Docker/CI, inspect Dockerfiles, Compose services, GitHub Actions workflows, and shell scripts.
+
+### Layer B — code intelligence
+
+Use multiple code-understanding technologies because no single index is enough.
+
+Recommended tools:
+
+| Need                                 | Technology                                                                                                                                                                                                  |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Syntax trees and structural chunking | **Tree-sitter**. It is a parser generator and incremental parsing library that can build concrete syntax trees and update them efficiently. ([Tree-sitter][10])                                             |
+| Symbols, references, definitions     | **Language Server Protocol**, `rust-analyzer`, TypeScript language service. LSP supports IDE-like features such as autocomplete, go-to-definition, and find-all-references. ([Microsoft GitHub][11])        |
+| Semantic/static code queries         | **CodeQL**, **Joern**, **Semgrep**. CodeQL lets you query code as data; Joern builds code property graphs for cross-language analysis; Semgrep is useful for pattern and guardrail scanning. ([CodeQL][12]) |
+| API contracts                        | OpenAPI, AsyncAPI, GraphQL schema, protobuf parsers.                                                                                                                                                        |
+| SQL schema                           | Migration parser, live introspection through `information_schema`, generated schema graph.                                                                                                                  |
+| UI flows                             | React route extraction, Playwright crawling, Storybook indexing if present.                                                                                                                                 |
+| Dependency/build graph               | `cargo metadata`, npm/pnpm/yarn lockfile parser, Docker Compose parser, CI workflow parser.                                                                                                                 |
+
+The best system stores **symbol-level facts**, not only chunks. For example:
+
+```text
+Function: create_invoice
+Defined in: crates/billing/src/invoice.rs
+Calls: insert_invoice, authorize_workspace, emit_event
+Writes: invoices, invoice_events
+Tested by: billing_creates_invoice
+Rendered by: /billing/new route
+Observed by: billing.invoice.created metric
+```
+
+That is far more useful than a vector chunk saying “this file is about invoices.”
+
+### Layer C — graph database
+
+Use a graph database for relationships and traversal, not for text search. Neo4j is a natural fit because property graphs model nodes, relationships, and properties directly. ([Graph Database & Analytics][13])
+
+A graph DB helps answer questions like:
+
+```cypher
+MATCH (c:Capability)-[:IMPLEMENTED_BY]->(e:Endpoint)
+WHERE NOT (c)-[:HAS_SCREEN]->(:Screen)
+RETURN c, e
+```
+
+or:
+
+```cypher
+MATCH (d:DocClaim)-[:PROMISES]->(c:Capability)
+WHERE NOT (c)-[:TESTED_BY]->(:Test)
+RETURN d, c
+```
+
+For small/local setups, a graph can start as SQLite/Postgres tables. For serious multi-repo intelligence, use Neo4j, Memgraph, FalkorDB, ArangoDB, or a custom property graph service.
+
+### Layer D — hybrid retrieval, not plain vector search
+
+Use hybrid search because feature discovery needs both exact terms and semantic concepts. Exact terms matter for things like `tenant_id`, `billing`, `MOONSHOT`, `invoice`, `dangerouslySetInnerHTML`, `VITE_`, `openapi.yaml`, or `workspace_id`. Semantic retrieval matters for concepts like “onboarding,” “manual approval,” “workflow automation,” or “export capability.”
+
+Recommended retrieval stack:
+
+```text
+BM25 / lexical index
++ vector embeddings
++ metadata filters
++ graph-neighborhood expansion
++ cross-encoder or LLM reranking
++ provenance/citation tracking
+```
+
+Vespa is attractive for large-scale hybrid retrieval because its docs explicitly cover combining BM25 with vector search; Qdrant is a strong vector-search component and supports vector similarity search with filtering. ([Vespa. Big data. Real time. Open source.][14])
+
+For an MVP:
+
+```text
+Postgres + pgvector
+Tantivy or ripgrep/BM25
+Tree-sitter chunks
+cargo metadata
+ts-morph / TypeScript compiler API
+Neo4j optional
+```
+
+For production:
+
+```text
+Neo4j or equivalent graph DB
+Vespa / Elasticsearch / OpenSearch for hybrid search
+Qdrant or Milvus if using a dedicated vector DB
+Object store for raw artifacts
+Temporal or LangGraph for long-running workflows
+MCP servers for repo, DB, CI, browser, GitHub, docs
+```
+
+### Layer E — runtime and user-flow evidence
+
+A feature agent should not only read code. It should run the product.
+
+Use:
+
+```text
+Docker Compose startup
+Playwright route crawler
+API smoke tests
+OpenAPI request generation
+database seed inspection
+CI workflow replay
+logs and traces
+screenshots of major flows
+```
+
+OpenTelemetry is valuable because traces, metrics, and logs expose what actually runs and where users or workflows spend time. ([OpenTelemetry][8])
+
+### Layer F — orchestration
+
+You need durable, resumable, reviewable workflows. LangGraph is designed around agent orchestration features such as durable execution, streaming, and human-in-the-loop workflows; Temporal is a durable execution platform for reliable workflows and retries. ([LangChain Docs][15])
+
+MCP is useful as a tool boundary: it standardizes how LLM clients access external context such as files, schemas, and application-specific resources. ([Model Context Protocol][16])
+
+My practical recommendation:
+
+```text
+MVP orchestration:
+  LangGraph or a simple state-machine runner
+
+Serious production orchestration:
+  Temporal for durable workflow execution
+  LangGraph-style state graph for agent logic
+  MCP servers for repo, browser, DB, CI, GitHub, graph, search
+```
+
+## 4. The agents I would actually build
+
+Do not build twenty free-form agents. Build specialized agents with explicit outputs.
+
+### 1. Repo Cartographer
+
+Output:
+
+```yaml
+repo_shape:
+  backend:
+    language: rust
+    crates: [...]
+    entrypoints: [...]
+  frontend:
+    framework: react
+    bundler: vite
+    routes: [...]
+  data:
+    database: postgres
+    migrations: [...]
+  runtime:
+    docker_services: [...]
+  proof:
+    test_commands: [...]
+    ci_workflows: [...]
+```
+
+### 2. Mission Interpreter
+
+Reads README, docs, roadmaps, ADRs, issue titles, changelog, and product language.
+
+Output:
+
+```yaml
+mission:
+  one_sentence: ...
+  personas: [...]
+  promised_capabilities: [...]
+  explicit_non_goals: [...]
+  roadmap_hints: [...]
+  recurring_domain_terms: [...]
+```
+
+### 3. Domain Model Miner
+
+Reads SQL schema, migrations, Rust structs, TypeScript types, API schemas, seed data, and tests.
+
+Output:
+
+```yaml
+domain_entities:
+  - name: Workspace
+    tables: [...]
+    rust_types: [...]
+    ts_types: [...]
+    routes: [...]
+    endpoints: [...]
+    tests: [...]
+    centrality_score: 0.87
+```
+
+### 4. User Workflow Mapper
+
+Reads routes, components, forms, API calls, Playwright tests, screenshots, and docs.
+
+Output:
+
+```yaml
+workflows:
+  - name: Create project
+    screens: [...]
+    endpoints: [...]
+    tables_written: [...]
+    happy_path_tests: [...]
+    missing_states: [empty, error, permission_denied]
+```
+
+### 5. API Surface Mapper
+
+Builds a contract map from OpenAPI/AsyncAPI/GraphQL/protobuf plus actual handlers.
+
+Output:
+
+```yaml
+api_surfaces:
+  documented_endpoints: [...]
+  implemented_endpoints: [...]
+  undocumented_endpoints: [...]
+  backend_only_capabilities: [...]
+  frontend_only_assumptions: [...]
+```
+
+### 6. Capability Gap Finder
+
+This is the key agent. It looks for “almost there” opportunities:
+
+```text
+docs promise X, partial code exists, no UI
+DB supports X, no API
+API supports X, no workflow
+workflow exists, no automation
+domain entity is central, no analytics
+manual sequence repeats, no bulk action
+internal engine exists, no SDK/plugin/API
+project has integrations, no marketplace/plugin model
+```
+
+### 7. Core IP Miner
+
+Finds differentiating internal assets:
+
+```text
+custom algorithms
+domain-specific scoring
+proprietary data model
+workflow engine
+planning engine
+rules engine
+simulation/evaluation logic
+automation loops
+domain ontology
+hard-won integration layer
+benchmarks/evals
+operator dashboards
+```
+
+This agent should rank “IP intensity” by:
+
+```text
+centrality in code graph
+uniqueness of domain language
+amount of custom logic
+degree of test coverage
+distance from commodity CRUD
+number of workflows depending on it
+potential to expose as API/SDK/plugin
+difficulty for competitors to copy
+```
+
+### 8. Opportunity Critic
+
+This agent tries to kill the proposal.
+
+It asks:
+
+```text
+Is this actually aligned with the mission?
+Is it already implemented?
+Is it just generic AI fluff?
+Does it require a rewrite?
+Is there a clear first vertical slice?
+Can success be measured?
+Can it be verified in CI?
+Can it be rolled out safely?
+Does it compromise security, privacy, or reliability?
+```
+
+### 9. Implementation Planner
+
+Turns a selected opportunity into a detailed engineering plan:
+
+```text
+schema changes
+backend endpoints
+frontend screens
+API contracts
+background jobs
+tests
+migrations
+feature flags
+observability
+rollout
+PR sequence
+```
+
+### 10. Verification Planner
+
+Produces the proof matrix before implementation.
+
+```text
+unit tests
+contract tests
+integration tests
+migration tests
+e2e tests
+security tests
+performance tests
+observability checks
+rollback checks
+```
+
+## 5. Feature opportunity categories
+
+I would classify proposed upgrades into these categories:
+
+| Category                               | What it looks like                                                                      | Example                                                                              |
+| -------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **Latent capability completion**       | Repo already has partial backend/data support but lacks full product workflow           | “There are import tables and parser code, but no UI for bulk import.”                |
+| **Core IP productization**             | Internal engine exists but is not exposed as a reusable capability                      | “Turn the internal rules/scoring engine into an API, SDK, or plugin system.”         |
+| **Workflow automation**                | Users repeat a multi-step manual flow                                                   | “Add saved workflows, approval automation, or batch execution.”                      |
+| **API/platform expansion**             | App is usable only through UI, but domain model suggests external integrations          | “Expose public API, webhooks, SDK, API keys, usage dashboard.”                       |
+| **Data/analytics upgrade**             | Tables/events exist but no insight layer                                                | “Add operational analytics, trend reports, anomaly detection, cohort views.”         |
+| **Collaboration/enterprise readiness** | Product has user/project concepts but weak org workflows                                | “Roles, audit log, comments, assignments, review queues, SSO-ready model.”           |
+| **Integration expansion**              | Existing integration patterns can be generalized                                        | “Plugin marketplace, connector framework, import/export adapters.”                   |
+| **Reliability/scale upgrade**          | Architecture implies future scale but lacks queues, retries, idempotency, observability | “Move long jobs to queue with progress UI and resumability.”                         |
+| **Developer experience upgrade**       | Project has hard setup, weak docs, poor local tooling                                   | “One-command dev environment, generated API clients, contract tests.”                |
+| **Security/compliance upgrade**        | Product handles sensitive data but lacks governance                                     | “Audit trails, permission matrix, data retention, export/delete workflows.”          |
+| **AI/product intelligence upgrade**    | Domain model has enough structure for useful AI assist                                  | “AI assistant grounded in project data, but only after permissions and evals exist.” |
+
+The best opportunities are usually not “add AI.” They are:
+
+```text
+complete a latent capability
+productize internal IP
+automate a painful workflow
+expose a platform surface
+turn existing data into decisions
+```
+
+## 6. How to score feature opportunities
+
+Use a weighted score plus veto rules.
+
+```text
+Net Score =
+  Strategic Fit
++ User Value
++ Core-IP Leverage
++ Repo Affordance
++ Evidence Strength
++ Technical Feasibility
++ Differentiation
++ Verification Clarity
++ Rollout Safety
+- Risk Penalty
+```
+
+Suggested weights:
+
+| Dimension                 | Weight | What to measure                                                 |
+| ------------------------- | -----: | --------------------------------------------------------------- |
+| **Strategic fit**         |     15 | Does README/docs/mission/roadmap imply this?                    |
+| **User value**            |     15 | Does it remove pain, unlock a workflow, or expand usage?        |
+| **Core-IP leverage**      |     15 | Does it amplify the project’s unique engine/data/model?         |
+| **Repo affordance**       |     12 | Is the repo already structurally close to supporting it?        |
+| **Evidence strength**     |     10 | Is the proposal grounded in docs/code/schema/tests/issues?      |
+| **Technical feasibility** |     10 | Can it be built incrementally without a rewrite?                |
+| **Differentiation/moat**  |      8 | Does it create something hard to copy?                          |
+| **Verification clarity**  |      8 | Can tests/evals/metrics prove it works?                         |
+| **Rollout safety**        |      7 | Can it be feature-flagged, migrated, observed, and rolled back? |
+
+Risk penalty:
+
+```text
+security/privacy risk
+migration risk
+scope explosion
+dependency risk
+architecture mismatch
+unclear ownership
+poor testability
+high operational burden
+```
+
+Grade rubric:
+
+```text
+A: Strong mission fit, high repo affordance, clear core-IP leverage, testable vertical slice.
+B: Valuable and feasible, but missing one evidence category or has moderate risk.
+C: Interesting but speculative; needs discovery spike.
+D: Generic, weakly grounded, too broad, or not verifiable.
+Veto: No evidence, no verification path, requires rewrite, violates security/privacy constraints.
+```
+
+## 7. How the agent should find “core IP”
+
+Core IP is rarely labeled “core IP.” The agent should infer it.
+
+Signals:
+
+```text
+high fan-in domain modules
+custom algorithms
+domain-specific terminology repeated across docs/code/schema
+handwritten logic instead of framework CRUD
+central tables with many workflows
+custom scoring/ranking/planning/simulation
+complex state machines
+integration logic with many edge cases
+unique data transformations
+benchmarks/evaluation harnesses
+operator-only internal tools
+```
+
+Graph query examples:
+
+```text
+Find modules with high centrality that are not generic infrastructure.
+Find domain terms appearing in README + SQL + Rust + UI.
+Find internal-only capabilities with no public API or UI.
+Find algorithms with tests but no product surface.
+Find tables that drive many workflows but have no analytics/reporting screen.
+```
+
+Core IP upgrade patterns:
+
+| IP type                   | Upgrade pattern                                                          |
+| ------------------------- | ------------------------------------------------------------------------ |
+| Rules/scoring engine      | Add explainability, API, SDK, versioned rules, eval suite                |
+| Workflow engine           | Add visual workflow builder, automation templates, audit logs            |
+| Domain ontology           | Add schema browser, semantic search, validation rules, import/export     |
+| Integration layer         | Add connector SDK, plugin framework, marketplace, webhook system         |
+| Planning/simulation logic | Add scenario planner, comparisons, batch runs, saved experiments         |
+| Data pipeline             | Add quality checks, lineage, replay, observability, user-facing insights |
+| Internal admin tool       | Productize as enterprise control plane                                   |
+| Evaluation harness        | Turn into benchmark suite and quality gate                               |
+
+A strong “core IP upgrade” proposal should include:
+
+```yaml
+ip_asset: "internal scoring/rules engine"
+current_surface: "used by backend only"
+missing_surface: "no API, no UI explanation, no eval dashboard"
+upgrade: "versioned scoring engine with explanations + eval harness"
+why_now: "schema and tests already contain scoring concepts"
+first_slice: "explain one score in UI and verify against golden fixtures"
+moat: "domain-specific explainable decisions and benchmark history"
+```
+
+## 8. Context strategy: core inside-out plus outside-in
+
+The hardest part is context selection. The agent should never simply dump the repo into the model.
+
+Use five context packets.
+
+### Packet 1 — Repo DNA
+
+Small, always included.
+
+```yaml
+repo_dna:
+  mission_summary: ...
+  stack: ...
+  apps: ...
+  services: ...
+  domain_terms: [...]
+  core_entities: [...]
+  current_capabilities: [...]
+  proof_commands: [...]
+```
+
+### Packet 2 — Architecture atlas
+
+Generated from manifests, entrypoints, services, routes, contracts, and data.
+
+```yaml
+architecture_atlas:
+  containers:
+    - frontend
+    - api
+    - db
+    - worker
+  dependencies: [...]
+  entrypoints: [...]
+  route_map: [...]
+  endpoint_map: [...]
+  data_model_summary: [...]
+```
+
+### Packet 3 — Capability cards
+
+One per major capability.
+
+```yaml
+capability:
+  name: "Project import"
+  docs: [...]
+  screens: [...]
+  endpoints: [...]
+  handlers: [...]
+  tables: [...]
+  tests: [...]
+  gaps: [...]
+  evidence_score: ...
+```
+
+### Packet 4 — Opportunity dossier
+
+Only for a candidate feature.
+
+```yaml
+opportunity:
+  title: ...
+  evidence:
+    docs: [...]
+    code: [...]
+    schema: [...]
+    workflows: [...]
+    tests: [...]
+  proposed_capability: ...
+  first_vertical_slice: ...
+  risks: [...]
+  verification: [...]
+```
+
+### Packet 5 — Implementation context
+
+Only once a feature is selected.
+
+```yaml
+implementation_context:
+  files_to_edit: [...]
+  files_to_read_first: [...]
+  tests_to_add: [...]
+  commands_to_run: [...]
+  contracts_to_update: [...]
+  migration_plan: [...]
+```
+
+This is how the agent stays “holistic” without becoming noisy.
+
+## 9. The best feature-discovery loops
+
+### Loop A — Mission-to-code gap
+
+```text
+1. Extract promised capabilities from README/docs/roadmap.
+2. Map each promise to code, API, UI, DB, tests, and telemetry.
+3. Find promises with partial implementation.
+4. Rank by user value and implementation closeness.
+```
+
+Example finding:
+
+```text
+README says “collaborative workspace.”
+DB has workspaces and memberships.
+Backend has membership APIs.
+Frontend has no invite flow, role editor, or audit trail.
+Opportunity: enterprise collaboration upgrade.
+```
+
+### Loop B — Data-model-to-product gap
+
+```text
+1. Read schema and migrations.
+2. Identify central domain entities.
+3. Check which entities have routes, APIs, docs, and tests.
+4. Find underexposed entities.
+```
+
+Example:
+
+```text
+DB has job_runs, job_steps, failure_reason, retry_count.
+No UI shows job progress or failures.
+Opportunity: job observability dashboard.
+```
+
+### Loop C — Workflow friction miner
+
+```text
+1. Crawl UI routes and forms.
+2. Identify repeated manual sequences.
+3. Check whether batch, saved, scheduled, or templated variants exist.
+4. Propose automation.
+```
+
+Example:
+
+```text
+Users create the same report filters repeatedly.
+Opportunity: saved report templates + scheduled delivery.
+```
+
+### Loop D — API/platformization miner
+
+```text
+1. Compare backend handlers with OpenAPI/public docs.
+2. Find internal capabilities not exposed externally.
+3. Check auth, rate-limit, audit, and API-key readiness.
+4. Propose platform surface.
+```
+
+Example:
+
+```text
+Internal import/export exists.
+No public API, no webhook, no SDK.
+Opportunity: developer platform upgrade.
+```
+
+### Loop E — Core-IP upgrade miner
+
+```text
+1. Find central custom domain engine.
+2. Identify current private/internal use.
+3. Find missing explainability, configuration, versioning, evals, or public surface.
+4. Propose a feature that compounds the unique asset.
+```
+
+Example:
+
+```text
+Custom planner exists.
+No scenario comparison, no benchmark suite, no user-facing explanation.
+Opportunity: explainable planner + scenario lab.
+```
+
+## 10. The proposal format the agent should output
+
+Every proposed feature should look like this:
+
+```md
+## Feature hypothesis
+
+<One sentence.>
+
+## Why this fits the project
+
+Evidence:
+- Mission/docs:
+- Current code:
+- Data model:
+- API/UI:
+- Tests/CI:
+- Runtime/ops:
+
+## Current capability map
+
+What exists:
+- Backend:
+- Frontend:
+- Data:
+- Tests:
+- Docs:
+
+What is missing:
+- ...
+
+## Proposed upgrade
+
+<Specific capability, not vague theme.>
+
+## First vertical slice
+
+<Smallest end-to-end implementation that proves value.>
+
+## Architecture impact
+
+- Backend:
+- API contract:
+- Frontend:
+- Database:
+- Worker/jobs:
+- Docker/CI:
+- Observability:
+
+## Verification plan
+
+- Unit:
+- Integration:
+- Contract:
+- Migration:
+- E2E:
+- Security:
+- Performance:
+- Telemetry:
+
+## Rollout plan
+
+- Feature flag:
+- Migration:
+- Backward compatibility:
+- Metrics:
+- Rollback:
+
+## Score
+
+Strategic fit:
+User value:
+Core-IP leverage:
+Repo affordance:
+Evidence strength:
+Feasibility:
+Risk:
+Overall grade:
+
+## PR sequence
+
+1. Contract/schema/test scaffolding
+2. Backend vertical slice
+3. Frontend workflow
+4. Observability + rollout
+5. Docs + examples
+```
+
+## 11. Implementation planning: from idea to verified work plan
+
+The agent should produce a plan in **thin vertical slices**, not a big rewrite.
+
+Example structure:
+
+```text
+Slice 1: schema + contract + failing/expected tests
+Slice 2: backend endpoint/service implementation
+Slice 3: frontend route/component workflow
+Slice 4: e2e test and seed fixture
+Slice 5: observability, docs, and rollout
+```
+
+Verification matrix:
+
+| Area             | Proof                                                  |
+| ---------------- | ------------------------------------------------------ |
+| Backend behavior | Rust unit/integration tests                            |
+| API contract     | OpenAPI/GraphQL/protobuf contract tests                |
+| SQL correctness  | Migration apply/rollback, constraint tests, seed tests |
+| UI workflow      | Playwright e2e test                                    |
+| Permissions      | negative authz tests                                   |
+| Runtime          | Docker Compose smoke test                              |
+| Performance      | targeted benchmark/load check                          |
+| Observability    | trace/span/metric/log assertion                        |
+| Rollout          | feature flag and rollback path                         |
+| Docs             | README/API docs updated                                |
+
+For larger core-IP upgrades, add an eval suite:
+
+```text
+golden fixtures
+expected decisions
+regression benchmark
+explanation snapshots
+performance budget
+edge-case matrix
+```
+
+## 12. Recommended technology stack
+
+### MVP stack
+
+```yaml
+repo_scanning:
+  - git
+  - ripgrep
+  - fd
+  - ignore parser
+
+parsing:
+  - tree-sitter
+  - cargo metadata
+  - TypeScript compiler API or ts-morph
+  - OpenAPI/AsyncAPI parsers
+  - SQL migration parser
+
+storage:
+  - Postgres
+  - pgvector or local vector DB
+  - Tantivy/BM25 or OpenSearch
+  - optional Neo4j
+
+code_intelligence:
+  - rust-analyzer through LSP
+  - TypeScript language service
+  - CodeQL where supported
+  - Semgrep custom rules
+
+execution:
+  - Docker / Docker Compose
+  - project test commands
+  - Playwright
+  - CI parser
+
+agent_orchestration:
+  - LangGraph or custom state machine
+  - MCP tool servers
+```
+
+### Production stack
+
+```yaml
+graph:
+  - Neo4j / Memgraph / ArangoDB / custom property graph
+
+retrieval:
+  - Vespa or Elasticsearch/OpenSearch for hybrid retrieval
+  - Qdrant/Milvus if dedicated vector DB is preferred
+  - reranker model
+  - provenance index
+
+code_analysis:
+  - tree-sitter
+  - LSP
+  - CodeQL
+  - Joern/code property graph
+  - Semgrep
+
+runtime:
+  - Docker sandbox
+  - Playwright browser runner
+  - OpenTelemetry ingestion
+  - CI workflow integration
+
+workflow:
+  - Temporal for durable execution
+  - LangGraph-style agent state machine
+  - MCP resources/tools/prompts
+
+developer_catalog:
+  - Backstage integration for service metadata, docs, ownership, and software catalog
+```
+
+Backstage is useful in multi-service environments because its software catalog centralizes ownership and metadata for services, websites, libraries, data pipelines, and related components. ([Backstage][17])
+
+## 13. What makes the system consistently good
+
+The system needs hard rules.
+
+```text
+Never propose a feature without evidence from at least two artifact classes.
+Never propose a broad rewrite as the first slice.
+Never propose generic “AI assistant” unless the repo has data, permissions, evals, and a grounded workflow.
+Never ignore DB/migration impact.
+Never ignore rollout and observability.
+Never ignore existing roadmap/non-goals.
+Never treat frontend-only capability as implemented product capability.
+Never treat backend-only capability as user-visible capability.
+Never treat TypeScript types as proof of runtime contract.
+Never treat docs as proof of implementation.
+```
+
+Minimum evidence bar:
+
+```text
+A proposal must cite:
+1. product intent or user need
+2. current architecture affordance
+3. code/schema/API evidence
+4. missing workflow/surface
+5. verification path
+```
+
+Best feature proposals usually sound like:
+
+```text
+“The project already has 70% of this capability structurally, but users cannot benefit from it yet.”
+```
+
+Weak proposals sound like:
+
+```text
+“Add AI.”
+“Add dashboard.”
+“Improve UX.”
+“Make it scalable.”
+```
+
+## 14. The canonical agent spec
+
+```yaml
+name: project-capability-upgrade-agent
+
+mission: >
+  Find major feature upgrades that extend a project's real capabilities by
+  understanding its mission, domain model, architecture, APIs, user workflows,
+  data model, tests, deployment model, and core IP. Propose only features that
+  are evidence-backed, technically feasible, incrementally implementable, and
+  verifiable.
+
+inputs:
+  - repository
+  - docs
+  - issues_optional
+  - commit_history_optional
+  - CI_results_optional
+  - runtime_traces_optional
+  - product_metrics_optional
+
+core_outputs:
+  - repo_dna
+  - architecture_atlas
+  - domain_model_map
+  - user_workflow_map
+  - api_surface_map
+  - capability_graph
+  - opportunity_dossiers
+  - ranked_feature_candidates
+  - implementation_plan
+  - verification_plan
+
+required_before_proposal:
+  - mission_evidence
+  - current_capability_map
+  - missing_capability_or_gap
+  - affected_user_workflow
+  - architecture_affordance
+  - data_model_impact
+  - API_or_UI_surface_impact
+  - verification_strategy
+  - rollout_strategy
+
+scoring:
+  strategic_fit: 15
+  user_value: 15
+  core_ip_leverage: 15
+  repo_affordance: 12
+  evidence_strength: 10
+  technical_feasibility: 10
+  differentiation: 8
+  verification_clarity: 8
+  rollout_safety: 7
+  risk_penalty:
+    - security
+    - privacy
+    - migration
+    - scope
+    - operational_burden
+    - architecture_mismatch
+
+agent_roles:
+  - repo_cartographer
+  - mission_interpreter
+  - domain_model_miner
+  - user_workflow_mapper
+  - api_surface_mapper
+  - core_ip_miner
+  - capability_gap_finder
+  - opportunity_critic
+  - implementation_planner
+  - verification_planner
+
+non_goals:
+  - generic feature brainstorming
+  - speculative market advice without repo evidence
+  - broad rewrites
+  - roadmap hallucination
+  - feature proposals with no verification plan
+  - UI-only features unsupported by backend/data model
+  - backend-only features without user workflow or platform surface
+
+proposal_rule: >
+  A feature is eligible only if the agent can explain why the project is
+  structurally ready for it, what exact gap exists, what first vertical slice
+  proves it, and how CI/runtime tests will verify it.
+```
+
+## 15. The deepest heuristic
+
+For bugs, your canonical question was:
+
+```text
+What invariant does this code promise, and where is it not enforced?
+```
+
+For major feature upgrades, the canonical question should be:
+
+```text
+What capability does this project’s structure imply, and where is that capability not yet productized?
+```
+
+That is the high-value move. The best agent will find features that feel obvious in hindsight because the repo was already pointing at them: the docs hinted at them, the data model prepared for them, the backend partially implemented them, the frontend lacked them, and the tests did not yet encode them.
+
+[1]: https://adr.github.io/?utm_source=chatgpt.com "Architectural Decision Records (ADRs) | Architectural ..."
+[2]: https://doc.rust-lang.org/cargo/reference/manifest.html?utm_source=chatgpt.com "The Manifest Format - The Cargo Book"
+[3]: https://docs.npmjs.com/cli/v11/configuring-npm/package-json/?utm_source=chatgpt.com "package.json"
+[4]: https://swagger.io/specification/?utm_source=chatgpt.com "OpenAPI Specification - Version 3.1.0"
+[5]: https://www.postgresql.org/docs/current/information-schema.html?utm_source=chatgpt.com "Documentation: 18: Chapter 35. The Information Schema"
+[6]: https://docs.docker.com/reference/dockerfile/?utm_source=chatgpt.com "Dockerfile reference"
+[7]: https://docs.github.com/en/actions/writing-workflows/about-workflows "Workflows - GitHub Docs"
+[8]: https://opentelemetry.io/?utm_source=chatgpt.com "OpenTelemetry"
+[9]: https://c4model.com/?utm_source=chatgpt.com "C4 model: Home"
+[10]: https://tree-sitter.github.io/?utm_source=chatgpt.com "Tree-sitter: Introduction"
+[11]: https://microsoft.github.io/language-server-protocol/?utm_source=chatgpt.com "Official page for Language Server Protocol"
+[12]: https://codeql.github.com/docs/?utm_source=chatgpt.com "CodeQL documentation - GitHub"
+[13]: https://neo4j.com/docs/getting-started/appendix/graphdb-concepts/?utm_source=chatgpt.com "Graph database concepts - Getting Started"
+[14]: https://docs.vespa.ai/en/learn/tutorials/hybrid-search.html?utm_source=chatgpt.com "Hybrid Text Search Tutorial"
+[15]: https://docs.langchain.com/oss/python/langgraph/overview?utm_source=chatgpt.com "LangGraph overview - Docs by LangChain"
+[16]: https://modelcontextprotocol.io/specification/2025-06-18/server/resources?utm_source=chatgpt.com "Resources"
+[17]: https://backstage.io/docs/features/software-catalog/?utm_source=chatgpt.com "Backstage Software Catalog and Developer Platform"
+

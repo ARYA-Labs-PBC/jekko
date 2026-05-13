@@ -1,0 +1,1469 @@
+Absolutely — if you want to leverage Ratatui, I would revise the strategy from “restyle the existing OpenTUI/Solid TSX interface” into a **two-track plan**:
+
+1. **Immediate visual break from OpenCode** inside the current TUI codebase.
+2. **Strategic native Rust TUI rewrite using Ratatui** as the premium long-term direction.
+
+The current archive’s TUI is not Rust; it is TypeScript/TSX using OpenTUI and SolidJS. Ratatui cannot be dropped into those TSX files directly. But the existing backend/API design is actually a very good fit for a native Rust frontend, because the TUI already communicates through backend events, session state, commands, and HTTP-style routes.
+
+Ratatui is worth using if the goal is “world’s greatest coding app” in the terminal. Its official docs emphasize fast immediate-mode rendering, rich widgets such as charts, sparklines, tables, gauges, scrollable lists, progress bars, and responsive constraint-based layouts. That maps extremely well to the design I proposed: left rail, transcript canvas, command dock, agent telemetry, diff panels, and activity dashboards. ([Ratatui][1])
+
+## Ratatui-first recommendation
+
+My stronger recommendation is now:
+
+```txt
+Short term:
+  Keep current OpenTUI frontend, but radically restyle it.
+
+Long term:
+  Build a new native Rust Ratatui frontend that talks to the existing backend.
+
+Do not:
+  Attempt to “mix” Ratatui widgets into the current TSX renderer.
+```
+
+The best architecture is a new binary:
+
+```txt
+crates/apex-tui/
+  Cargo.toml
+  src/
+    main.rs
+    app.rs
+    backend/
+      client.rs
+      events.rs
+      models.rs
+    ui/
+      mod.rs
+      theme.rs
+      layout.rs
+      frame.rs
+      left_rail.rs
+      transcript.rs
+      prompt_dock.rs
+      command_palette.rs
+      dialogs.rs
+      toast.rs
+      diff.rs
+      telemetry.rs
+    input/
+      mod.rs
+      keymap.rs
+      actions.rs
+    state/
+      mod.rs
+      session.rs
+      workspace.rs
+      sync.rs
+```
+
+The backend files in the existing TypeScript repo can stay mostly intact. The new Rust TUI should use the current HTTP/SSE/backend API as its source of truth.
+
+---
+
+# Ratatui-native design upgrade
+
+Ratatui gives you a much more “engineered” terminal UI vocabulary than the current TSX view layer. The current UI is mostly boxes, text, scrollboxes, and manually styled borders. Ratatui lets you build a native immediate-mode terminal app with strong layout composition, reusable widgets, stateful widgets, and purpose-built visual components. Its widgets are designed to be combined and nested into complex TUIs, and the docs now describe the main crate as re-exporting the pieces app authors need, including widgets, backends, and layout systems. ([Docs.rs][2])
+
+The new layout should become:
+
+```txt
+╭────────────────────────────────────────────────────────────────────────────╮
+│ ◆ Apex Workbench       repo/main       Claude Sonnet       ^P Command      │
+├───────────────┬────────────────────────────────────────────────────────────┤
+│ LEFT RAIL     │ TRANSCRIPT CANVAS                                         │
+│               │                                                            │
+│ Session       │ ◆ You                                                      │
+│ Memory        │   refactor provider auth and add tests                     │
+│ Delta         │                                                            │
+│ Agents        │ ◇ Assistant                                                │
+│ Tools         │   I’ll inspect the provider layer and patch the tests...    │
+│ MCP           │                                                            │
+│               │ ◇ edit_file                                      complete  │
+│               │   src/provider/auth.ts                         +42 -8      │
+│               │                                                            │
+│               ├────────────────────────────────────────────────────────────┤
+│               │ COMMAND DOCK                                               │
+│               │ >                                                          │
+╰───────────────┴────────────────────────────────────────────────────────────╯
+```
+
+Ratatui’s constraint-based layouts are perfect for this. Layouts split terminal space into rectangles using constraints such as fixed length, minimum size, percentage, and ratio, then widgets render into those areas. That is exactly what you want for a left rail plus transcript plus command dock design. ([Ratatui][3])
+
+---
+
+# New Rust files to add
+
+## 1. `crates/apex-tui/Cargo.toml`
+
+Add a native TUI binary.
+
+```toml
+[package]
+name = "apex-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.28"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+color-eyre = "0.6"
+tui-input = "0.10"
+unicode-width = "0.2"
+textwrap = "0.16"
+similar = "2"
+```
+
+If the exact Ratatui version changes, pin to whatever is current in your lockfile at implementation time. The public docs already reference Ratatui 0.30-era crate organization, including `ratatui-core`, `ratatui-widgets`, and the main `ratatui` crate for app authors. ([Docs.rs][2])
+
+---
+
+## 2. `crates/apex-tui/src/main.rs`
+
+This boots the terminal, initializes state, starts the backend event sync, and enters the draw/input loop.
+
+```rust
+use color_eyre::Result;
+
+mod app;
+mod backend;
+mod input;
+mod state;
+mod ui;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    color_eyre::install()?;
+
+    let backend_url =
+        std::env::var("APEX_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:4096".to_string());
+
+    let client = backend::client::BackendClient::new(backend_url);
+    let mut app = app::App::new(client);
+
+    app.run().await
+}
+```
+
+---
+
+## 3. `crates/apex-tui/src/app.rs`
+
+Core loop.
+
+```rust
+use color_eyre::Result;
+use crossterm::event::{self, Event};
+use ratatui::{backend::CrosstermBackend, Terminal};
+use std::{io, time::Duration};
+
+use crate::{
+    backend::client::BackendClient,
+    input::{actions::Action, keymap::map_key_event},
+    state::AppState,
+    ui,
+};
+
+pub struct App {
+    client: BackendClient,
+    state: AppState,
+    should_quit: bool,
+}
+
+impl App {
+    pub fn new(client: BackendClient) -> Self {
+        Self {
+            client,
+            state: AppState::default(),
+            should_quit: false,
+        }
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        ratatui::init();
+
+        let result = self.run_inner().await;
+
+        ratatui::restore();
+
+        result
+    }
+
+    async fn run_inner(&mut self) -> Result<()> {
+        let backend = CrosstermBackend::new(io::stdout());
+        let mut terminal = Terminal::new(backend)?;
+
+        while !self.should_quit {
+            terminal.draw(|frame| {
+                ui::frame::render(frame, &mut self.state);
+            })?;
+
+            if event::poll(Duration::from_millis(16))? {
+                if let Event::Key(key) = event::read()? {
+                    let action = map_key_event(key, &self.state);
+                    self.apply_action(action).await?;
+                }
+            }
+
+            self.tick().await?;
+        }
+
+        Ok(())
+    }
+
+    async fn tick(&mut self) -> Result<()> {
+        // Pull backend updates, process pending events, update animations.
+        // The first implementation can poll. Later, switch to SSE/websocket stream.
+        Ok(())
+    }
+
+    async fn apply_action(&mut self, action: Action) -> Result<()> {
+        match action {
+            Action::Quit => self.should_quit = true,
+
+            Action::ToggleLeftRail => {
+                self.state.layout.left_rail_open = !self.state.layout.left_rail_open;
+            }
+
+            Action::SubmitPrompt => {
+                let text = self.state.prompt.input.clone();
+                if !text.trim().is_empty() {
+                    self.client.submit_prompt(&text).await?;
+                    self.state.prompt.input.clear();
+                }
+            }
+
+            Action::InputChar(ch) => {
+                self.state.prompt.input.push(ch);
+            }
+
+            Action::Backspace => {
+                self.state.prompt.input.pop();
+            }
+
+            Action::OpenCommandPalette => {
+                self.state.overlay = Some(crate::state::Overlay::CommandPalette);
+            }
+
+            Action::Escape => {
+                self.state.overlay = None;
+            }
+
+            Action::Noop => {}
+        }
+
+        Ok(())
+    }
+}
+```
+
+---
+
+# Ratatui UI modules
+
+## 4. `crates/apex-tui/src/ui/theme.rs`
+
+This replaces the TSX theme JSON at runtime with a strongly typed Rust palette.
+
+```rust
+use ratatui::style::{Color, Modifier, Style};
+
+#[derive(Clone, Debug)]
+pub struct Theme {
+    pub bg: Color,
+    pub panel: Color,
+    pub element: Color,
+    pub menu: Color,
+
+    pub text: Color,
+    pub muted: Color,
+
+    pub primary: Color,
+    pub secondary: Color,
+    pub accent: Color,
+
+    pub success: Color,
+    pub warning: Color,
+    pub error: Color,
+    pub info: Color,
+
+    pub border: Color,
+    pub border_subtle: Color,
+    pub border_active: Color,
+}
+
+impl Theme {
+    pub fn apex_dark() -> Self {
+        Self {
+            bg: Color::Rgb(0x06, 0x10, 0x13),
+            panel: Color::Rgb(0x0A, 0x17, 0x1B),
+            element: Color::Rgb(0x10, 0x25, 0x2A),
+            menu: Color::Rgb(0x13, 0x2C, 0x33),
+
+            text: Color::Rgb(0xE8, 0xFF, 0xF8),
+            muted: Color::Rgb(0x83, 0xA1, 0x9B),
+
+            primary: Color::Rgb(0x48, 0xF2, 0xC2),
+            secondary: Color::Rgb(0xA8, 0xB1, 0xFF),
+            accent: Color::Rgb(0xFF, 0x7A, 0x90),
+
+            success: Color::Rgb(0xB9, 0xF7, 0x6A),
+            warning: Color::Rgb(0xF3, 0xF8, 0x71),
+            error: Color::Rgb(0xFF, 0x5C, 0x7A),
+            info: Color::Rgb(0x6E, 0xC8, 0xFF),
+
+            border: Color::Rgb(0x2A, 0x59, 0x60),
+            border_subtle: Color::Rgb(0x1A, 0x3B, 0x43),
+            border_active: Color::Rgb(0x48, 0xF2, 0xC2),
+        }
+    }
+
+    pub fn text_style(&self) -> Style {
+        Style::default().fg(self.text).bg(self.bg)
+    }
+
+    pub fn muted_style(&self) -> Style {
+        Style::default().fg(self.muted).bg(self.bg)
+    }
+
+    pub fn title_style(&self) -> Style {
+        Style::default()
+            .fg(self.primary)
+            .bg(self.panel)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    pub fn selected_style(&self) -> Style {
+        Style::default()
+            .fg(self.text)
+            .bg(self.element)
+            .add_modifier(Modifier::BOLD)
+    }
+}
+```
+
+This creates the visual foundation. It also gives Rust-side UI code a consistent design system instead of hardcoded one-off colors.
+
+---
+
+## 5. `crates/apex-tui/src/ui/layout.rs`
+
+The Ratatui layout manager.
+
+```rust
+use ratatui::{
+    layout::{Constraint, Direction, Layout, Rect},
+};
+
+#[derive(Debug, Clone, Copy)]
+pub struct AppLayout {
+    pub header: Rect,
+    pub body: Rect,
+    pub left_rail: Option<Rect>,
+    pub transcript: Rect,
+    pub prompt: Rect,
+}
+
+pub fn compute(area: Rect, left_rail_open: bool) -> AppLayout {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(8),
+        ])
+        .split(area);
+
+    let header = vertical[0];
+    let body = vertical[1];
+
+    let wide = area.width >= 118;
+    let show_left = left_rail_open || wide;
+
+    let horizontal = if show_left {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(42),
+                Constraint::Min(40),
+            ])
+            .split(body)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(40)])
+            .split(body)
+    };
+
+    let left_rail = if show_left { Some(horizontal[0]) } else { None };
+    let main = if show_left { horizontal[1] } else { horizontal[0] };
+
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(8),
+            Constraint::Length(7),
+        ])
+        .split(main);
+
+    AppLayout {
+        header,
+        body,
+        left_rail,
+        transcript: main_chunks[0],
+        prompt: main_chunks[1],
+    }
+}
+```
+
+This is much cleaner than the current TSX sidebar width and visibility logic. Ratatui’s layout system is designed for exactly this kind of adaptive terminal composition. ([Ratatui][3])
+
+---
+
+## 6. `crates/apex-tui/src/ui/frame.rs`
+
+Top-level render composition.
+
+```rust
+use ratatui::{
+    Frame,
+    widgets::{Block, Borders},
+};
+
+use crate::state::AppState;
+
+use super::{
+    layout,
+    theme::Theme,
+    left_rail,
+    transcript,
+    prompt_dock,
+    command_palette,
+    toast,
+};
+
+pub fn render(frame: &mut Frame, state: &mut AppState) {
+    let theme = Theme::apex_dark();
+    let area = frame.area();
+
+    let chunks = layout::compute(area, state.layout.left_rail_open);
+
+    frame.render_widget(
+        Block::default()
+            .style(theme.text_style()),
+        area,
+    );
+
+    render_header(frame, chunks.header, state, &theme);
+
+    if let Some(left) = chunks.left_rail {
+        left_rail::render(frame, left, state, &theme);
+    }
+
+    transcript::render(frame, chunks.transcript, state, &theme);
+    prompt_dock::render(frame, chunks.prompt, state, &theme);
+
+    if let Some(overlay) = &state.overlay {
+        match overlay {
+            crate::state::Overlay::CommandPalette => {
+                command_palette::render(frame, area, state, &theme);
+            }
+        }
+    }
+
+    toast::render(frame, area, state, &theme);
+}
+
+fn render_header(frame: &mut Frame, area: ratatui::layout::Rect, state: &AppState, theme: &Theme) {
+    use ratatui::{
+        text::{Line, Span},
+        widgets::Paragraph,
+    };
+
+    let line = Line::from(vec![
+        Span::styled("◆ ", theme.title_style()),
+        Span::styled("Apex Workbench", theme.text_style()),
+        Span::styled("  ", theme.muted_style()),
+        Span::styled(state.workspace.repo_label.as_str(), theme.muted_style()),
+        Span::styled("  │  ", theme.muted_style()),
+        Span::styled(state.model.label.as_str(), theme.muted_style()),
+        Span::styled("  │  ^P Command  ^B Rail", theme.muted_style()),
+    ]);
+
+    frame.render_widget(Paragraph::new(line), area);
+}
+```
+
+---
+
+## 7. `crates/apex-tui/src/ui/left_rail.rs`
+
+This is where Ratatui can strongly outperform the current sidebar. Use gauges, tables, sparklines, lists, and grouped blocks.
+
+```rust
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Sparkline},
+};
+
+use crate::state::AppState;
+
+use super::theme::Theme;
+
+pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(theme.border_subtle).bg(theme.panel))
+        .style(Style::default().bg(theme.panel));
+
+    frame.render_widget(block, area);
+
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),  // session
+            Constraint::Length(4),  // context
+            Constraint::Length(8),  // delta
+            Constraint::Length(7),  // agents
+            Constraint::Min(5),     // tools/mcp
+            Constraint::Length(3),  // footer
+        ])
+        .split(inner);
+
+    render_session_card(frame, sections[0], state, theme);
+    render_context_gauge(frame, sections[1], state, theme);
+    render_delta_list(frame, sections[2], state, theme);
+    render_agent_sparkline(frame, sections[3], state, theme);
+    render_tools(frame, sections[4], state, theme);
+    render_footer(frame, sections[5], state, theme);
+}
+
+fn render_session_card(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let text = vec![
+        Line::from(vec![
+            Span::styled("◆ ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+            Span::styled("Session", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(Span::styled(&state.session.title, Style::default().fg(theme.text))),
+        Line::from(Span::styled(&state.session.id_short, Style::default().fg(theme.muted))),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(Block::default().style(Style::default().bg(theme.panel))),
+        area,
+    );
+}
+
+fn render_context_gauge(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let ratio = state.session.context_ratio.clamp(0.0, 1.0);
+
+    let gauge = Gauge::default()
+        .block(
+            Block::default()
+                .title(" Memory ")
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(theme.border_subtle)),
+        )
+        .gauge_style(Style::default().fg(theme.primary).bg(theme.element))
+        .ratio(ratio)
+        .label(format!(
+            "{} / {} tokens",
+            state.session.tokens_used, state.session.tokens_limit
+        ));
+
+    frame.render_widget(gauge, area);
+}
+
+fn render_delta_list(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let items: Vec<ListItem> = state
+        .session
+        .modified_files
+        .iter()
+        .take(6)
+        .map(|file| {
+            ListItem::new(Line::from(vec![
+                Span::styled("◇ ", Style::default().fg(theme.secondary)),
+                Span::styled(&file.path, Style::default().fg(theme.text)),
+                Span::styled(
+                    format!(" +{} -{}", file.additions, file.deletions),
+                    Style::default().fg(theme.muted),
+                ),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(" Delta ")
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(theme.border_subtle)),
+        )
+        .style(Style::default().bg(theme.panel));
+
+    frame.render_widget(list, area);
+}
+
+fn render_agent_sparkline(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let sparkline = Sparkline::default()
+        .block(
+            Block::default()
+                .title(" Agents ")
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(theme.border_subtle)),
+        )
+        .data(&state.telemetry.agent_activity)
+        .style(Style::default().fg(theme.accent).bg(theme.panel));
+
+    frame.render_widget(sparkline, area);
+}
+
+fn render_tools(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let items: Vec<ListItem> = state
+        .tools
+        .iter()
+        .map(|tool| {
+            let color = if tool.status == "ready" {
+                theme.success
+            } else {
+                theme.warning
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled("● ", Style::default().fg(color)),
+                Span::styled(&tool.name, Style::default().fg(theme.text)),
+            ]))
+        })
+        .collect();
+
+    frame.render_widget(
+        List::new(items)
+            .block(
+                Block::default()
+                    .title(" Tools ")
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(theme.border_subtle)),
+            ),
+        area,
+    );
+}
+
+fn render_footer(frame: &mut Frame, area: Rect, _state: &AppState, theme: &Theme) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("◆ ", Style::default().fg(theme.primary)),
+            Span::styled("Ready", Style::default().fg(theme.success)),
+            Span::styled("  local workspace", Style::default().fg(theme.muted)),
+        ])),
+        area,
+    );
+}
+```
+
+This is the big win: Ratatui’s widgets such as `Gauge`, `List`, and `Sparkline` can make the left rail look like a serious engineering dashboard, not just a text sidebar. Ratatui’s widget examples include Gauge, List, Paragraph, Scrollbar, Sparkline, Table, Tabs, Chart, Canvas, and more. ([Ratatui][4])
+
+---
+
+## 8. `crates/apex-tui/src/ui/transcript.rs`
+
+Transcript as a premium canvas.
+
+```rust
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Wrap},
+};
+
+use crate::state::{AppState, MessageRole};
+
+use super::theme::Theme;
+
+pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let mut lines: Vec<Line> = Vec::new();
+
+    for message in &state.session.messages {
+        match message.role {
+            MessageRole::User => {
+                lines.push(Line::from(vec![
+                    Span::styled("◆ ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+                    Span::styled("You", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("  {}", message.time_label), Style::default().fg(theme.muted)),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", message.content),
+                    Style::default().fg(theme.text),
+                )));
+                lines.push(Line::raw(""));
+            }
+
+            MessageRole::Assistant => {
+                lines.push(Line::from(vec![
+                    Span::styled("◇ ", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Assistant", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("  {}", message.model_label), Style::default().fg(theme.muted)),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", message.content),
+                    Style::default().fg(theme.text),
+                )));
+                lines.push(Line::raw(""));
+            }
+
+            MessageRole::Tool => {
+                lines.push(Line::from(vec![
+                    Span::styled("◌ ", Style::default().fg(theme.info)),
+                    Span::styled(&message.tool_label, Style::default().fg(theme.info)),
+                    Span::styled("  complete", Style::default().fg(theme.success)),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", message.content),
+                    Style::default().fg(theme.muted),
+                )));
+                lines.push(Line::raw(""));
+            }
+        }
+    }
+
+    let paragraph = Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .borders(Borders::NONE)
+                .style(Style::default().bg(theme.bg)),
+        )
+        .wrap(Wrap { trim: false })
+        .scroll((state.session.scroll_offset, 0));
+
+    frame.render_widget(paragraph, area);
+}
+```
+
+Later, this should be upgraded to custom widgets for:
+
+```txt
+MessageWidget
+ToolCardWidget
+DiffWidget
+MarkdownWidget
+ThinkingWidget
+PermissionWidget
+```
+
+But the first implementation can start with `Paragraph`, `Text`, `Line`, and `Span`.
+
+---
+
+## 9. `crates/apex-tui/src/ui/prompt_dock.rs`
+
+The command dock becomes the signature interaction surface.
+
+```rust
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+};
+
+use crate::state::AppState;
+
+use super::theme::Theme;
+
+pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(theme.border_active))
+        .style(Style::default().bg(theme.panel));
+
+    frame.render_widget(block, area);
+
+    let inner = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let header = Line::from(vec![
+        Span::styled("◆ ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+        Span::styled("Command Dock", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+        Span::styled("  ", Style::default().fg(theme.muted)),
+        Span::styled(&state.model.label, Style::default().fg(theme.secondary)),
+        Span::styled("  │  ", Style::default().fg(theme.border_subtle)),
+        Span::styled(&state.session.mode_label, Style::default().fg(theme.muted)),
+    ]);
+
+    frame.render_widget(Paragraph::new(header).style(Style::default().bg(theme.panel)), rows[0]);
+
+    let input = Line::from(vec![
+        Span::styled("> ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+        Span::styled(&state.prompt.input, Style::default().fg(theme.text)),
+        Span::styled("█", Style::default().fg(theme.primary)),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(input)
+            .block(
+                Block::default()
+                    .borders(Borders::NONE)
+                    .style(Style::default().bg(theme.element)),
+            ),
+        rows[1],
+    );
+
+    let footer = Line::from(vec![
+        Span::styled("^Enter", Style::default().fg(theme.primary)),
+        Span::styled(" send   ", Style::default().fg(theme.muted)),
+        Span::styled("^P", Style::default().fg(theme.primary)),
+        Span::styled(" command   ", Style::default().fg(theme.muted)),
+        Span::styled("^B", Style::default().fg(theme.primary)),
+        Span::styled(" rail", Style::default().fg(theme.muted)),
+    ]);
+
+    frame.render_widget(Paragraph::new(footer).style(Style::default().bg(theme.panel)), rows[2]);
+}
+```
+
+---
+
+## 10. `crates/apex-tui/src/ui/command_palette.rs`
+
+Ratatui can make the command palette feel like a first-class IDE feature.
+
+```rust
+use ratatui::{
+    Frame,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+};
+
+use crate::state::AppState;
+
+use super::theme::Theme;
+
+pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let popup = centered_rect(68, 70, area);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_active))
+        .style(Style::default().bg(theme.menu));
+
+    frame.render_widget(block, popup);
+
+    let inner = Rect {
+        x: popup.x + 2,
+        y: popup.y + 1,
+        width: popup.width.saturating_sub(4),
+        height: popup.height.saturating_sub(2),
+    };
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(3),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("◆ ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+            Span::styled("Command", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+            Span::styled("  type to filter", Style::default().fg(theme.muted)),
+        ]))
+        .alignment(Alignment::Left),
+        rows[0],
+    );
+
+    let items: Vec<ListItem> = state
+        .commands
+        .iter()
+        .enumerate()
+        .map(|(idx, command)| {
+            let selected = idx == state.command_palette.selected;
+            let marker = if selected { "▸ " } else { "  " };
+            let style = if selected {
+                Style::default().fg(theme.text).bg(theme.element).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.muted).bg(theme.menu)
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, Style::default().fg(theme.primary).bg(theme.menu)),
+                Span::styled(&command.title, style),
+                Span::styled(
+                    format!("  {}", command.category),
+                    Style::default().fg(theme.muted).bg(if selected { theme.element } else { theme.menu }),
+                ),
+            ]))
+        })
+        .collect();
+
+    frame.render_widget(
+        List::new(items)
+            .style(Style::default().bg(theme.menu))
+            .highlight_style(theme.selected_style()),
+        rows[1],
+    );
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1]);
+
+    horizontal[1]
+}
+```
+
+---
+
+# Backend integration strategy
+
+## Keep these current TypeScript backend files
+
+The following should remain as the backend control surface for both the existing OpenTUI frontend and the new Ratatui frontend:
+
+```txt
+packages/jekko/src/server/routes/instance/tui.ts
+packages/jekko/src/server/routes/instance/httpapi/groups/tui.ts
+packages/jekko/src/server/routes/instance/httpapi/handlers/tui.ts
+packages/jekko/src/server/shared/tui-control.ts
+packages/jekko/src/cli/cmd/tui/event.ts
+```
+
+But make the bug fix I already called out:
+
+```ts
+// packages/jekko/src/server/routes/instance/tui.ts
+
+.post("/open-themes", ..., async (c) => {
+  await Bus.publish(TuiEvent.CommandExecute, {
+    command: "theme.switch",
+  })
+
+  return c.json(true)
+})
+```
+
+The current implementation incorrectly publishes `session.list` for `/open-themes`.
+
+## Add Rust backend client
+
+### `crates/apex-tui/src/backend/client.rs`
+
+```rust
+use color_eyre::Result;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone)]
+pub struct BackendClient {
+    base_url: String,
+    http: Client,
+}
+
+impl BackendClient {
+    pub fn new(base_url: String) -> Self {
+        Self {
+            base_url,
+            http: Client::new(),
+        }
+    }
+
+    pub async fn append_prompt(&self, text: &str) -> Result<bool> {
+        let url = format!("{}/tui/append-prompt", self.base_url);
+
+        let response = self
+            .http
+            .post(url)
+            .json(&AppendPromptRequest {
+                text: text.to_string(),
+            })
+            .send()
+            .await?
+            .json::<bool>()
+            .await?;
+
+        Ok(response)
+    }
+
+    pub async fn submit_prompt(&self, text: &str) -> Result<bool> {
+        self.append_prompt(text).await?;
+
+        let url = format!("{}/tui/submit-prompt", self.base_url);
+
+        let response = self
+            .http
+            .post(url)
+            .send()
+            .await?
+            .json::<bool>()
+            .await?;
+
+        Ok(response)
+    }
+
+    pub async fn execute_command(&self, command: &str) -> Result<bool> {
+        let url = format!("{}/tui/execute-command", self.base_url);
+
+        let response = self
+            .http
+            .post(url)
+            .json(&ExecuteCommandRequest {
+                command: command.to_string(),
+            })
+            .send()
+            .await?
+            .json::<bool>()
+            .await?;
+
+        Ok(response)
+    }
+
+    pub async fn select_session(&self, session_id: &str) -> Result<bool> {
+        let url = format!("{}/tui/select-session", self.base_url);
+
+        let response = self
+            .http
+            .post(url)
+            .json(&SelectSessionRequest {
+                session_id: session_id.to_string(),
+            })
+            .send()
+            .await?
+            .json::<bool>()
+            .await?;
+
+        Ok(response)
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AppendPromptRequest {
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ExecuteCommandRequest {
+    command: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectSessionRequest {
+    session_id: String,
+}
+```
+
+This gives the Rust TUI a clean starting point. Later, add typed models generated from OpenAPI if desired.
+
+---
+
+# State model
+
+## `crates/apex-tui/src/state/mod.rs`
+
+```rust
+#[derive(Default)]
+pub struct AppState {
+    pub layout: LayoutState,
+    pub workspace: WorkspaceState,
+    pub session: SessionState,
+    pub prompt: PromptState,
+    pub model: ModelState,
+    pub telemetry: TelemetryState,
+    pub command_palette: CommandPaletteState,
+    pub commands: Vec<Command>,
+    pub tools: Vec<ToolState>,
+    pub overlay: Option<Overlay>,
+    pub toasts: Vec<Toast>,
+}
+
+#[derive(Default)]
+pub struct LayoutState {
+    pub left_rail_open: bool,
+}
+
+#[derive(Default)]
+pub struct WorkspaceState {
+    pub repo_label: String,
+    pub branch: String,
+}
+
+#[derive(Default)]
+pub struct SessionState {
+    pub id: String,
+    pub id_short: String,
+    pub title: String,
+    pub mode_label: String,
+    pub tokens_used: u64,
+    pub tokens_limit: u64,
+    pub context_ratio: f64,
+    pub messages: Vec<Message>,
+    pub modified_files: Vec<ModifiedFile>,
+    pub scroll_offset: u16,
+}
+
+pub enum MessageRole {
+    User,
+    Assistant,
+    Tool,
+}
+
+pub struct Message {
+    pub role: MessageRole,
+    pub content: String,
+    pub time_label: String,
+    pub model_label: String,
+    pub tool_label: String,
+}
+
+pub struct ModifiedFile {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[derive(Default)]
+pub struct PromptState {
+    pub input: String,
+}
+
+#[derive(Default)]
+pub struct ModelState {
+    pub label: String,
+}
+
+#[derive(Default)]
+pub struct TelemetryState {
+    pub agent_activity: Vec<u64>,
+}
+
+#[derive(Default)]
+pub struct CommandPaletteState {
+    pub selected: usize,
+    pub query: String,
+}
+
+pub struct Command {
+    pub title: String,
+    pub category: String,
+    pub command: String,
+}
+
+pub struct ToolState {
+    pub name: String,
+    pub status: String,
+}
+
+pub struct Toast {
+    pub title: String,
+    pub message: String,
+    pub variant: ToastVariant,
+}
+
+pub enum ToastVariant {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+pub enum Overlay {
+    CommandPalette,
+}
+```
+
+---
+
+# Input and keymap
+
+## `crates/apex-tui/src/input/actions.rs`
+
+```rust
+#[derive(Debug, Clone)]
+pub enum Action {
+    Quit,
+    ToggleLeftRail,
+    OpenCommandPalette,
+    SubmitPrompt,
+    Escape,
+    InputChar(char),
+    Backspace,
+    Noop,
+}
+```
+
+## `crates/apex-tui/src/input/keymap.rs`
+
+```rust
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::state::AppState;
+
+use super::actions::Action;
+
+pub fn map_key_event(key: KeyEvent, _state: &AppState) -> Action {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('q'), KeyModifiers::CONTROL) => Action::Quit,
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) => Action::OpenCommandPalette,
+        (KeyCode::Char('b'), KeyModifiers::CONTROL) => Action::ToggleLeftRail,
+        (KeyCode::Enter, _) => Action::SubmitPrompt,
+        (KeyCode::Esc, _) => Action::Escape,
+        (KeyCode::Backspace, _) => Action::Backspace,
+        (KeyCode::Char(ch), _) => Action::InputChar(ch),
+        _ => Action::Noop,
+    }
+}
+```
+
+---
+
+# Existing TypeScript files still worth changing
+
+Even if you commit to Ratatui later, I would still change the current TSX frontend now so nobody sees an OpenCode-like UI while the Rust TUI is being built.
+
+The minimum TSX changes remain:
+
+```txt
+packages/jekko/src/cli/cmd/tui/context/theme/apex.json
+packages/jekko/src/cli/cmd/tui/context/theme-presets.ts
+packages/jekko/src/cli/cmd/tui/context/theme.tsx
+packages/jekko/src/cli/cmd/tui/app.tsx
+packages/jekko/src/cli/cmd/tui/component/logo.tsx
+packages/jekko/src/cli/cmd/tui/component/logo-ansi.ts
+packages/jekko/src/cli/cmd/tui/routes/session/session-view.tsx
+packages/jekko/src/cli/cmd/tui/routes/session/sidebar.tsx
+packages/jekko/src/cli/cmd/tui/routes/session/session-body-core.tsx
+packages/jekko/src/cli/cmd/tui/component/prompt/index.tsx
+packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
+packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/footer.tsx
+packages/jekko/src/server/routes/instance/tui.ts
+packages/jekko/src/server/routes/instance/httpapi/handlers/tui.ts
+```
+
+But the **future flagship app** should be the Ratatui binary.
+
+---
+
+# What Ratatui unlocks visually
+
+## 1. Left rail telemetry
+
+Use:
+
+```txt
+Gauge      context budget
+Sparkline  agent activity
+List       modified files
+Table      provider/model/tool state
+Tabs       workspace/session/tool panes
+Scrollbar  transcript position
+Chart      token/cost/activity trends
+Canvas     optional tiny topology map
+```
+
+Ratatui officially provides widget examples for these categories, including Gauge, List, Paragraph, Scrollbar, Sparkline, Table, Tabs, Chart, Canvas, and BarChart. ([Ratatui][4])
+
+## 2. Premium diff view
+
+Use `similar` to compute line changes, then render a custom Ratatui widget:
+
+```txt
+◇ src/provider/auth.ts
+  @@ authenticateProvider @@
+
+  - old token validation
+  + new token validation
+  + refreshed provider cache
+```
+
+Use:
+
+```rust
+Span::styled("+", Style::default().fg(theme.success))
+Span::styled("-", Style::default().fg(theme.error))
+```
+
+## 3. Permission modal as native action sheet
+
+```txt
+╭─ Permission Required ─────────────────────────╮
+│ tool     edit_file                            │
+│ target   src/provider/auth.ts                 │
+│                                                │
+│ ▸ Allow once    Always allow    Deny           │
+╰───────────────────────────────────────────────╯
+```
+
+Ratatui’s `Clear` widget is useful for modal overlays, and blocks/borders make this straightforward. The official widget docs describe `Clear` as clearing the area it occupies, useful when rendering over previously drawn widgets. ([Docs.rs][2])
+
+## 4. Better performance and reliability
+
+Ratatui’s website describes immediate-mode rendering, sub-millisecond rendering, and pure Rust reliability as core benefits. For a terminal app with streaming output, telemetry, scrollback, syntax-heavy text, and many dynamic widgets, that is exactly the direction I’d want. ([Ratatui][1])
+
+---
+
+# Revised implementation sequence
+
+## Phase 1: Make the current app visually unrecognizable
+
+Do the TSX changes from the original report:
+
+```txt
+new theme
+new logo
+left rail
+new prompt dock
+remove OpenCode/Jekko visible strings
+fix /open-themes
+```
+
+This protects the product immediately.
+
+## Phase 2: Add `crates/apex-tui`
+
+Create the Rust Ratatui binary with:
+
+```txt
+main.rs
+app.rs
+backend/client.rs
+state/mod.rs
+input/keymap.rs
+ui/theme.rs
+ui/layout.rs
+ui/frame.rs
+ui/left_rail.rs
+ui/transcript.rs
+ui/prompt_dock.rs
+ui/command_palette.rs
+```
+
+Start by supporting:
+
+```txt
+render current session
+append prompt
+submit prompt
+toggle left rail
+command palette
+theme colors
+basic modified files
+basic context gauge
+```
+
+## Phase 3: Connect live backend sync
+
+Add:
+
+```txt
+backend/events.rs
+backend/models.rs
+state/sync.rs
+```
+
+The Rust TUI should subscribe to the same session/message/tool/provider state that the TSX TUI currently consumes.
+
+## Phase 4: Replace OpenTUI as the default
+
+Update launch code so:
+
+```txt
+jekko tui
+```
+
+or the renamed equivalent launches the Ratatui binary by default, while keeping the old TSX TUI behind a compatibility flag:
+
+```txt
+--legacy-tui
+```
+
+## Phase 5: Remove visual and naming remnants
+
+Once Rust TUI is stable, remove or hide:
+
+```txt
+OpenCode visible copy
+JEKKO logo
+jekko-gold theme
+right sidebar default
+old split-border style
+old home screen
+old footer branding
+```
+
+---
+
+# Bottom-line recommendation
+
+Yes: leverage Ratatui, but do it boldly.
+
+The best final product is not “OpenTUI with a Ratatui-inspired theme.” It is a **native Rust Ratatui coding workbench** that uses the existing backend as its brain.
+
+That gives you:
+
+```txt
+Native Rust performance
+True terminal-first layout control
+Left rail dashboard
+Professional widgets
+Cleaner state/render separation
+A completely different identity from OpenCode
+A much stronger foundation for a world-class coding TUI
+```
+
+I would still apply the immediate TSX redesign for speed, but the flagship experience should move to Ratatui.
+
+[1]: https://ratatui.rs/ "Ratatui | Ratatui"
+[2]: https://docs.rs/ratatui/latest/ratatui/widgets/index.html "ratatui::widgets - Rust"
+[3]: https://ratatui.rs/concepts/layout/ "Layout | Ratatui"
+[4]: https://ratatui.rs/examples/widgets/ "Widget Examples | Ratatui"
+

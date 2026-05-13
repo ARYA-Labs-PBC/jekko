@@ -9,7 +9,7 @@ import { Flag } from "@jekko-ai/core/flag/flag"
 import { ServerAuth } from "@/server/auth"
 import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
-import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@jekko-ai/sdk/v2"
+import { createJekkoClient, type JekkoClient, type ToolPart } from "@jekko-ai/sdk/v2"
 import { Server } from "../../server/server"
 import { Provider } from "@/provider/provider"
 import { Agent } from "../../agent/agent"
@@ -276,7 +276,7 @@ export function resolveRunDirectory(args: { dir?: string; attach?: string }) {
   }
 }
 
-type RunAgentSdk = Pick<OpencodeClient, "app">
+type RunAgentSdk = Pick<JekkoClient, "app">
 type RunAgentService = {
   get(name: string): Effect.Effect<{ mode?: string } | undefined>
 }
@@ -553,7 +553,7 @@ export const RunCommand = effectCmd({
         return message.slice(0, 50) + (message.length > 50 ? "..." : "")
       }
 
-      async function session(sdk: OpencodeClient) {
+      async function session(sdk: JekkoClient) {
         const baseID = args.continue ? (await sdk.session.list()).data?.find((s) => !s.parentID)?.id : args.session
 
         if (baseID && args.fork) {
@@ -568,7 +568,7 @@ export const RunCommand = effectCmd({
         return result.data?.id
       }
 
-      async function share(sdk: OpencodeClient, sessionID: string) {
+      async function share(sdk: JekkoClient, sessionID: string) {
         const cfg = await sdk.config.get()
         if (!cfg.data) return
         if (cfg.data.share !== "auto" && !Flag.JEKKO_AUTO_SHARE && !args.share) return
@@ -583,7 +583,7 @@ export const RunCommand = effectCmd({
         }
       }
 
-      async function execute(sdk: OpencodeClient) {
+      async function execute(sdk: JekkoClient) {
         function tool(part: ToolPart) {
           try {
             if (part.tool === ShellID.ToolID) return shell(props(part, Schema.decodeUnknownSync(ShellParameters)))
@@ -854,7 +854,7 @@ export const RunCommand = effectCmd({
 
       if (args.attach) {
         const headers = ServerAuth.headers({ password: args.password, username: args.username })
-        const sdk = createOpencodeClient({ baseUrl: args.attach, directory, headers })
+        const sdk = createJekkoClient({ baseUrl: args.attach, directory, headers })
         return await execute(sdk)
       }
 
@@ -862,7 +862,7 @@ export const RunCommand = effectCmd({
         const request = new Request(input, init)
         return Server.Default().app.fetch(request)
       }) as typeof globalThis.fetch
-      const sdk = createOpencodeClient({ baseUrl: "http://jekko.internal", fetch: fetchFn })
+      const sdk = createJekkoClient({ baseUrl: "http://jekko.internal", fetch: fetchFn })
       await execute(sdk)
     })
   }),

@@ -1,0 +1,1097 @@
+Yes — that is the stronger long-term direction.
+
+The current uploaded code is an OpenTUI/Solid TypeScript renderer, so Ratatui cannot be “dropped into” those TSX files directly. To truly leverage Ratatui, I would split the plan into two tracks:
+
+1. **Immediate track:** apply the visual redesign inside the existing OpenTUI renderer so the product quickly stops looking like OpenCode.
+2. **Strategic track:** build a new **Rust/Ratatui-native renderer** that consumes the same backend API, SSE events, sessions, prompts, and command endpoints.
+
+The backend architecture you already have is good enough for this. The frontend renderer is the part that should evolve.
+
+## Ratatui Recommendation: Build a New Native Renderer
+
+Ratatui gives you exactly the primitives needed for a premium coding cockpit: responsive layout constraints, true terminal widgets, custom widgets, RGB/truecolor styling, tables, lists, scrollbars, gauges, sparklines, charts, canvas drawing, and a clean `Frame` rendering model. Ratatui’s own docs describe widgets as composable building blocks for complex terminal UIs, with built-ins including `Block`, `BarChart`, `Canvas`, `Chart`, `Gauge`, `List`, `Paragraph`, `Scrollbar`, `Sparkline`, and `Table`. ([Ratatui][1])
+
+The most important advantage is that Ratatui makes the left-rail layout natural. Its `Layout` system is built around splitting terminal rectangles with constraints such as `Length`, `Min`, `Max`, `Ratio`, and `Percentage`, which is perfect for a fixed-width intelligence rail plus a flexible conversation runway. ([Ratatui][2])
+
+## Updated Architecture
+
+I would create a new Rust crate:
+
+```text
+crates/jekko-tui/
+  Cargo.toml
+  src/
+    main.rs
+    app.rs
+    config.rs
+    backend/
+      mod.rs
+      client.rs
+      event_stream.rs
+      commands.rs
+      models.rs
+    state/
+      mod.rs
+      session.rs
+      sync.rs
+      prompt.rs
+      toast.rs
+      modal.rs
+    theme/
+      mod.rs
+      nova.rs
+    input/
+      mod.rs
+      keymap.rs
+      actions.rs
+    ui/
+      mod.rs
+      layout.rs
+      screens/
+        home.rs
+        session.rs
+        plugins.rs
+      widgets/
+        ribbon.rs
+        rail.rs
+        prompt.rs
+        message.rs
+        tool_card.rs
+        diff.rs
+        code.rs
+        command_palette.rs
+        dialog.rs
+        toast.rs
+        status.rs
+        canvas_hero.rs
+```
+
+Then keep the current TypeScript backend/server and add a launcher bridge.
+
+Existing files to modify:
+
+```text
+packages/jekko/src/cli/cmd/tui/thread.ts
+packages/jekko/src/cli/cmd/tui/attach.ts
+packages/jekko/src/cli/cmd/tui/config/tui-schema.ts
+packages/jekko/src/cli/cmd/tui/config/tui.ts
+packages/jekko/src/server/routes/instance/tui.ts
+packages/jekko/src/server/routes/instance/httpapi/handlers/tui.ts
+packages/jekko/src/server/routes/instance/httpapi/groups/tui.ts
+TUI_CODE.md
+TUI_BACKEND_API.md
+```
+
+The current `thread.ts` uses two transport modes:
+
+```ts
+const transport = external
+  ? {
+      url: (await client.call("server", network)).url,
+      fetch: undefined,
+      events: undefined,
+    }
+  : {
+      url: "http://jekko.internal",
+      fetch: createWorkerFetch(client),
+      events: createEventSource(client),
+    }
+```
+
+For a Rust/Ratatui frontend, use the **external server mode**. The Rust binary should connect to the local HTTP server URL instead of relying on the internal JavaScript `fetch` and worker event-source shims.
+
+## Add a Renderer Config Switch
+
+In `packages/jekko/src/cli/cmd/tui/config/tui-schema.ts`, add:
+
+```ts
+renderer: z
+  .enum(["opentui", "ratatui"])
+  .optional()
+  .describe("TUI renderer. 'ratatui' launches the native Rust renderer."),
+```
+
+Then in `thread.ts`, after the server is available, branch:
+
+```ts
+if (config.renderer === "ratatui") {
+  const server = await client.call("server", {
+    ...network,
+    hostname: network.hostname ?? "127.0.0.1",
+    port: network.port === 0 ? 0 : network.port,
+  })
+
+  await launchRatatuiTui({
+    url: server.url,
+    directory: cwd,
+    sessionID: args.session,
+    continue: args.continue,
+    fork: args.fork,
+    model: args.model,
+    agent: args.agent,
+    prompt,
+    headers: ServerAuth.headers({}),
+  })
+
+  await stop()
+  process.exit(0)
+}
+```
+
+Add a launcher file:
+
+```text
+packages/jekko/src/cli/cmd/tui/ratatui-launch.ts
+```
+
+Example:
+
+```ts
+import { spawn } from "node:child_process"
+import path from "node:path"
+
+export async function launchRatatuiTui(input: {
+  url: string
+  directory: string
+  sessionID?: string
+  continue?: boolean
+  fork?: boolean
+  model?: string
+  agent?: string
+  prompt?: string
+  headers?: Record<string, string>
+}) {
+  const bin = process.env.JEKKO_RATATUI_BIN ?? "jekko-tui"
+
+  const child = spawn(bin, [], {
+    cwd: input.directory,
+    stdio: ["inherit", "inherit", "inherit"],
+    env: {
+      ...process.env,
+      JEKKO_TUI_URL: input.url,
+      JEKKO_TUI_DIRECTORY: input.directory,
+      JEKKO_TUI_SESSION_ID: input.sessionID ?? "",
+      JEKKO_TUI_CONTINUE: input.continue ? "1" : "0",
+      JEKKO_TUI_FORK: input.fork ? "1" : "0",
+      JEKKO_TUI_MODEL: input.model ?? "",
+      JEKKO_TUI_AGENT: input.agent ?? "",
+      JEKKO_TUI_PROMPT: input.prompt ?? "",
+      JEKKO_TUI_HEADERS: JSON.stringify(input.headers ?? {}),
+    },
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    child.on("exit", (code) => {
+      if (code === 0 || code === null) resolve()
+      else reject(new Error(`Ratatui renderer exited with code ${code}`))
+    })
+    child.on("error", reject)
+  })
+}
+```
+
+## Rust Crate Dependencies
+
+Use Ratatui as the core UI engine. Ratatui 0.30 introduced a modular workspace, `ratatui::run()`, backend flexibility, widget improvements, and layout/styling improvements; widget authors can also depend on `ratatui-core` for a more stable widget surface. ([Ratatui][3])
+
+Suggested `crates/jekko-tui/Cargo.toml`:
+
+```toml
+[package]
+name = "jekko-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = { version = "0.30", features = ["serde", "palette"] }
+crossterm = "0.29"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+color-eyre = "0.6"
+anyhow = "1"
+thiserror = "1"
+unicode-width = "0.2"
+```
+
+Do not overcomplicate the first version. Start with Ratatui, Crossterm, Tokio, Reqwest, Serde, and Color Eyre.
+
+## Native Main Loop
+
+Ratatui’s newer `ratatui::run()` helper initializes and restores the terminal around a closure, which is ideal for a first-class native renderer. ([Ratatui][3])
+
+```rust
+// crates/jekko-tui/src/main.rs
+
+mod app;
+mod backend;
+mod config;
+mod input;
+mod state;
+mod theme;
+mod ui;
+
+use color_eyre::Result;
+
+fn main() -> Result<()> {
+    color_eyre::install()?;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let config = config::Config::from_env()?;
+
+    ratatui::run(|terminal| {
+        runtime.block_on(async move {
+            let mut app = app::App::new(config).await?;
+            app.run(terminal).await
+        })
+    })
+}
+```
+
+## App Event Loop
+
+```rust
+// crates/jekko-tui/src/app.rs
+
+use std::time::{Duration, Instant};
+
+use color_eyre::Result;
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use ratatui::DefaultTerminal;
+
+use crate::{
+    backend::BackendClient,
+    config::Config,
+    input::{Action, Keymap},
+    state::AppState,
+    ui,
+};
+
+pub struct App {
+    state: AppState,
+    backend: BackendClient,
+    keymap: Keymap,
+    running: bool,
+    last_tick: Instant,
+}
+
+impl App {
+    pub async fn new(config: Config) -> Result<Self> {
+        let backend = BackendClient::new(config.backend.clone())?;
+        let state = AppState::bootstrap(config).await?;
+
+        Ok(Self {
+            state,
+            backend,
+            keymap: Keymap::default(),
+            running: true,
+            last_tick: Instant::now(),
+        })
+    }
+
+    pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        self.backend.start_event_stream().await?;
+
+        while self.running {
+            terminal.draw(|frame| ui::render(frame, &mut self.state))?;
+
+            self.drain_backend_events().await?;
+            self.handle_terminal_events().await?;
+            self.tick().await?;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_terminal_events(&mut self) -> Result<()> {
+        while event::poll(Duration::from_millis(8))? {
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                        self.running = false;
+                        return Ok(());
+                    }
+
+                    if let Some(action) = self.keymap.resolve(key) {
+                        self.dispatch(action).await?;
+                    }
+                }
+                Event::Resize(_, _) => {
+                    self.state.layout_dirty = true;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn dispatch(&mut self, action: Action) -> Result<()> {
+        match action {
+            Action::Quit => self.running = false,
+            Action::ToggleThemeMode => self.state.theme.toggle_mode(),
+            Action::SubmitPrompt => {
+                let text = self.state.prompt.take();
+                self.backend.append_prompt(&text).await?;
+                self.backend.submit_prompt().await?;
+            }
+            Action::OpenCommandPalette => {
+                self.state.modal.open_command_palette();
+            }
+            Action::OpenThemes => {
+                self.backend.execute_command("theme.switch").await?;
+            }
+            Action::ScrollUp => self.state.timeline.scroll_up(),
+            Action::ScrollDown => self.state.timeline.scroll_down(),
+            Action::ToggleLeftRail => self.state.left_rail.toggle(),
+        }
+
+        Ok(())
+    }
+
+    async fn drain_backend_events(&mut self) -> Result<()> {
+        while let Some(evt) = self.backend.try_next_event()? {
+            self.state.apply_backend_event(evt);
+        }
+        Ok(())
+    }
+
+    async fn tick(&mut self) -> Result<()> {
+        if self.last_tick.elapsed() >= Duration::from_millis(100) {
+            self.state.animation.tick();
+            self.last_tick = Instant::now();
+        }
+
+        Ok(())
+    }
+}
+```
+
+## Nova Layout in Ratatui
+
+This is where Ratatui really shines. Build the whole product around a fixed left rail, flexible center, top ribbon, and bottom command capsule.
+
+```rust
+// crates/jekko-tui/src/ui/layout.rs
+
+use ratatui::layout::{Constraint, Layout, Rect};
+
+pub const RAIL_WIDTH: u16 = 44;
+pub const RAIL_BREAKPOINT: u16 = 118;
+pub const RIBBON_HEIGHT: u16 = 2;
+pub const PROMPT_HEIGHT: u16 = 7;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Regions {
+    pub ribbon: Rect,
+    pub rail: Option<Rect>,
+    pub runway: Rect,
+    pub prompt: Rect,
+    pub overlay: Rect,
+}
+
+pub fn regions(area: Rect, rail_visible: bool) -> Regions {
+    let [ribbon, body, prompt] = Layout::vertical([
+        Constraint::Length(RIBBON_HEIGHT),
+        Constraint::Min(0),
+        Constraint::Length(PROMPT_HEIGHT),
+    ])
+    .areas(area);
+
+    let wide = area.width >= RAIL_BREAKPOINT;
+
+    let (rail, runway) = if rail_visible && wide {
+        let [rail, runway] = Layout::horizontal([
+            Constraint::Length(RAIL_WIDTH),
+            Constraint::Min(40),
+        ])
+        .areas(body);
+
+        (Some(rail), runway)
+    } else {
+        (None, body)
+    };
+
+    Regions {
+        ribbon,
+        rail,
+        runway,
+        prompt,
+        overlay: body,
+    }
+}
+```
+
+This gives you the exact product direction: permanent left intelligence rail on wide terminals; overlay left rail on small terminals.
+
+## Nova Theme in Rust
+
+Ratatui supports RGB color values, and its RGB example demonstrates truecolor usage requiring a terminal with 24-bit color and Unicode support. ([Ratatui][4])
+
+```rust
+// crates/jekko-tui/src/theme/nova.rs
+
+use ratatui::style::{Color, Style};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NovaTheme {
+    pub mode: ThemeMode,
+
+    pub bg: Color,
+    pub panel: Color,
+    pub element: Color,
+    pub menu: Color,
+
+    pub text: Color,
+    pub muted: Color,
+
+    pub primary: Color,
+    pub secondary: Color,
+    pub accent: Color,
+
+    pub success: Color,
+    pub warning: Color,
+    pub error: Color,
+    pub info: Color,
+
+    pub border_subtle: Color,
+    pub border: Color,
+    pub border_active: Color,
+}
+
+impl NovaTheme {
+    pub fn dark() -> Self {
+        Self {
+            mode: ThemeMode::Dark,
+            bg: Color::Rgb(7, 10, 18),
+            panel: Color::Rgb(14, 19, 33),
+            element: Color::Rgb(21, 27, 46),
+            menu: Color::Rgb(17, 24, 42),
+
+            text: Color::Rgb(234, 242, 255),
+            muted: Color::Rgb(138, 147, 169),
+
+            primary: Color::Rgb(124, 255, 203),
+            secondary: Color::Rgb(143, 180, 255),
+            accent: Color::Rgb(255, 126, 219),
+
+            success: Color::Rgb(115, 245, 159),
+            warning: Color::Rgb(255, 209, 102),
+            error: Color::Rgb(255, 92, 122),
+            info: Color::Rgb(122, 215, 255),
+
+            border_subtle: Color::Rgb(32, 40, 60),
+            border: Color::Rgb(48, 58, 86),
+            border_active: Color::Rgb(124, 255, 203),
+        }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            mode: ThemeMode::Light,
+            bg: Color::Rgb(248, 250, 255),
+            panel: Color::Rgb(238, 243, 251),
+            element: Color::Rgb(225, 232, 245),
+            menu: Color::Rgb(255, 255, 255),
+
+            text: Color::Rgb(22, 32, 51),
+            muted: Color::Rgb(102, 112, 133),
+
+            primary: Color::Rgb(11, 143, 106),
+            secondary: Color::Rgb(39, 93, 255),
+            accent: Color::Rgb(192, 68, 164),
+
+            success: Color::Rgb(22, 138, 69),
+            warning: Color::Rgb(154, 103, 0),
+            error: Color::Rgb(217, 45, 75),
+            info: Color::Rgb(0, 119, 163),
+
+            border_subtle: Color::Rgb(215, 223, 234),
+            border: Color::Rgb(185, 196, 212),
+            border_active: Color::Rgb(11, 143, 106),
+        }
+    }
+
+    pub fn app_style(self) -> Style {
+        Style::default().bg(self.bg).fg(self.text)
+    }
+
+    pub fn panel_style(self) -> Style {
+        Style::default().bg(self.panel).fg(self.text)
+    }
+
+    pub fn muted_style(self) -> Style {
+        Style::default().bg(self.panel).fg(self.muted)
+    }
+}
+```
+
+## Top Ribbon Widget
+
+```rust
+// crates/jekko-tui/src/ui/widgets/ribbon.rs
+
+use ratatui::{
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Widget},
+    buffer::Buffer,
+};
+
+use crate::{state::AppState, theme::NovaTheme};
+
+pub struct Ribbon<'a> {
+    pub state: &'a AppState,
+}
+
+impl Widget for Ribbon<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let t: NovaTheme = self.state.theme.current();
+
+        let mode = match t.mode {
+            crate::theme::ThemeMode::Dark => "dark",
+            crate::theme::ThemeMode::Light => "white",
+        };
+
+        let line = Line::from(vec![
+            Span::styled("✦ Jekko Nova", Style::default().fg(t.primary).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled(self.state.workspace_label(), Style::default().fg(t.text)),
+            Span::styled("  /  ", Style::default().fg(t.muted)),
+            Span::styled(self.state.route_label(), Style::default().fg(t.secondary)),
+            Span::styled("  /  ", Style::default().fg(t.muted)),
+            Span::styled(mode, Style::default().fg(t.accent)),
+            Span::styled("   ^T theme  ^K command  ^B rail", Style::default().fg(t.muted)),
+        ]);
+
+        let block = Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(t.border_subtle))
+            .style(t.panel_style());
+
+        Paragraph::new(line).block(block).render(area, buf);
+    }
+}
+```
+
+## Left Intelligence Rail
+
+Use `Gauge`, `Sparkline`, `List`, and small custom cards. This is one of the strongest Ratatui advantages: the left rail can become a live engineering dashboard, not just a text sidebar.
+
+```rust
+// crates/jekko-tui/src/ui/widgets/rail.rs
+
+use ratatui::{
+    buffer::Buffer,
+    layout::{Constraint, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, List, ListItem, Sparkline, Widget},
+};
+
+use crate::state::AppState;
+
+pub struct IntelligenceRail<'a> {
+    pub state: &'a AppState,
+}
+
+impl Widget for IntelligenceRail<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let t = self.state.theme.current();
+
+        let block = Block::default()
+            .borders(Borders::RIGHT)
+            .border_style(Style::default().fg(t.border_subtle))
+            .style(t.panel_style());
+
+        block.render(area, buf);
+
+        let inner = area.inner(ratatui::layout::Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
+
+        let [session, context, health, activity, footer] = Layout::vertical([
+            Constraint::Length(6),
+            Constraint::Min(8),
+            Constraint::Length(5),
+            Constraint::Length(5),
+            Constraint::Length(2),
+        ])
+        .areas(inner);
+
+        let title = vec![
+            Line::from(Span::styled("SESSION", Style::default().fg(t.primary).add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(self.state.session_title(), Style::default().fg(t.text).add_modifier(Modifier::BOLD))),
+            Line::from(vec![
+                Span::styled("agent ", Style::default().fg(t.muted)),
+                Span::styled(self.state.agent_label(), Style::default().fg(t.secondary)),
+            ]),
+            Line::from(vec![
+                Span::styled("model ", Style::default().fg(t.muted)),
+                Span::styled(self.state.model_label(), Style::default().fg(t.text)),
+            ]),
+        ];
+
+        ratatui::widgets::Paragraph::new(title)
+            .style(t.panel_style())
+            .render(session, buf);
+
+        let files = self
+            .state
+            .context_files()
+            .iter()
+            .take(8)
+            .map(|f| ListItem::new(Line::from(vec![
+                Span::styled("◆ ", Style::default().fg(t.secondary)),
+                Span::styled(f.display_name(), Style::default().fg(t.text)),
+            ])))
+            .collect::<Vec<_>>();
+
+        List::new(files)
+            .block(Block::default().title("context").title_style(Style::default().fg(t.muted)))
+            .style(t.panel_style())
+            .render(context, buf);
+
+        Gauge::default()
+            .block(Block::default().title("tokens").title_style(Style::default().fg(t.muted)))
+            .gauge_style(Style::default().fg(t.primary).bg(t.element))
+            .ratio(self.state.token_ratio())
+            .label(self.state.token_label())
+            .render(health, buf);
+
+        Sparkline::default()
+            .block(Block::default().title("activity").title_style(Style::default().fg(t.muted)))
+            .data(self.state.activity_samples())
+            .style(Style::default().fg(t.accent).bg(t.panel))
+            .render(activity, buf);
+
+        ratatui::widgets::Paragraph::new(Line::from(vec![
+            Span::styled("✦ ", Style::default().fg(t.primary)),
+            Span::styled("Nova Workbench", Style::default().fg(t.muted)),
+        ]))
+        .style(t.panel_style())
+        .render(footer, buf);
+    }
+}
+```
+
+## Message Cards as Custom Widgets
+
+Ratatui explicitly supports custom widgets through the `Widget` trait, where a custom struct renders into a `Buffer`. ([Ratatui][5])
+
+This is how you make the app feel proprietary and premium.
+
+```rust
+// crates/jekko-tui/src/ui/widgets/message.rs
+
+use ratatui::{
+    buffer::Buffer,
+    layout::{Margin, Rect},
+    style::{Modifier, Style},
+    text::{Line, Text},
+    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+};
+
+use crate::theme::NovaTheme;
+
+#[derive(Debug, Clone, Copy)]
+pub enum MessageTone {
+    User,
+    Assistant,
+    Tool,
+    Thinking,
+    Error,
+}
+
+pub struct MessageCard<'a> {
+    pub theme: NovaTheme,
+    pub tone: MessageTone,
+    pub title: Line<'a>,
+    pub body: Text<'a>,
+}
+
+impl Widget for MessageCard<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let border = match self.tone {
+            MessageTone::User => self.theme.primary,
+            MessageTone::Assistant => self.theme.border,
+            MessageTone::Tool => self.theme.secondary,
+            MessageTone::Thinking => self.theme.border_subtle,
+            MessageTone::Error => self.theme.error,
+        };
+
+        let block = Block::default()
+            .borders(Borders::TOP | Borders::BOTTOM)
+            .border_style(Style::default().fg(border))
+            .style(Style::default().bg(self.theme.panel).fg(self.theme.text));
+
+        block.render(area, buf);
+
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
+
+        let title_area = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        let body_area = Rect {
+            x: inner.x,
+            y: inner.y.saturating_add(2),
+            width: inner.width,
+            height: inner.height.saturating_sub(2),
+        };
+
+        Paragraph::new(self.title)
+            .style(Style::default().bg(self.theme.panel).fg(border).add_modifier(Modifier::BOLD))
+            .render(title_area, buf);
+
+        Paragraph::new(self.body)
+            .style(Style::default().bg(self.theme.panel).fg(self.theme.text))
+            .wrap(Wrap { trim: false })
+            .render(body_area, buf);
+    }
+}
+```
+
+This should replace the old TSX left-border message pattern. The Ratatui design should use full-width horizontal cards, strong typography, and consistent semantic tones.
+
+## Prompt Capsule
+
+```rust
+// crates/jekko-tui/src/ui/widgets/prompt.rs
+
+use ratatui::{
+    buffer::Buffer,
+    layout::{Constraint, Layout, Margin, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+};
+
+use crate::state::AppState;
+
+pub struct PromptCapsule<'a> {
+    pub state: &'a AppState,
+}
+
+impl Widget for PromptCapsule<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let t = self.state.theme.current();
+
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(t.border_active))
+            .style(Style::default().bg(t.element).fg(t.text));
+
+        block.render(area, buf);
+
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
+
+        let [header, input, footer] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+
+        Paragraph::new(Line::from(vec![
+            Span::styled("✦ ", Style::default().fg(t.primary)),
+            Span::styled("mission prompt", Style::default().fg(t.muted)),
+            Span::styled("  /  ", Style::default().fg(t.border)),
+            Span::styled(self.state.model_label(), Style::default().fg(t.secondary)),
+        ]))
+        .style(Style::default().bg(t.element))
+        .render(header, buf);
+
+        let text = if self.state.prompt.is_empty() {
+            "Ask, patch, explain, or run..."
+        } else {
+            self.state.prompt.as_str()
+        };
+
+        Paragraph::new(text)
+            .style(Style::default().bg(t.element).fg(if self.state.prompt.is_empty() { t.muted } else { t.text }))
+            .wrap(Wrap { trim: false })
+            .render(input, buf);
+
+        Paragraph::new(Line::from(vec![
+            Span::styled("enter", Style::default().fg(t.primary).add_modifier(Modifier::BOLD)),
+            Span::styled(" send   ", Style::default().fg(t.muted)),
+            Span::styled("^T", Style::default().fg(t.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(" white/dark   ", Style::default().fg(t.muted)),
+            Span::styled("^K", Style::default().fg(t.secondary).add_modifier(Modifier::BOLD)),
+            Span::styled(" command", Style::default().fg(t.muted)),
+        ]))
+        .style(Style::default().bg(t.element))
+        .render(footer, buf);
+    }
+}
+```
+
+## Canvas Hero for Home Screen
+
+Ratatui’s `Canvas` widget draws arbitrary shapes using drawing characters, and examples show Braille markers and map/shape rendering. ([Ratatui][6])
+
+Use this for a home screen that no one will confuse with OpenCode:
+
+```text
+✦ Jekko Nova
+terminal-native engineering cockpit
+
+     ⟡
+   ╱   ╲       build plans, patches, shell, context
+  ╱  ◇  ╲      safe autonomous coding
+ ╱_______╲     one command surface
+```
+
+A `Canvas`-based animated “aurora” hero can use Braille or half-block markers behind the logo. Keep it subtle; terminals can get visually noisy fast.
+
+Suggested file:
+
+```text
+crates/jekko-tui/src/ui/widgets/canvas_hero.rs
+```
+
+Concept:
+
+```rust
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::Color,
+    symbols::Marker,
+    widgets::{
+        canvas::{Canvas, Line},
+        Widget,
+    },
+};
+
+use crate::theme::NovaTheme;
+
+pub struct NovaHero {
+    pub theme: NovaTheme,
+    pub tick: u64,
+}
+
+impl Widget for NovaHero {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let canvas = Canvas::default()
+            .marker(Marker::Braille)
+            .x_bounds([0.0, 100.0])
+            .y_bounds([0.0, 100.0])
+            .paint(|ctx| {
+                for i in 0..6 {
+                    let offset = ((self.tick + i * 7) % 40) as f64;
+                    ctx.draw(&Line {
+                        x1: 10.0,
+                        y1: 20.0 + offset,
+                        x2: 90.0,
+                        y2: 80.0 - offset,
+                        color: match i % 3 {
+                            0 => self.theme.primary,
+                            1 => self.theme.secondary,
+                            _ => self.theme.accent,
+                        },
+                    });
+                }
+            });
+
+        canvas.render(area, buf);
+    }
+}
+```
+
+## Backend API Fixes Still Apply
+
+Even with Ratatui, fix these current backend issues.
+
+### `packages/jekko/src/server/routes/instance/tui.ts`
+
+Change `/open-themes` from:
+
+```ts
+await Bus.publish(TuiEvent.CommandExecute, {
+  command: "session.list",
+})
+```
+
+To:
+
+```ts
+await Bus.publish(TuiEvent.CommandExecute, {
+  command: "theme.switch",
+})
+```
+
+Also update execute-command aliases:
+
+```ts
+const aliases: Record<string, string> = {
+  session_new: "session.new",
+  session_share: "session.share",
+  session_interrupt: "session.interrupt",
+  session_compact: "session.compact",
+  messages_page_up: "session.page.up",
+  messages_page_down: "session.page.down",
+  messages_line_up: "session.line.up",
+  messages_line_down: "session.line.down",
+  messages_half_page_up: "session.half.page.up",
+  messages_half_page_down: "session.half.page.down",
+  messages_first: "session.first",
+  messages_last: "session.last",
+  agent_cycle: "agent.cycle",
+  theme_switch: "theme.switch",
+  theme_mode_toggle: "theme.switch_mode",
+}
+
+await Bus.publish(TuiEvent.CommandExecute, {
+  command: aliases[command] ?? command,
+})
+```
+
+### `packages/jekko/src/server/routes/instance/httpapi/handlers/tui.ts`
+
+Change:
+
+```ts
+const openThemes = Effect.fn("TuiHttpApi.openThemes")(function* () {
+  yield* publishCommand("session.list")
+  return true
+})
+```
+
+To:
+
+```ts
+const openThemes = Effect.fn("TuiHttpApi.openThemes")(function* () {
+  yield* publishCommand("theme.switch")
+  return true
+})
+```
+
+And allow theme command passthrough.
+
+## White/Dark Shortcut in Ratatui
+
+In the Rust keymap:
+
+```rust
+// crates/jekko-tui/src/input/keymap.rs
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Quit,
+    SubmitPrompt,
+    ToggleThemeMode,
+    OpenCommandPalette,
+    OpenThemes,
+    ToggleLeftRail,
+    ScrollUp,
+    ScrollDown,
+}
+
+#[derive(Debug, Default)]
+pub struct Keymap;
+
+impl Keymap {
+    pub fn resolve(&self, key: KeyEvent) -> Option<Action> {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
+            (KeyCode::Char('t'), m) if m.contains(KeyModifiers::CONTROL) => Some(Action::ToggleThemeMode),
+            (KeyCode::Char('k'), m) if m.contains(KeyModifiers::CONTROL) => Some(Action::OpenCommandPalette),
+            (KeyCode::Char('b'), m) if m.contains(KeyModifiers::CONTROL) => Some(Action::ToggleLeftRail),
+            (KeyCode::Enter, _) => Some(Action::SubmitPrompt),
+            (KeyCode::PageUp, _) => Some(Action::ScrollUp),
+            (KeyCode::PageDown, _) => Some(Action::ScrollDown),
+            _ => None,
+        }
+    }
+}
+```
+
+I would present this shortcut as:
+
+```text
+^T white/dark
+```
+
+Avoid `Ctrl+Shift+T` as the primary default because many terminals reserve or inconsistently transmit it. Use `Ctrl+T` by default, and optionally support `Ctrl+Shift+T` when the terminal reports it clearly.
+
+## What Ratatui Should Replace From the Current TUI
+
+If the Rust renderer becomes the primary product, these TypeScript visual files become fallback-only or eventually removable:
+
+```text
+packages/jekko/src/cli/cmd/tui/app-view.tsx
+packages/jekko/src/cli/cmd/tui/app-bindings.tsx
+packages/jekko/src/cli/cmd/tui/component/navigation-header.tsx
+packages/jekko/src/cli/cmd/tui/component/prompt/index.tsx
+packages/jekko/src/cli/cmd/tui/routes/session/session-view.tsx
+packages/jekko/src/cli/cmd/tui/routes/session/sidebar.tsx
+packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx
+packages/jekko/src/cli/cmd/tui/ui/dialog.tsx
+packages/jekko/src/cli/cmd/tui/ui/dialog-select.tsx
+packages/jekko/src/cli/cmd/tui/ui/toast.tsx
+```
+
+But keep these concepts/data systems:
+
+```text
+packages/jekko/src/cli/cmd/tui/worker.ts
+packages/jekko/src/cli/cmd/tui/thread.ts
+packages/jekko/src/cli/cmd/tui/attach.ts
+packages/jekko/src/server/routes/instance/tui.ts
+packages/jekko/src/server/routes/instance/httpapi/groups/tui.ts
+packages/jekko/src/server/routes/instance/httpapi/handlers/tui.ts
+packages/jekko/src/server/shared/tui-control.ts
+```
+
+## Best Final Direction
+
+My strongest recommendation is:
+
+**Ship the visual redesign in the current OpenTUI frontend only as a bridge. Build the actual world-class product as `crates/jekko-tui`, a Ratatui-native renderer.**
+
+That gives you:
+
+* a truly Rust-native TUI;
+* a completely different look from OpenCode;
+* a left-side intelligence rail by design;
+* first-class white/dark mode;
+* much better custom widgets;
+* real dashboard components using gauges, sparklines, tables, lists, scrollbars, and canvas;
+* clean separation between backend intelligence and frontend rendering;
+* the ability to eventually remove the recognizable TSX/OpenTUI visual lineage.
+
+Ratatui is the right foundation for the “world’s greatest coding TUI” version. The current backend can remain; the renderer should become native.
+
+[1]: https://ratatui.rs/concepts/widgets/ "Introduction to Widgets | Ratatui"
+[2]: https://ratatui.rs/concepts/layout/ "Layout | Ratatui"
+[3]: https://ratatui.rs/highlights/v030/ "v0.30.0 | Ratatui"
+[4]: https://ratatui.rs/examples/style/colors_rgb/ "Colors (RGB) | Ratatui"
+[5]: https://ratatui.rs/recipes/widgets/custom/ "Create custom widgets | Ratatui"
+[6]: https://ratatui.rs/examples/widgets/canvas/?utm_source=chatgpt.com "Canvas"
+

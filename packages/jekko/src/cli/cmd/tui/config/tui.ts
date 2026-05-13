@@ -221,7 +221,17 @@ export const layer = Layer.effect(
     const get = Effect.fn("TuiConfig.get")(() => Effect.succeed(data.config))
 
     const waitForDependencies = Effect.fn("TuiConfig.waitForDependencies")(() =>
-      Effect.forEach(deps, Fiber.join, { concurrency: "unbounded" }).pipe(Effect.ignore(), Effect.asVoid),
+      Effect.forEach(deps, Fiber.join, { concurrency: "unbounded" }).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.catchAll((err) => {
+          log.warn("tui plugin dependency install timed out or failed, continuing without", {
+            error: String(err),
+            dirs: data.dirs,
+          })
+          return Effect.void
+        }),
+        Effect.asVoid,
+      ),
     )
     return Service.of({ get, waitForDependencies })
   }).pipe(Effect.withSpan("TuiConfig.layer")),

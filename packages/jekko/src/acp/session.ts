@@ -1,15 +1,15 @@
 import { RequestError, type McpServer } from "@agentclientprotocol/sdk"
 import type { ACPSessionState } from "./types"
 import * as Log from "@jekko-ai/core/util/log"
-import type { OpencodeClient } from "@jekko-ai/sdk/v2"
+import type { JekkoClient } from "@jekko-ai/sdk/v2"
 
 const log = Log.create({ service: "acp-session-manager" })
 
 export class ACPSessionManager {
   private sessions = new Map<string, ACPSessionState>()
-  private sdk: OpencodeClient
+  private sdk: JekkoClient
 
-  constructor(sdk: OpencodeClient) {
+  constructor(sdk: JekkoClient) {
     this.sdk = sdk
   }
 

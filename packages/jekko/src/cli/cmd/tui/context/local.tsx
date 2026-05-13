@@ -6,9 +6,13 @@ import { useSync } from "@tui/context/sync"
 import { useTheme } from "@tui/context/theme"
 import { useToast } from "../ui/toast"
 import { useSDK } from "./sdk"
+import { useKV } from "./kv"
 import { iife } from "@/util/iife"
 import { RGBA } from "@opentui/core"
 import { createLocalModel } from "./local-model"
+
+export type ShellPane = "jnoccio" | "capability" | "history"
+const SHELL_PANE_VALUES: readonly ShellPane[] = ["jnoccio", "capability", "history"] as const
 
 export function parseModel(model: string) {
   const [providerID, ...rest] = model.split("/")
@@ -24,6 +28,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const sync = useSync()
     const sdk = useSDK()
     const toast = useToast()
+    const kv = useKV()
 
     function getModelInfo(model: { providerID: string; modelID: string }) {
       const provider = sync.data.provider.find((x) => x.id === model.providerID)
@@ -129,10 +134,48 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
     })
 
+    // Shell route state (Phase 5 of TUIbomb). kv-backed so the active tab and
+    // left-panel visibility survive restarts. The setter type from kv.signal
+    // declares Setter<T> for API symmetry with solid's setter; the underlying
+    // implementation just stores the value, so passing a plain value works.
+    const shellPane = (() => {
+      const KEY = "shell_pane"
+      kv.signal<ShellPane>(KEY, "capability")
+      const normalize = (value: unknown): ShellPane =>
+        SHELL_PANE_VALUES.includes(value as ShellPane) ? (value as ShellPane) : "capability"
+      return {
+        get(): ShellPane {
+          return normalize(kv.get(KEY, "capability"))
+        },
+        set(value: ShellPane) {
+          if (!SHELL_PANE_VALUES.includes(value)) return
+          kv.set(KEY, value)
+        },
+      }
+    })()
+
+    const shellLeftVisible = (() => {
+      const KEY = "shell_left_visible"
+      kv.signal<boolean>(KEY, true)
+      return {
+        get(): boolean {
+          return !!kv.get(KEY, true)
+        },
+        set(value: boolean) {
+          kv.set(KEY, !!value)
+        },
+        toggle() {
+          kv.set(KEY, !this.get())
+        },
+      }
+    })()
+
     return {
       model,
       agent,
       mcp,
+      shellPane,
+      shellLeftVisible,
     }
   },
 })

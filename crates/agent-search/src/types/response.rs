@@ -124,7 +124,7 @@ impl ProviderReceipt {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderSearchResponse {
     pub hits: Vec<SearchHit>,
     pub evidence: Vec<EvidenceRecord>,
@@ -132,32 +132,10 @@ pub struct ProviderSearchResponse {
     pub warnings: Vec<String>,
 }
 
-impl ProviderSearchResponse {
-    pub fn empty() -> Self {
-        Self {
-            hits: Vec::new(),
-            evidence: Vec::new(),
-            receipts: Vec::new(),
-            warnings: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ResearchResponse {
     pub hits: Vec<SearchHit>,
     pub evidence: Vec<EvidenceRecord>,
     pub receipts: Vec<ProviderReceipt>,
     pub warnings: Vec<String>,
-}
-
-impl ResearchResponse {
-    pub fn empty() -> Self {
-        Self {
-            hits: Vec::new(),
-            evidence: Vec::new(),
-            receipts: Vec::new(),
-            warnings: Vec::new(),
-        }
-    }
 }

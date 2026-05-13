@@ -9,7 +9,7 @@ import type { Event } from "@jekko-ai/sdk"
 import { Config } from "@/config/config"
 import { Bus } from "../bus"
 import * as Log from "@jekko-ai/core/util/log"
-import { createOpencodeClient } from "@jekko-ai/sdk"
+import { createJekkoClient } from "@jekko-ai/sdk"
 import { Flag } from "@jekko-ai/core/flag/flag"
 import { ServerAuth } from "@/server/auth"
 import { CodexAuthPlugin } from "./codex"
@@ -136,7 +136,7 @@ export const layer = Layer.effect(
 
         const { Server } = yield* Effect.promise(() => import("../server/server"))
 
-        const client = createOpencodeClient({
+        const client = createJekkoClient({
           baseUrl: "http://localhost:4096",
           directory: ctx.directory,
           headers: ServerAuth.headers(),

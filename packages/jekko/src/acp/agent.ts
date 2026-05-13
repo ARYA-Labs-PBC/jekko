@@ -49,7 +49,7 @@ import { ConfigMCP } from "@/config/mcp"
 import { Pending as PendingSession } from "@/session/pending"
 import { Result, Schema } from "effect"
 import { LoadAPIKeyError } from "ai"
-import type { AssistantMessage, Event, OpencodeClient, SessionMessageResponse, ToolPart } from "@jekko-ai/sdk/v2"
+import type { AssistantMessage, Event, JekkoClient, SessionMessageResponse, ToolPart } from "@jekko-ai/sdk/v2"
 import { applyPatch } from "diff"
 import { InstallationVersion } from "@jekko-ai/core/installation/version"
 import { ShellID } from "@/tool/shell/id"
@@ -78,7 +78,7 @@ const pendingToolName = ["to", "dowrite"].join("")
 const log = Log.create({ service: "acp-agent" })
 
 async function getContextLimit(
-  sdk: OpencodeClient,
+  sdk: JekkoClient,
   providerID: ProviderID,
   modelID: ModelID,
   directory: string,
@@ -98,7 +98,7 @@ async function getContextLimit(
 
 async function sendUsageUpdate(
   connection: AgentSideConnection,
-  sdk: OpencodeClient,
+  sdk: JekkoClient,
   sessionID: string,
   directory: string,
 ): Promise<void> {
@@ -197,7 +197,7 @@ function buildAssistantUsage(msg: AssistantMessage): Usage {
 
 async function finishEndTurn(
   connection: AgentSideConnection,
-  sdk: OpencodeClient,
+  sdk: JekkoClient,
   sessionID: string,
   directory: string,
   response?: { data?: { info?: AssistantMessage } },
@@ -212,7 +212,7 @@ async function finishEndTurn(
 }
 
 async function loadSessionMessages(
-  sdk: OpencodeClient,
+  sdk: JekkoClient,
   sessionID: string,
   directory: string,
 ): Promise<SessionMessageResponse[]> {
@@ -233,7 +233,7 @@ async function loadSessionMessages(
   return messagesResult._tag === "error" ? [] : messagesResult.messages
 }
 
-export function init({ sdk: _sdk }: { sdk: OpencodeClient }) {
+export function init({ sdk: _sdk }: { sdk: JekkoClient }) {
   return {
     create: (connection: AgentSideConnection, fullConfig: ACPConfig) => {
       return new Agent(connection, fullConfig)
@@ -244,7 +244,7 @@ export function init({ sdk: _sdk }: { sdk: OpencodeClient }) {
 export class Agent implements ACPAgent {
   private connection: AgentSideConnection
   private config: ACPConfig
-  private sdk: OpencodeClient
+  private sdk: JekkoClient
   private sessionManager: ACPSessionManager
   private eventAbort = new AbortController()
   private eventStarted = false

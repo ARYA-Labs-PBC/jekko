@@ -124,6 +124,32 @@ const KeybindsSchema = Schema.Struct({
   tips_toggle: keybind("<leader>h", "Toggle tips on home screen"),
   plugin_manager: keybind("none", "Open plugin manager dialog"),
   display_thinking: keybind("none", "Toggle thinking blocks visibility"),
+  // --- TUIbomb Phase 7: brand-defining shortcuts ---
+  // Names are the stable contract for Phase 4/5/6 subscribers via
+  // `useKeybind().on(name, handler)`. Most names map 1:1 to a chord; a few
+  // bind multiple chords (comma-separated) and rely on subscribers reading
+  // the triggering key off the ParsedKey arg. Bindings without "_" use the
+  // dotted-namespace style intentionally — the dotted names form the public
+  // surface for new shell/feed wiring while the older snake_case bindings
+  // remain available for legacy callers.
+  // Note: `gg`/`G` here bind the single-key chords `g` and `shift+g`; the
+  // feed component is expected to layer a gg-sequence buffer atop the
+  // `feed.scroll.top` event when it wants the classic vim behavior.
+  "engage": keybind("return", "Engage: home → shell route"),
+  "shell.tab.cycle": keybind("tab", "Shell: cycle left-tabs forward"),
+  "shell.tab.cycleBack": keybind(chord("shift", "tab"), "Shell: cycle left-tabs backward"),
+  "shell.tab.set": keybind(sequence("1", "2", "3"), "Shell: jump directly to a tab (1/2/3)"),
+  "shell.left.toggle": keybind(chord("ctrl", "b"), "Shell: toggle LEFT panel visibility"),
+  "theme.mode.toggle": keybind(chord("ctrl", "shift", "t"), "Toggle dark/light theme mode"),
+  "feed.scroll.pageUp": keybind("pageup", "Feed: scroll up by one page"),
+  "feed.scroll.pageDown": keybind("pagedown", "Feed: scroll down by one page"),
+  "feed.scroll.top": keybind("g", "Feed: jump to top (vim gg)"),
+  "feed.scroll.bottom": keybind(chord("shift", "g"), "Feed: jump to bottom (G)"),
+  "feed.yank": keybind("y", "Feed: yank current diff/code block"),
+  "feed.reasoning.toggle": keybind("r", "Feed: expand/collapse focused reasoning"),
+  "session.new": keybind(chord("ctrl", "n"), "Start a new session"),
+  "session.resume": keybind(chord("ctrl", "r"), "Resume most recent session"),
+  "help.show": keybind("?", "Show help overlay"),
 }).annotate({ identifier: "KeybindsConfig" })
 
 export type Keybinds = Schema.Schema.Type<typeof KeybindsSchema>

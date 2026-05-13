@@ -10,9 +10,19 @@ Run the no-secret TUI lane before merging product UI changes:
 just tui-ci
 ```
 
-This builds the host binary, verifies `jekko --version` and `jekko --help`, checks that no `web` command is exposed, runs rendered TUI component tests, compiles TUIwright tests, and runs the CI-safe PTY boot regression with `JEKKO_BIN` set.
+This builds the host binary, verifies `jekko --version` and `jekko --help`, checks that no `web` command is exposed, runs rendered TUI component tests, compiles TUIwright tests, and runs the CI-safe PTY boot regressions with `JEKKO_BIN` set.
 
-The boot smoke regression is:
+The boot regressions are:
+
+```sh
+JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" \
+  cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml \
+  default_tui_clears_loading_screen_quickly -- --nocapture
+```
+
+This launches the actual built host binary in an isolated offline PTY and fails fast if the visible `Loading TUI plugins...` banner does not clear promptly.
+
+The broader first-frame regression is:
 
 ```sh
 JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" \
@@ -21,6 +31,12 @@ JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" \
 ```
 
 It launches isolated offline PTYs at `80x24`, `120x30`, and `200x60`. A run fails if the screen is still blank after 5 seconds or if the home prompt sentinel does not appear within 10 seconds.
+
+The quick loading smoke is also available locally on macOS and should be the first command run after touching startup, plugin loading, or `.jekko/plugins` layout:
+
+```sh
+just tui-startup-smoke
+```
 
 Artifacts are written under `target/tuiwright-jekko/`:
 

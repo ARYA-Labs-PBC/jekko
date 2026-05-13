@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import type { TuiPluginApi } from "@jekko-ai/plugin/tui"
 import { opts, type Cfg, type Route, type State, tone } from "./tui-smoke-shared"
 

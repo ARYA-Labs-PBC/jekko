@@ -1,4 +1,4 @@
-import { createOpencodeClient } from "@jekko-ai/sdk/v2"
+import { createJekkoClient } from "@jekko-ai/sdk/v2"
 import type { GlobalEvent } from "@jekko-ai/sdk/v2"
 import { createSimpleContext } from "./helper"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
@@ -22,7 +22,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     let sse: AbortController | undefined
 
     function createSDK() {
-      return createOpencodeClient({
+      return createJekkoClient({
         baseUrl: props.url,
         signal: abort.signal,
         directory: props.directory,

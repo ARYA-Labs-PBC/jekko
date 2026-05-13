@@ -1,0 +1,1629 @@
+# Engineering Report: New Visual Identity + Left Dock + White/Dark Shortcut + Ratatui Strategy
+
+The uploaded TUI is currently **TypeScript/SolidJS on OpenTUI**, not Rust. That matters because **Ratatui is a Rust-native renderer**, so it cannot be “dropped into” the existing Solid/OpenTUI component tree. The best plan is a two-track redesign:
+
+1. **Immediate visual overhaul in the existing OpenTUI/SolidJS code** so the product stops looking like OpenCode quickly.
+2. **Long-term Rust Ratatui front end** that uses the existing backend HTTP/SSE API as the stable seam.
+
+Ratatui is a strong fit for the long-term target: the official site describes it as a Rust library for fast, lightweight, rich terminal UIs, and its current docs show `ratatui` 0.30.0 with modular crates, rich built-in widgets, stateful widgets, layout primitives, tables, charts, gauges, lists, tabs, scrollbars, sparklines, and more. ([Ratatui][1])
+
+---
+
+# 1. Executive Recommendation
+
+## Best path
+
+**Phase 1: Redesign the current TUI now.**
+
+Keep OpenTUI/SolidJS for the first implementation because that is what the uploaded code actually uses. Change the layout, colors, prompts, home screen, logo, command labels, sidebar placement, and visible brand leaks. This gets the app looking new quickly.
+
+**Phase 2: Build a new Rust Ratatui renderer.**
+
+Use `TUI_BACKEND_API.md` as the contract. The existing backend already exposes session, prompt, config, provider, file, permission, question, daemon, and SSE event APIs. A Ratatui app can consume that API directly with `reqwest`, SSE streaming, and a Rust app state model. This gives you the “world’s greatest Rust TUI” foundation without trying to force Rust widgets into a TypeScript renderer.
+
+## Why this is the strongest plan
+
+The current code is structurally good enough to redesign, but the long-term “greatest coding app” goal is better served by a native Rust Ratatui shell. Ratatui gives you a pure Rust immediate-mode rendering model, dynamic nested layouts, stateful widgets, and first-class terminal dashboard primitives. Its docs specifically call out dynamic layouts, rich widgets, charts, gauges, tables, scrollbars, sparklines, tabs, and stateful widgets, which are exactly the things your coding app needs for transcript, context, usage, agents, daemons, and diagnostics. ([Ratatui][1])
+
+---
+
+# 2. New Product Direction: “Nova Deck”
+
+This report uses the working design name **Nova Deck**. The name does not need to ship, but it gives the design a clear mental model.
+
+The app should feel like a **precision command deck for software creation**, not a fork of OpenCode.
+
+## Visual identity
+
+Use:
+
+* Left-side **Context Dock**.
+* Center/right **Transcript Canvas**.
+* Bottom **Composer Deck**.
+* Top **Status Ribbon**.
+* Matte dark and clean white modes.
+* Thin technical borders.
+* Status chips.
+* Compact diagnostics.
+* High-contrast readable code and diffs.
+* Subtle motion only where it communicates state.
+
+Avoid:
+
+* Right sidebar.
+* OpenCode footer text.
+* `OC | ...` terminal titles.
+* Pixel/gecko logo.
+* Gold identity.
+* Hot-pink boot spinners.
+* Heavy neon dashboards.
+* Left-border-only message cards.
+* `/oc` visible tip.
+* Anything that looks like OpenCode’s spatial model.
+
+---
+
+# 3. Target Layout
+
+## Wide terminal
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ◆ project / branch     session title       model · agent · mode      ⌃X W   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│┌────────────── Context Dock ──────────────┐┌───────────────────────────────┐│
+││ SESSION                                  ││ Transcript Canvas             ││
+││ title / workspace / share                ││                               ││
+││                                          ││ user card                      ││
+││ CONTEXT                                  ││ assistant card                 ││
+││ files / symbols / MCP / LSP              ││ tool card                      ││
+││                                          ││ diff card                      ││
+││ AGENTS                                   ││ reasoning fold                 ││
+││ Jnoccio / ZYAL / research / pending      ││                               ││
+││                                          ││                               ││
+│└──────────────────────────────────────────┘└───────────────────────────────┘│
+│                                                                              │
+│  ╭──────────────────────────── Composer Deck ─────────────────────────────╮  │
+│  │ Describe the next move…                                      model chip │  │
+│  ╰────────────────────────────────────────────────────────────────────────╯  │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Narrow terminal
+
+The left dock becomes an overlay from the **left**, not the right.
+
+```text
+┌──────────────────────────────┐
+│ Context Dock overlay         │
+│ files / MCP / agents         │
+│                              │
+└──────────────────────────────┘
+    transcript behind dimmed
+```
+
+---
+
+# 4. White/Dark Scheme
+
+The app needs a direct shortcut. The current code already has `theme.switch_mode`, but it has no keybind. Add:
+
+```text
+Ctrl+X W
+```
+
+Recommended behavior:
+
+* Press once: switch dark → white.
+* Press again: switch white → dark.
+* Show toast: `White mode enabled` or `Dark mode enabled`.
+* Slash command: `/mode`.
+* Aliases: `/theme-mode`, `/white-dark`.
+* Keep `/themes` for full theme picker.
+
+---
+
+# 5. New Palette
+
+Add a new default theme, for example `nova.json`.
+
+## Dark mode
+
+| Role             |     Color |
+| ---------------- | --------: |
+| Background       | `#080B10` |
+| Panel            | `#0F1623` |
+| Elevated surface | `#162133` |
+| Menu             | `#1B2940` |
+| Text             | `#EAF2FF` |
+| Muted text       | `#8FA3BF` |
+| Primary          | `#7CFFCB` |
+| Secondary        | `#8EA2FF` |
+| Accent           | `#FFB86B` |
+| Success          | `#31F7A5` |
+| Warning          | `#FFD166` |
+| Error            | `#FF5C7A` |
+| Info             | `#64D8FF` |
+| Border subtle    | `#1F2D41` |
+| Border           | `#2D405C` |
+
+## White mode
+
+| Role             |     Color |
+| ---------------- | --------: |
+| Background       | `#F7F9FC` |
+| Panel            | `#FFFFFF` |
+| Elevated surface | `#EDF2FA` |
+| Menu             | `#E6EDF7` |
+| Text             | `#111827` |
+| Muted text       | `#687385` |
+| Primary          | `#007A6D` |
+| Secondary        | `#3454D1` |
+| Accent           | `#B45309` |
+| Success          | `#168A52` |
+| Warning          | `#A15C00` |
+| Error            | `#D7254F` |
+| Info             | `#006C9A` |
+| Border subtle    | `#D9E2EF` |
+| Border           | `#C8D3E1` |
+
+## Font guidance
+
+A TUI cannot force the terminal font. Do not ship font files. Recommend these in docs:
+
+```text
+JetBrains Mono
+Berkeley Mono
+Iosevka Term
+Monaspace Neon
+Cascadia Code
+Commit Mono
+```
+
+Use glyphs that render well across these fonts:
+
+```text
+◆ ◇ ● ○ ◌ ▌ │ ─ ╭ ╮ ╰ ╯ ░ ▒
+```
+
+Avoid giant pixel branding as the default home identity.
+
+---
+
+# 6. Immediate OpenTUI/SolidJS File-by-File Plan
+
+These are the concrete changes for the uploaded codebase.
+
+## Documentation
+
+| File                 | Change                                                                                                                                                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `TUI_CODE.md`        | Update architecture from “OpenTUI visual shell with sidebar” to “Nova Deck shell with Status Ribbon, Left Context Dock, Transcript Canvas, Composer Deck.” Document the future Ratatui renderer path.                                                                                                  |
+| `TUI_BACKEND_API.md` | Add a section: “Ratatui frontend compatibility.” Explain that a Rust frontend can consume `/event`, `/tui/execute-command`, `/tui/append-prompt`, session APIs, permission APIs, and config APIs directly. Replace public-facing `createOpencodeClient()` wording with neutral backend-client wording. |
+
+---
+
+## Theme system
+
+| File                                                           | Change                                                                                                                                    |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/jekko/src/cli/cmd/tui/context/theme/nova.json`       | Add new default dark/white theme.                                                                                                         |
+| `packages/jekko/src/cli/cmd/tui/context/theme-presets.ts`      | Import `nova.json` and put `nova` first in `DEFAULT_THEMES`.                                                                              |
+| `packages/jekko/src/cli/cmd/tui/context/theme.tsx`             | Change active default from `"jekko"` to `"nova"`. Change fallback from `store.themes.jekko` to `store.themes.nova ?? store.themes.jekko`. |
+| `packages/jekko/src/cli/cmd/tui/context/theme-syntax.ts`       | Remove hardcoded ZYAL gold syntax color. Use `theme.warning`, `theme.accent`, or `theme.primary`.                                         |
+| `packages/jekko/src/cli/cmd/tui/context/zyal-flash-state.ts`   | Replace `jekko-gold` overlay with a neutral `nova-focus` overlay or remove forced overlay entirely.                                       |
+| `packages/jekko/src/cli/cmd/tui/context/theme/jekko-gold.json` | Keep only as legacy optional theme, or remove from default presets. Do not use as runtime overlay.                                        |
+
+---
+
+## Root app and commands
+
+| File                                                      | Change                                                                                                                                                                    |                 |                             |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------------------------- |
+| `packages/jekko/src/cli/cmd/tui/app.tsx`                  | Replace startup fallback background `#0b0f14` and old boot copy. Use Nova colors or simple neutral boot text.                                                             |                 |                             |
+| `packages/jekko/src/cli/cmd/tui/app-view.tsx`             | Keep providers; make sure the shell renders the new Status Ribbon and left-dock layout.                                                                                   |                 |                             |
+| `packages/jekko/src/cli/cmd/tui/app-bindings.tsx`         | Replace `OC                                                                                                                                                               | ${title}`and`OC | ${plugin}` terminal titles. |
+| `packages/jekko/src/cli/cmd/tui/app-commands-system.tsx`  | Add keybind and slash aliases for `theme.switch_mode`.                                                                                                                    |                 |                             |
+| `packages/jekko/src/cli/cmd/tui/app-commands-session.tsx` | Make command names say “Context Dock” or “Left Dock,” not “sidebar.”                                                                                                      |                 |                             |
+| `packages/jekko/src/cli/cmd/tui/app-commands.tsx`         | No major structural change. Ensure new commands appear in command palette.                                                                                                |                 |                             |
+| `packages/jekko/src/cli/cmd/tui/config/tui-schema.ts`     | Ensure new keybind name can pass config validation.                                                                                                                       |                 |                             |
+| `packages/jekko/src/config/keybinds.ts`                   | Not present in the uploaded archive, but imported by the TUI schema. Add `theme_mode_toggle: "ctrl+x w"`.                                                                 |                 |                             |
+| `packages/jekko/src/cli/cmd/tui/context/sdk.tsx`          | Optional source hygiene: alias `createOpencodeClient` locally as `createBackendClient`. This removes fork fingerprints from readable code without changing generated SDK. |                 |                             |
+| `packages/jekko/src/cli/cmd/tui/validate-session.ts`      | Same optional aliasing for `createOpencodeClient`.                                                                                                                        |                 |                             |
+
+---
+
+## Core visual components
+
+| File                                                             | Change                                                                                  |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `packages/jekko/src/cli/cmd/tui/component/border.tsx`            | Add new thin rail/border primitives. Replace heavy `┃` as the default visual signature. |
+| `packages/jekko/src/cli/cmd/tui/component/navigation-header.tsx` | Replace gold hardcoding. Convert into Status Ribbon. Show theme mode and `Ctrl+X W`.    |
+| `packages/jekko/src/cli/cmd/tui/component/logo.tsx`              | Replace pixel JEKKO/gecko wordmark with minimal mark.                                   |
+| `packages/jekko/src/cli/cmd/tui/component/logo-ansi.ts`          | Replace ANSI logo art or retire it.                                                     |
+| `packages/jekko/src/cli/cmd/tui/component/bg-pulse.tsx`          | Keep the effect, but retune to Nova colors and reduce brand-specific pulse behavior.    |
+| `packages/jekko/src/cli/cmd/tui/component/error-component.tsx`   | Replace old hardcoded fatal styling with Nova dialog/card style.                        |
+| `packages/jekko/src/cli/cmd/tui/component/startup-loading.tsx`   | Restyle as a compact surface chip.                                                      |
+| `packages/jekko/src/cli/cmd/tui/component/spinner.tsx`           | Use theme primary/secondary consistently.                                               |
+| `packages/jekko/src/cli/cmd/tui/ui/spinner.ts`                   | Remove hardcoded red fallback.                                                          |
+| `packages/jekko/src/cli/cmd/tui/ui/dialog.tsx`                   | Use mode-aware scrim. Light mode should not get a black-heavy overlay.                  |
+| `packages/jekko/src/cli/cmd/tui/ui/dialog-frame.tsx`             | Update modal frame to Nova surface style.                                               |
+| `packages/jekko/src/cli/cmd/tui/ui/dialog-select.tsx`            | Replace full primary selected-row fills with subtle active rail + elevated row.         |
+| `packages/jekko/src/cli/cmd/tui/ui/toast.tsx`                    | Restyle as floating card with variant rail.                                             |
+
+---
+
+## Prompt and autocomplete
+
+| File                                                               | Change                                                                                                                     |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `packages/jekko/src/cli/cmd/tui/component/prompt/index.tsx`        | Redesign as Composer Deck. Replace gold overlay comment and `setOverlay("jekko-gold")`. Cursor should use `theme.primary`. |
+| `packages/jekko/src/cli/cmd/tui/component/prompt/autocomplete.tsx` | Restyle as command-surface dropdown. Use `theme.backgroundMenu`, `theme.border`, active rail, and category/chip treatment. |
+| `packages/jekko/src/cli/cmd/tui/component/prompt/usage.ts`         | Change text tone only if desired; logic can stay.                                                                          |
+| `packages/jekko/src/cli/cmd/tui/component/textarea-keybindings.ts` | No visual change, but verify `Ctrl+X W` does not conflict with textarea bindings.                                          |
+
+---
+
+## Home screen
+
+| File                                                                | Change                                                                                                                                              |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/jekko/src/cli/cmd/tui/routes/home.tsx`                    | Replace `Logo ink={RGBA.fromInts(212, 168, 67)}`. Use `theme.primary`. Move optional ZYAL panel to left-dock language or restyle as dashboard card. |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/home/footer.tsx`    | Replace hot pink status color.                                                                                                                      |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/home/tips-view.tsx` | Remove `/oc` tip. Add `/mode` and `Ctrl+X W` tip.                                                                                                   |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/home/tips.tsx`      | Update copy if tips are defined here too.                                                                                                           |
+
+---
+
+## Session layout
+
+| File                                                                          | Change                                                                                                               |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `packages/jekko/src/cli/cmd/tui/routes/session/session-view.tsx`              | Move `Sidebar` before transcript in wide layout. In narrow layout, overlay from left with `alignItems="flex-start"`. |
+| `packages/jekko/src/cli/cmd/tui/routes/session/sidebar.tsx`                   | Rename visual concept to Context Dock. Export `LEFT_DOCK_WIDTH`. Add right-edge rail. Remove OpenCode footer.        |
+| `packages/jekko/src/cli/cmd/tui/routes/session/session-body-core.tsx`         | Replace hardcoded sidebar width assumptions with `LEFT_DOCK_WIDTH`.                                                  |
+| `packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx`         | Redesign message cards, tool cards, diffs, YAML sentinel lines, thinking blocks. Remove hardcoded `#FFD700`.         |
+| `packages/jekko/src/cli/cmd/tui/routes/session/session-commands.tsx`          | Rename displayed commands from “sidebar” to “Context Dock.”                                                          |
+| `packages/jekko/src/cli/cmd/tui/routes/session/permission.tsx`                | Restyle permission prompts as high-priority cards. Replace “Tell Jekko…” if full rebrand is intended.                |
+| `packages/jekko/src/cli/cmd/tui/routes/session/question-view.tsx`             | Match permission-card style.                                                                                         |
+| `packages/jekko/src/cli/cmd/tui/routes/session/daemon-banner.tsx`             | Restyle as compact daemon status chip; remove gold-heavy identity.                                                   |
+| `packages/jekko/src/cli/cmd/tui/routes/session/daemon-poll.ts`                | Replace `input.setOverlay("jekko-gold")`.                                                                            |
+| `packages/jekko/src/cli/cmd/tui/routes/session/subagent-footer.tsx`           | Restyle as bottom status strip.                                                                                      |
+| `packages/jekko/src/cli/cmd/tui/routes/session/footer.tsx`                    | Align with Status Ribbon/Composer Deck language.                                                                     |
+| `packages/jekko/src/cli/cmd/tui/routes/session/dialog-daemon.tsx`             | Apply new dialog styles.                                                                                             |
+| `packages/jekko/src/cli/cmd/tui/routes/session/dialog-message.tsx`            | Apply message-card styling.                                                                                          |
+| `packages/jekko/src/cli/cmd/tui/routes/session/dialog-subagent.tsx`           | Apply dashboard-card styling.                                                                                        |
+| `packages/jekko/src/cli/cmd/tui/routes/session/dialog-timeline.tsx`           | Apply table/list styling.                                                                                            |
+| `packages/jekko/src/cli/cmd/tui/routes/session/dialog-fork-from-timeline.tsx` | Apply dialog/select styling.                                                                                         |
+
+---
+
+## Built-in feature plugins
+
+| File                                                                            | Change                                                    |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/footer.tsx`             | Remove OpenCode footer and hot pink.                      |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/context.tsx`            | Restyle as dock sections/cards.                           |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/files.tsx`              | Restyle file list as compact chips/rows.                  |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/lsp.tsx`                | Use status chips.                                         |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/mcp.tsx`                | Use status chips.                                         |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/pending.tsx`            | Match dock card style.                                    |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/jankurai.tsx`           | Remove hardcoded gold/cyan/red/green palette.             |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/zyal-palette.ts`        | Replace neon/gold palette with theme-derived colors.      |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/zyal.tsx`               | Apply left-dock card styling.                             |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/zyal/constants.ts`      | Replace gold constants.                                   |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/sidebar/zyal/view.tsx`          | Replace neon dashboard look.                              |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jankurai/index.tsx`             | Replace `#F5A623`.                                        |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jankurai/panel-audit-live.tsx`  | Replace hardcoded gold and status colors.                 |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jnoccio/panel-common.tsx`       | Convert exported color constants to theme-derived helper. |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jnoccio/index.tsx`              | Replace hardcoded gold.                                   |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jnoccio/dashboard-view.tsx`     | Replace hot pink.                                         |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jnoccio/detail-drawer.tsx`      | Replace gold/teal/red/purple constants.                   |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jnoccio/help-overlay.tsx`       | Replace gold/teal constants.                              |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jnoccio/panel-agents.tsx`       | Move deterministic agent colors to theme-derived palette. |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jnoccio/panel-leaderboard.tsx`  | Consume new `panel-common` palette helper.                |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/jnoccio/utils.ts`               | Replace fixed rainbow agent palette.                      |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/research/dashboard-view.tsx`    | Replace gold/promoted hardcoding.                         |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/research/chart.ts`              | Make chart colors theme-driven.                           |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/system/plugins.tsx`             | Apply dialog/table style if visible in plugin manager.    |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/system/session-debug.tsx`       | Apply Nova syntax/table styling.                          |
+| `packages/jekko/src/cli/cmd/tui/feature-plugins/system/session-debug-tools.tsx` | Same.                                                     |
+
+---
+
+## Provider and status dialogs
+
+| File                                                                        | Change                                                |
+| --------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-provider-options.tsx`      | Replace `FUSION_GREEN`, `FUSION_CYAN`, `FUSION_GOLD`. |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-provider.tsx`              | Apply new style; update branded copy if needed.       |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-go-upsell.tsx`             | Apply new premium dialog/button styling.              |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-theme-list.tsx`            | Make `nova` first-class; show dark/white mode state.  |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-command.tsx`               | Make command palette match new surface style.         |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-agent.tsx`                 | Apply table/list style.                               |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-model.tsx`                 | Apply table/list style.                               |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-mcp.tsx`                   | Apply status-chip style.                              |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-status.tsx`                | Convert to Status Dashboard style.                    |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-session-list.tsx`          | Apply new table/list selection style.                 |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-session-rename.tsx`        | Apply Composer Deck input style.                      |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-stash.tsx`                 | Apply card/list style.                                |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-workspace-create.tsx`      | Apply Composer Deck input style.                      |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-workspace-unavailable.tsx` | Apply alert-card style.                               |
+
+---
+
+## Plugin runtime source hygiene
+
+| File                                                     | Change                                                                                                     |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `packages/jekko/src/cli/cmd/tui/plugin/runtime-theme.ts` | Replace internal `oc-themes` text/log labels with neutral `tui-themes`.                                    |
+| `packages/jekko/src/cli/cmd/tui/plugin/api.tsx`          | No visual change. For Ratatui migration, document that Solid component slots are legacy renderer-specific. |
+| `packages/jekko/src/cli/cmd/tui/plugin/slots.tsx`        | Keep current slot compatibility for OpenTUI. Ratatui will need a different plugin view model.              |
+
+---
+
+# 7. Critical Code Examples for Current OpenTUI Redesign
+
+## 7.1 Add `nova.json`
+
+Create:
+
+```text
+packages/jekko/src/cli/cmd/tui/context/theme/nova.json
+```
+
+```json
+{
+  "$schema": "https://jekko.ai/theme.json",
+  "defs": {
+    "dBg": "#080B10",
+    "dPanel": "#0F1623",
+    "dElement": "#162133",
+    "dMenu": "#1B2940",
+    "dText": "#EAF2FF",
+    "dMuted": "#8FA3BF",
+    "dPrimary": "#7CFFCB",
+    "dSecondary": "#8EA2FF",
+    "dAccent": "#FFB86B",
+    "dError": "#FF5C7A",
+    "dWarning": "#FFD166",
+    "dSuccess": "#31F7A5",
+    "dInfo": "#64D8FF",
+    "dBorderSubtle": "#1F2D41",
+    "dBorder": "#2D405C",
+    "dBorderActive": "#7CFFCB",
+    "dSelectText": "#071018",
+
+    "lBg": "#F7F9FC",
+    "lPanel": "#FFFFFF",
+    "lElement": "#EDF2FA",
+    "lMenu": "#E6EDF7",
+    "lText": "#111827",
+    "lMuted": "#687385",
+    "lPrimary": "#007A6D",
+    "lSecondary": "#3454D1",
+    "lAccent": "#B45309",
+    "lError": "#D7254F",
+    "lWarning": "#A15C00",
+    "lSuccess": "#168A52",
+    "lInfo": "#006C9A",
+    "lBorderSubtle": "#D9E2EF",
+    "lBorder": "#C8D3E1",
+    "lBorderActive": "#007A6D",
+    "lSelectText": "#FFFFFF"
+  },
+  "theme": {
+    "primary": { "dark": "dPrimary", "light": "lPrimary" },
+    "secondary": { "dark": "dSecondary", "light": "lSecondary" },
+    "accent": { "dark": "dAccent", "light": "lAccent" },
+    "error": { "dark": "dError", "light": "lError" },
+    "warning": { "dark": "dWarning", "light": "lWarning" },
+    "success": { "dark": "dSuccess", "light": "lSuccess" },
+    "info": { "dark": "dInfo", "light": "lInfo" },
+
+    "text": { "dark": "dText", "light": "lText" },
+    "textMuted": { "dark": "dMuted", "light": "lMuted" },
+    "selectedListItemText": { "dark": "dSelectText", "light": "lSelectText" },
+
+    "background": { "dark": "dBg", "light": "lBg" },
+    "backgroundPanel": { "dark": "dPanel", "light": "lPanel" },
+    "backgroundElement": { "dark": "dElement", "light": "lElement" },
+    "backgroundMenu": { "dark": "dMenu", "light": "lMenu" },
+
+    "borderSubtle": { "dark": "dBorderSubtle", "light": "lBorderSubtle" },
+    "border": { "dark": "dBorder", "light": "lBorder" },
+    "borderActive": { "dark": "dBorderActive", "light": "lBorderActive" },
+
+    "diffAdded": { "dark": "dSuccess", "light": "lSuccess" },
+    "diffRemoved": { "dark": "dError", "light": "lError" },
+    "diffContext": { "dark": "dMuted", "light": "lMuted" },
+    "diffHunkHeader": { "dark": "dSecondary", "light": "lSecondary" },
+    "diffHighlightAdded": { "dark": "dPrimary", "light": "lSuccess" },
+    "diffHighlightRemoved": { "dark": "dError", "light": "lError" },
+    "diffAddedBg": { "dark": "#0E2A22", "light": "#E5F7EF" },
+    "diffRemovedBg": { "dark": "#32151D", "light": "#FFE8ED" },
+    "diffContextBg": { "dark": "#101826", "light": "#F1F5FA" },
+    "diffLineNumber": { "dark": "#7B8CA4", "light": "#7A8594" },
+    "diffAddedLineNumberBg": { "dark": "#143A2D", "light": "#D2F0DF" },
+    "diffRemovedLineNumberBg": { "dark": "#3A1C25", "light": "#F8D7DF" },
+
+    "markdownText": { "dark": "dText", "light": "lText" },
+    "markdownHeading": { "dark": "dSecondary", "light": "lSecondary" },
+    "markdownLink": { "dark": "dInfo", "light": "lInfo" },
+    "markdownLinkText": { "dark": "dPrimary", "light": "lPrimary" },
+    "markdownCode": { "dark": "dSuccess", "light": "lSuccess" },
+    "markdownBlockQuote": { "dark": "dWarning", "light": "lWarning" },
+    "markdownEmph": { "dark": "dAccent", "light": "lAccent" },
+    "markdownStrong": { "dark": "dText", "light": "lText" },
+    "markdownHorizontalRule": { "dark": "dBorder", "light": "lBorder" },
+    "markdownListItem": { "dark": "dPrimary", "light": "lPrimary" },
+    "markdownListEnumeration": { "dark": "dSecondary", "light": "lSecondary" },
+    "markdownImage": { "dark": "dInfo", "light": "lInfo" },
+    "markdownImageText": { "dark": "dPrimary", "light": "lPrimary" },
+    "markdownCodeBlock": { "dark": "dText", "light": "lText" },
+
+    "syntaxComment": { "dark": "dMuted", "light": "lMuted" },
+    "syntaxKeyword": { "dark": "dSecondary", "light": "lSecondary" },
+    "syntaxFunction": { "dark": "dPrimary", "light": "lPrimary" },
+    "syntaxVariable": { "dark": "dText", "light": "lText" },
+    "syntaxString": { "dark": "dSuccess", "light": "lSuccess" },
+    "syntaxNumber": { "dark": "dWarning", "light": "lWarning" },
+    "syntaxType": { "dark": "dAccent", "light": "lAccent" },
+    "syntaxOperator": { "dark": "dInfo", "light": "lInfo" },
+    "syntaxPunctuation": { "dark": "dMuted", "light": "lMuted" },
+
+    "thinkingOpacity": 0.55
+  }
+}
+```
+
+## 7.2 Register Nova as default
+
+```ts
+// context/theme-presets.ts
+import nova from "./theme/nova.json" with { type: "json" }
+
+export const DEFAULT_THEMES: Record<string, ThemeJson> = {
+  nova,
+  aura,
+  ayu,
+  catppuccin,
+  // existing themes...
+}
+```
+
+```ts
+// context/theme.tsx
+const DEFAULT_THEME = "nova"
+
+const [store, setStore] = createStore<State>({
+  themes: listThemes(),
+  mode: "dark",
+  lock: undefined,
+  active: DEFAULT_THEME,
+  overlay: undefined,
+  ready: false,
+})
+
+// Replace kv fallback:
+const active = config.theme ?? kv.get("theme", DEFAULT_THEME)
+draft.active = typeof active === "string" ? active : DEFAULT_THEME
+
+// Replace old fallback:
+return resolveTheme(store.themes[DEFAULT_THEME] ?? store.themes.jekko, store.mode)
+```
+
+## 7.3 Add white/dark shortcut
+
+```tsx
+// app-commands-system.tsx
+{
+  title: input.theme.mode() === "dark" ? "Switch to white mode" : "Switch to dark mode",
+  value: "theme.switch_mode",
+  keybind: "theme_mode_toggle",
+  slash: {
+    name: "mode",
+    aliases: ["theme-mode", "white-dark"]
+  },
+  onSelect: (dialog) => {
+    const next = input.theme.mode() === "dark" ? "light" : "dark"
+    input.theme.setMode(next)
+    input.toast.show({
+      title: "Theme mode",
+      message: next === "light" ? "White mode enabled" : "Dark mode enabled",
+      variant: "info",
+      duration: 1800
+    })
+    dialog.clear()
+  },
+  category: "System"
+}
+```
+
+Default keybind:
+
+```ts
+theme_mode_toggle: "ctrl+x w"
+```
+
+## 7.4 Add new border primitives
+
+```ts
+// component/border.tsx
+export const EmptyBorder = {
+  topLeft: "",
+  bottomLeft: "",
+  vertical: "",
+  topRight: "",
+  bottomRight: "",
+  horizontal: " ",
+  bottomT: "",
+  topT: "",
+  cross: "",
+  leftT: "",
+  rightT: "",
+}
+
+export const SplitBorder = {
+  border: ["left" as const, "right" as const],
+  customBorderChars: {
+    ...EmptyBorder,
+    vertical: "│",
+  },
+}
+
+export const RightRailBorder = {
+  border: ["right" as const],
+  customBorderChars: {
+    ...EmptyBorder,
+    vertical: "│",
+  },
+}
+
+export const LeftRailBorder = {
+  border: ["left" as const],
+  customBorderChars: {
+    ...EmptyBorder,
+    vertical: "│",
+  },
+}
+
+export const FocusRailBorder = {
+  border: ["left" as const],
+  customBorderChars: {
+    ...EmptyBorder,
+    vertical: "▌",
+  },
+}
+```
+
+## 7.5 Move dock left
+
+```tsx
+// routes/session/session-view.tsx
+<box flexDirection="row" minHeight={0}>
+  <Show when={props.sidebarVisible() && props.wide()}>
+    <Sidebar sessionID={props.route.sessionID} />
+  </Show>
+
+  <box flexGrow={1} minWidth={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
+    {/* existing transcript, prompt, toast */}
+  </box>
+
+  <Show when={props.sidebarVisible() && !props.wide()}>
+    <box
+      position="absolute"
+      top={0}
+      left={0}
+      right={0}
+      bottom={0}
+      alignItems="flex-start"
+      backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
+      zIndex={2500}
+    >
+      <Sidebar sessionID={props.route.sessionID} overlay />
+    </box>
+  </Show>
+</box>
+```
+
+```tsx
+// routes/session/sidebar.tsx
+import { RightRailBorder } from "@tui/component/border"
+
+export const LEFT_DOCK_WIDTH = 40
+
+export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
+  // existing hooks...
+
+  return (
+    <Show when={session()}>
+      <box
+        backgroundColor={theme.backgroundPanel}
+        width={LEFT_DOCK_WIDTH}
+        height="100%"
+        paddingTop={1}
+        paddingBottom={1}
+        paddingLeft={2}
+        paddingRight={2}
+        position={props.overlay ? "absolute" : "relative"}
+        left={props.overlay ? 0 : undefined}
+        top={props.overlay ? 0 : undefined}
+        bottom={props.overlay ? 0 : undefined}
+        {...RightRailBorder}
+        borderColor={theme.borderSubtle}
+      >
+        <box flexShrink={0} paddingBottom={1}>
+          <text fg={theme.textMuted}>CONTEXT DOCK</text>
+        </box>
+
+        <scrollbox
+          flexGrow={1}
+          scrollAcceleration={scrollAcceleration()}
+          verticalScrollbarOptions={{
+            trackOptions: {
+              backgroundColor: theme.background,
+              foregroundColor: theme.borderActive
+            }
+          }}
+        >
+          <box flexShrink={0} gap={1} paddingRight={1}>
+            <TuiPluginRuntime.Slot
+              name="sidebar_title"
+              mode="single_winner"
+              session_id={props.sessionID}
+              title={session()!.title}
+              share_url={session()!.share?.url}
+            >
+              {/* existing title/workspace, restyled */}
+            </TuiPluginRuntime.Slot>
+
+            <TuiPluginRuntime.Slot name="sidebar_content" session_id={props.sessionID} />
+          </box>
+        </scrollbox>
+
+        <box flexShrink={0} gap={1} paddingTop={1}>
+          <TuiPluginRuntime.Slot name="sidebar_footer" mode="single_winner" session_id={props.sessionID}>
+            <text fg={theme.textMuted}>
+              <span style={{ fg: theme.primary }}>◆</span>{" "}
+              <span>{InstallationVersion}</span>
+            </text>
+          </TuiPluginRuntime.Slot>
+        </box>
+      </box>
+    </Show>
+  )
+}
+```
+
+## 7.6 Remove OpenCode terminal title
+
+```ts
+// app-bindings.tsx
+const APP_TITLE = "YourProductName"
+
+if (input.route.data.type === "home") {
+  input.renderer.setTerminalTitle(APP_TITLE)
+  return
+}
+
+if (input.route.data.type === "session") {
+  const session = input.sync.session.get(input.route.data.sessionID)
+  if (!session || session.title === "New Session") {
+    input.renderer.setTerminalTitle(APP_TITLE)
+    return
+  }
+
+  const title = session.title.length > 40 ? session.title.slice(0, 37) + "..." : session.title
+  input.renderer.setTerminalTitle(`${APP_TITLE} | ${title}`)
+  return
+}
+
+if (input.route.data.type === "plugin") {
+  input.renderer.setTerminalTitle(`${APP_TITLE} | ${input.route.data.id}`)
+}
+```
+
+---
+
+# 8. Ratatui Long-Term Architecture
+
+## Key point
+
+Ratatui should be a **new Rust renderer**, not a patch to the current TS renderer.
+
+Ratatui’s current API is immediate-mode: draw a frame, split the frame into rectangles, render widgets into areas, update state from events, redraw. It supports nested layouts and constraints, which is ideal for a left dock + transcript + composer layout. ([Ratatui][2])
+
+## Proposed new Rust crate
+
+Add:
+
+```text
+crates/jekko-tui-rs/
+  Cargo.toml
+  src/
+    main.rs
+    app.rs
+    event.rs
+    client.rs
+    state.rs
+    style.rs
+    layout.rs
+    widgets/
+      mod.rs
+      status_ribbon.rs
+      context_dock.rs
+      transcript.rs
+      message_card.rs
+      composer.rs
+      command_palette.rs
+      permission_card.rs
+      question_card.rs
+      toast.rs
+      modal.rs
+      diff.rs
+      markdown.rs
+      table.rs
+      spark.rs
+    backend/
+      mod.rs
+      session.rs
+      event_stream.rs
+      prompt.rs
+      permission.rs
+      question.rs
+      config.rs
+      provider.rs
+      file.rs
+      daemon.rs
+    theme/
+      mod.rs
+      nova.rs
+      convert.rs
+```
+
+## Cargo.toml sketch
+
+```toml
+[package]
+name = "jekko-tui-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+eventsource-stream = "0.2"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+color-eyre = "0.6"
+unicode-width = "0.2"
+```
+
+The official Ratatui docs show the main crate re-exporting what app authors need, while `ratatui-core` and `ratatui-widgets` exist for modularity and widget-library authors. For this app, use the main `ratatui` crate first; split later only if you build reusable widget crates. ([Docs.rs][3])
+
+---
+
+# 9. Ratatui UI System
+
+## 9.1 State model
+
+```rust
+// src/state.rs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusPane {
+    Transcript,
+    Composer,
+    ContextDock,
+    CommandPalette,
+}
+
+#[derive(Debug)]
+pub struct AppState {
+    pub mode: ThemeMode,
+    pub focus: FocusPane,
+    pub left_dock_open: bool,
+    pub command_palette_open: bool,
+    pub current_session_id: Option<String>,
+    pub sessions: Vec<SessionSummary>,
+    pub messages: Vec<Message>,
+    pub prompt: String,
+    pub toast: Option<ToastState>,
+    pub permissions: Vec<PermissionRequest>,
+    pub questions: Vec<QuestionRequest>,
+    pub scroll: TranscriptScroll,
+}
+
+impl AppState {
+    pub fn toggle_mode(&mut self) {
+        self.mode = match self.mode {
+            ThemeMode::Dark => ThemeMode::Light,
+            ThemeMode::Light => ThemeMode::Dark,
+        };
+    }
+}
+```
+
+## 9.2 Theme model
+
+```rust
+// src/theme/nova.rs
+use ratatui::style::{Color, Modifier, Style};
+
+#[derive(Debug, Clone, Copy)]
+pub struct Theme {
+    pub background: Color,
+    pub panel: Color,
+    pub element: Color,
+    pub menu: Color,
+    pub text: Color,
+    pub muted: Color,
+    pub primary: Color,
+    pub secondary: Color,
+    pub accent: Color,
+    pub success: Color,
+    pub warning: Color,
+    pub error: Color,
+    pub info: Color,
+    pub border_subtle: Color,
+    pub border: Color,
+}
+
+pub const NOVA_DARK: Theme = Theme {
+    background: Color::Rgb(8, 11, 16),
+    panel: Color::Rgb(15, 22, 35),
+    element: Color::Rgb(22, 33, 51),
+    menu: Color::Rgb(27, 41, 64),
+    text: Color::Rgb(234, 242, 255),
+    muted: Color::Rgb(143, 163, 191),
+    primary: Color::Rgb(124, 255, 203),
+    secondary: Color::Rgb(142, 162, 255),
+    accent: Color::Rgb(255, 184, 107),
+    success: Color::Rgb(49, 247, 165),
+    warning: Color::Rgb(255, 209, 102),
+    error: Color::Rgb(255, 92, 122),
+    info: Color::Rgb(100, 216, 255),
+    border_subtle: Color::Rgb(31, 45, 65),
+    border: Color::Rgb(45, 64, 92),
+};
+
+pub const NOVA_LIGHT: Theme = Theme {
+    background: Color::Rgb(247, 249, 252),
+    panel: Color::Rgb(255, 255, 255),
+    element: Color::Rgb(237, 242, 250),
+    menu: Color::Rgb(230, 237, 247),
+    text: Color::Rgb(17, 24, 39),
+    muted: Color::Rgb(104, 115, 133),
+    primary: Color::Rgb(0, 122, 109),
+    secondary: Color::Rgb(52, 84, 209),
+    accent: Color::Rgb(180, 83, 9),
+    success: Color::Rgb(22, 138, 82),
+    warning: Color::Rgb(161, 92, 0),
+    error: Color::Rgb(215, 37, 79),
+    info: Color::Rgb(0, 108, 154),
+    border_subtle: Color::Rgb(217, 226, 239),
+    border: Color::Rgb(200, 211, 225),
+};
+
+pub fn chip_style(theme: Theme) -> Style {
+    Style::default()
+        .fg(theme.primary)
+        .bg(theme.element)
+        .add_modifier(Modifier::BOLD)
+}
+```
+
+## 9.3 Layout
+
+```rust
+// src/layout.rs
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+pub struct AppAreas {
+    pub status: Rect,
+    pub main: Rect,
+    pub dock: Option<Rect>,
+    pub transcript: Rect,
+    pub composer: Rect,
+}
+
+pub fn split_app(area: Rect, dock_open: bool) -> AppAreas {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // status ribbon
+            Constraint::Min(8),    // transcript + dock
+            Constraint::Length(5), // composer
+        ])
+        .split(area);
+
+    let status = vertical[0];
+    let main = vertical[1];
+    let composer = vertical[2];
+
+    if dock_open && area.width >= 118 {
+        let horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(40),
+                Constraint::Min(40),
+            ])
+            .split(main);
+
+        AppAreas {
+            status,
+            main,
+            dock: Some(horizontal[0]),
+            transcript: horizontal[1],
+            composer,
+        }
+    } else {
+        AppAreas {
+            status,
+            main,
+            dock: None,
+            transcript: main,
+            composer,
+        }
+    }
+}
+```
+
+## 9.4 Main draw
+
+```rust
+// src/app.rs
+use ratatui::{Frame, layout::Rect};
+
+use crate::{
+    layout::split_app,
+    state::AppState,
+    theme::nova::{NOVA_DARK, NOVA_LIGHT},
+    widgets::{
+        status_ribbon::StatusRibbon,
+        context_dock::ContextDock,
+        transcript::Transcript,
+        composer::Composer,
+        toast::Toast,
+    },
+};
+
+pub fn draw(frame: &mut Frame, state: &mut AppState) {
+    let theme = match state.mode {
+        crate::state::ThemeMode::Dark => NOVA_DARK,
+        crate::state::ThemeMode::Light => NOVA_LIGHT,
+    };
+
+    let area = frame.area();
+    let areas = split_app(area, state.left_dock_open);
+
+    frame.render_widget(StatusRibbon::new(state, theme), areas.status);
+
+    if let Some(dock) = areas.dock {
+        frame.render_widget(ContextDock::new(state, theme), dock);
+    }
+
+    frame.render_stateful_widget(
+        Transcript::new(state, theme),
+        areas.transcript,
+        &mut state.scroll,
+    );
+
+    frame.render_widget(Composer::new(state, theme), areas.composer);
+
+    if let Some(toast) = &state.toast {
+        let toast_area = Rect {
+            x: area.width.saturating_sub(44),
+            y: 2,
+            width: 40,
+            height: 4,
+        };
+        frame.render_widget(Toast::new(toast, theme), toast_area);
+    }
+}
+```
+
+## 9.5 Status Ribbon widget
+
+```rust
+// src/widgets/status_ribbon.rs
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::Widget,
+};
+
+use crate::{state::AppState, theme::nova::Theme};
+
+pub struct StatusRibbon<'a> {
+    state: &'a AppState,
+    theme: Theme,
+}
+
+impl<'a> StatusRibbon<'a> {
+    pub fn new(state: &'a AppState, theme: Theme) -> Self {
+        Self { state, theme }
+    }
+}
+
+impl Widget for StatusRibbon<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let mode = match self.state.mode {
+            crate::state::ThemeMode::Dark => "dark",
+            crate::state::ThemeMode::Light => "white",
+        };
+
+        let line = Line::from(vec![
+            Span::styled(" ◆ ", Style::default().fg(self.theme.primary).add_modifier(Modifier::BOLD)),
+            Span::styled("workspace", Style::default().fg(self.theme.text)),
+            Span::styled(" / ", Style::default().fg(self.theme.muted)),
+            Span::styled("session", Style::default().fg(self.theme.secondary)),
+            Span::styled("    mode ", Style::default().fg(self.theme.muted)),
+            Span::styled(mode, Style::default().fg(self.theme.primary)),
+            Span::styled("    Ctrl+X W", Style::default().fg(self.theme.muted)),
+        ]);
+
+        line.render(area, buf);
+    }
+}
+```
+
+## 9.6 Context Dock widget
+
+```rust
+// src/widgets/context_dock.rs
+use ratatui::{
+    buffer::Buffer,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Padding, Paragraph, Widget},
+};
+
+use crate::{state::AppState, theme::nova::Theme};
+
+pub struct ContextDock<'a> {
+    state: &'a AppState,
+    theme: Theme,
+}
+
+impl<'a> ContextDock<'a> {
+    pub fn new(state: &'a AppState, theme: Theme) -> Self {
+        Self { state, theme }
+    }
+}
+
+impl Widget for ContextDock<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .borders(Borders::RIGHT)
+            .border_style(Style::default().fg(self.theme.border_subtle))
+            .padding(Padding::horizontal(1));
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4),
+                Constraint::Length(7),
+                Constraint::Min(4),
+            ])
+            .split(inner);
+
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "CONTEXT DOCK",
+                Style::default().fg(self.theme.muted).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled("Current session", Style::default().fg(self.theme.text))),
+            Line::from(Span::styled("main · provider · model", Style::default().fg(self.theme.muted))),
+        ])
+        .render(chunks[0], buf);
+
+        Paragraph::new(vec![
+            Line::from(Span::styled("FILES", Style::default().fg(self.theme.secondary))),
+            Line::from("  src/main.rs"),
+            Line::from("  Cargo.toml"),
+            Line::from("  README.md"),
+        ])
+        .style(Style::default().fg(self.theme.text))
+        .render(chunks[1], buf);
+
+        Paragraph::new(vec![
+            Line::from(Span::styled("SIGNALS", Style::default().fg(self.theme.secondary))),
+            Line::from("  MCP       connected"),
+            Line::from("  LSP       ready"),
+            Line::from("  Context   72%"),
+        ])
+        .style(Style::default().fg(self.theme.text))
+        .render(chunks[2], buf);
+    }
+}
+```
+
+## 9.7 Composer widget
+
+```rust
+// src/widgets/composer.rs
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Padding, Paragraph, Widget},
+};
+
+use crate::{state::AppState, theme::nova::Theme};
+
+pub struct Composer<'a> {
+    state: &'a AppState,
+    theme: Theme,
+}
+
+impl<'a> Composer<'a> {
+    pub fn new(state: &'a AppState, theme: Theme) -> Self {
+        Self { state, theme }
+    }
+}
+
+impl Widget for Composer<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .title(Line::from(vec![
+                Span::styled(" Composer Deck ", Style::default().fg(self.theme.primary).add_modifier(Modifier::BOLD)),
+            ]))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(self.theme.border))
+            .padding(Padding::horizontal(1));
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let text = if self.state.prompt.is_empty() {
+            Line::from(Span::styled(
+                "Describe the next move…",
+                Style::default().fg(self.theme.muted),
+            ))
+        } else {
+            Line::from(Span::styled(
+                self.state.prompt.as_str(),
+                Style::default().fg(self.theme.text),
+            ))
+        };
+
+        Paragraph::new(text).render(inner, buf);
+    }
+}
+```
+
+---
+
+# 10. Ratatui Backend Client Plan
+
+The Ratatui app should not reimplement the backend. It should consume the existing API from `TUI_BACKEND_API.md`.
+
+## Add Rust client module
+
+```text
+crates/jekko-tui-rs/src/backend/
+  mod.rs
+  client.rs
+  event_stream.rs
+  session.rs
+  prompt.rs
+  permission.rs
+  question.rs
+  config.rs
+  daemon.rs
+```
+
+## Client skeleton
+
+```rust
+// src/backend/client.rs
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone)]
+pub struct BackendClient {
+    base_url: String,
+    http: reqwest::Client,
+}
+
+impl BackendClient {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            http: reqwest::Client::new(),
+        }
+    }
+
+    pub async fn execute_command(&self, command: &str) -> color_eyre::Result<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            command: &'a str,
+        }
+
+        self.http
+            .post(format!("{}/tui/execute-command", self.base_url))
+            .json(&Body { command })
+            .send()
+            .await?
+            .error_for_status()?;
+
+        Ok(())
+    }
+
+    pub async fn append_prompt(&self, text: &str) -> color_eyre::Result<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            text: &'a str,
+        }
+
+        self.http
+            .post(format!("{}/tui/append-prompt", self.base_url))
+            .json(&Body { text })
+            .send()
+            .await?
+            .error_for_status()?;
+
+        Ok(())
+    }
+}
+```
+
+## SSE event stream skeleton
+
+```rust
+// src/backend/event_stream.rs
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
+
+use super::client::BackendClient;
+
+#[derive(Debug)]
+pub enum BackendEvent {
+    Raw(String),
+}
+
+impl BackendClient {
+    pub async fn event_stream(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<BackendEvent>,
+    ) -> color_eyre::Result<()> {
+        let response = self
+            .http
+            .get(format!("{}/event", self.base_url))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let mut stream = response.bytes_stream().eventsource();
+
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(event) => {
+                    let _ = tx.send(BackendEvent::Raw(event.data));
+                }
+                Err(_) => {
+                    // Reconnect policy should live here.
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+```
+
+---
+
+# 11. Ratatui Event Loop
+
+```rust
+// src/main.rs
+mod app;
+mod backend;
+mod event;
+mod layout;
+mod state;
+mod theme;
+mod widgets;
+
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use state::AppState;
+use std::time::Duration;
+
+fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
+
+    let mut terminal = ratatui::init();
+    let result = run(&mut terminal);
+    ratatui::restore();
+
+    result
+}
+
+fn run(terminal: &mut ratatui::DefaultTerminal) -> color_eyre::Result<()> {
+    let mut state = AppState::default();
+
+    loop {
+        terminal.draw(|frame| app::draw(frame, &mut state))?;
+
+        if event::poll(Duration::from_millis(16))? {
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
+                        break;
+                    }
+
+                    // Ctrl+X W: white/dark toggle.
+                    // In production, implement a small key sequence state machine:
+                    // Ctrl+X then W.
+                    if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('w') {
+                        state.toggle_mode();
+                    }
+
+                    match key.code {
+                        KeyCode::Esc => {
+                            state.command_palette_open = false;
+                        }
+                        KeyCode::Char('/') => {
+                            state.command_palette_open = true;
+                        }
+                        _ => {}
+                    }
+                }
+                Event::Resize(_, _) => {}
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
+```
+
+Production note: `Ctrl+X W` is a two-step sequence, not a single modifier chord. The Rust app should implement a key-sequence state machine:
+
+```rust
+enum KeyPrefix {
+    None,
+    CtrlX,
+}
+```
+
+When `Ctrl+X` arrives, set prefix. If next key is `w` or `W`, toggle mode. If anything else arrives, clear prefix.
+
+---
+
+# 12. How to Use Ratatui’s Full Power
+
+Ratatui’s built-in widgets cover exactly the advanced app surfaces this product needs: `Block`, `Paragraph`, `List`, `Table`, `Tabs`, `Gauge`, `LineGauge`, `Scrollbar`, `Sparkline`, `Chart`, `BarChart`, `Canvas`, and `Clear`. ([Docs.rs][3])
+
+Use them like this:
+
+| Product area        | Ratatui feature                                       |
+| ------------------- | ----------------------------------------------------- |
+| Status Ribbon       | `Line`, `Span`, custom `Widget`                       |
+| Left Context Dock   | `Block`, `List`, `Tabs`, `Table`                      |
+| Transcript          | `StatefulWidget`, `Paragraph`, custom message widgets |
+| Diff viewer         | `Table`, styled `Line`, custom row renderer           |
+| Token/context usage | `Gauge`, `LineGauge`                                  |
+| Agent latency       | `Sparkline`, `Chart`                                  |
+| Research dashboard  | `Table`, `Chart`, `BarChart`                          |
+| Command palette     | `Clear`, `Block`, `List`, `StatefulWidget`            |
+| Modal dialogs       | `Clear`, centered `Block`, `Paragraph`                |
+| Toasts              | floating `Block` overlay                              |
+| Scroll position     | `Scrollbar`, stateful transcript scroll               |
+| Background/pulse    | `Canvas` or subtle custom buffer drawing              |
+
+The most important Ratatui design choice: make every major panel a reusable custom widget that implements `Widget` or `StatefulWidget`. Stateful widgets are especially appropriate for transcript scroll position, list selection, command palette selection, table selection, and dock section navigation. Ratatui’s docs describe stateful widgets as the pattern for widgets that need to preserve state such as scroll or selection between renders. ([Docs.rs][3])
+
+---
+
+# 13. Ratatui Migration Strategy
+
+## Phase 1: Keep existing TUI, redesign fully
+
+Duration target: fastest path.
+
+Deliverables:
+
+* Nova theme.
+* Left Context Dock.
+* New home screen.
+* New Composer Deck.
+* Status Ribbon.
+* White/dark shortcut.
+* Removal of OpenCode visible strings.
+* Removal of gold/hot-pink identity.
+* Restyled dashboards and dialogs.
+
+This gives immediate differentiation.
+
+## Phase 2: Build Ratatui MVP shell
+
+Deliverables:
+
+```text
+crates/jekko-tui-rs
+  status ribbon
+  left dock
+  transcript
+  composer
+  command palette
+  theme toggle
+  backend client
+  SSE event loop
+```
+
+Do not port every plugin at first. Start with the core coding flow:
+
+1. List sessions.
+2. Open session.
+3. Stream messages/events.
+4. Submit prompt.
+5. Display permission/question prompt.
+6. Toggle white/dark.
+7. Display context dock.
+
+## Phase 3: Port internal dashboards
+
+Port:
+
+* Files/context panel.
+* MCP status.
+* LSP status.
+* Jnoccio status.
+* ZYAL/daemon status.
+* Research dashboard.
+* Jankurai audit.
+
+Use Ratatui tables, gauges, sparklines, and charts.
+
+## Phase 4: Plugin compatibility
+
+The current plugin slot model renders Solid components. That cannot directly render into Ratatui.
+
+Recommended new plugin model:
+
+```text
+Plugin returns:
+  commands
+  keybinds
+  data providers
+  JSON view descriptors
+  markdown/table/chart/card payloads
+
+Ratatui host renders:
+  cards
+  tables
+  gauges
+  charts
+  lists
+  markdown
+```
+
+This avoids embedding JS UI components in Rust while preserving extensibility.
+
+---
+
+# 14. Backend API Changes for Ratatui
+
+Required backend changes: **none** for MVP.
+
+Useful additions:
+
+| API addition                 | Why                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------- |
+| `GET /tui/state`             | Return initial aggregate state for Ratatui startup.                             |
+| `POST /tui/theme-mode`       | Optional direct theme mode setter, though `/tui/execute-command` already works. |
+| `GET /tui/keybinds`          | Let Rust TUI reflect configured shortcuts.                                      |
+| `GET /tui/layout`            | Optional server-provided feature visibility.                                    |
+| `GET /tui/plugin-view/:slot` | Future plugin JSON view descriptors for Ratatui.                                |
+
+The existing `/event` SSE stream and `/tui/execute-command` path are enough to start.
+
+---
+
+# 15. Remove Fork Fingerprints
+
+Search and replace these visible or semi-visible markers:
+
+```text
+OpenCode
+OC |
+/oc
+jekko-gold
+#F5A623
+#FFD700
+#FF00B8
+JEKKO amber/gold
+opentui: fatal
+oc-themes
+```
+
+Known files containing these patterns include:
+
+```text
+TUI_BACKEND_API.md
+TUI_CODE.md
+app-bindings.tsx
+component/error-component.tsx
+component/navigation-header.tsx
+component/prompt/index.tsx
+context/sdk.tsx
+context/theme.tsx
+context/theme-presets.ts
+context/theme-syntax.ts
+context/zyal-flash-state.ts
+feature-plugins/home/footer.tsx
+feature-plugins/home/tips-view.tsx
+feature-plugins/jankurai/index.tsx
+feature-plugins/jankurai/panel-audit-live.tsx
+feature-plugins/jnoccio/*
+feature-plugins/research/dashboard-view.tsx
+feature-plugins/sidebar/footer.tsx
+feature-plugins/sidebar/jankurai.tsx
+feature-plugins/sidebar/zyal-palette.ts
+feature-plugins/sidebar/zyal/view.tsx
+routes/home.tsx
+routes/session/daemon-poll.ts
+routes/session/session-body-core.tsx
+routes/session/session-renderers.tsx
+routes/session/sidebar.tsx
+```
+
+---
+
+# 16. Acceptance Criteria
+
+The redesign is complete when these are true:
+
+1. No visible `OpenCode`, `OC`, or `/oc` remains.
+2. The coding panel/dock appears on the **left** in wide mode.
+3. The narrow overlay opens from the **left**.
+4. `Ctrl+X W` toggles white/dark mode.
+5. `/mode` toggles white/dark mode.
+6. `nova` is the default theme.
+7. Light mode is first-class, not a washed-out dark theme.
+8. Gold/hot-pink hardcoding is removed from the default UI.
+9. Home screen no longer uses the pixel/gecko identity.
+10. Prompt looks like a Composer Deck.
+11. Top nav looks like a Status Ribbon.
+12. Messages are rendered as premium cards, not OpenCode-like left-border rows.
+13. Diffs are readable in both white and dark mode.
+14. Permission/question prompts use high-priority card styling.
+15. Jnoccio/ZYAL/Jankurai/Research panels use theme-derived colors.
+16. Terminal title no longer says `OC | ...`.
+17. TUI docs explain the new design system.
+18. Backend docs explain Ratatui frontend compatibility.
+19. Ratatui MVP can start, render the app shell, connect to backend, consume events, submit prompts, and toggle mode.
+20. Existing OpenTUI mode remains available until Ratatui feature parity is reached.
+
+---
+
+# 17. Final Steering Direction
+
+For the fastest visible transformation, implement the OpenTUI changes first. The current code can be made to look completely unrelated to OpenCode by changing the spatial model, palette, logo, prompt, dock, cards, dashboard palettes, and terminal titles.
+
+For the “world’s greatest Rust TUI app,” build the Ratatui renderer as the long-term shell. Ratatui should become the native Rust frontend that consumes the existing backend API, uses the left Context Dock as its default layout, and leans hard on Ratatui’s strongest primitives: nested layouts, stateful widgets, tables, charts, gauges, sparklines, scrollbars, and custom widgets. That gives the product both a new identity and a stronger technical foundation.
+
+[1]: https://ratatui.rs/ "Ratatui | Ratatui"
+[2]: https://ratatui.rs/concepts/layout/ "Layout | Ratatui"
+[3]: https://docs.rs/ratatui/latest/ratatui/widgets/index.html "ratatui::widgets - Rust"
+

@@ -1,4 +1,4 @@
-import { createOpencodeClient } from "@jekko-ai/sdk/v2"
+import { createJekkoClient } from "@jekko-ai/sdk/v2"
 import { SessionID } from "@/session/schema"
 
 export async function validateSession(input: {
@@ -15,7 +15,7 @@ export async function validateSession(input: {
     throw new Error(`Invalid session ID: ${result.error.issues.at(0)?.message ?? "unknown error"}`)
   }
 
-  await createOpencodeClient({
+  await createJekkoClient({
     baseUrl: input.url,
     directory: input.directory,
     fetch: input.fetch,

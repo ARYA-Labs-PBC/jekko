@@ -30,8 +30,6 @@ export type LogoCell = {
   sourceY?: number
   sourceWidth?: number
   sourceHeight?: number
-  fg?: RGB
-  bg?: RGB
 }
 
 export type LogoRow = {
@@ -64,7 +62,7 @@ export type SvgPreviewOptions = {
 }
 
 // 78 inner columns fills a standard 80-col terminal and gives the scaleX=2
-// pixel font + shadow extrusion room to breathe without clipping.
+// pixel font + subtle shadow room to breathe without clipping.
 export const INNER_WIDTH = 78
 export const OUTER_WIDTH = INNER_WIDTH + 2
 const GRADIENT_STEPS = 512
@@ -169,28 +167,28 @@ function dimReadable(color: RGB, amount: number, minimumContrast: number): RGB {
 }
 
 // ---------------------------------------------------------------------------
-// Blacklight Prism palette
+// Jekko amber palette
 // ---------------------------------------------------------------------------
-// The important choice: all foreground colors are lifted, readable neon.
-// No navy, no royal blue, no deep purple. Those colors look cyber but collapse
-// on black; this palette keeps the cyan/blue/purple mood without sacrificing
-// legibility.
+// Single-hue amber gradient, deep umber → cream highlight. No rainbow, no
+// cyan/magenta. Anchor stop `#D4A843` is the canonical JEKKO gold used as the
+// brand accent across the TUI. Stops are monotonic in luminance so the
+// gradient reads as embossed metal rather than tie-dye.
 
 export const HIGH_CONTRAST_BLACK_COLORMAPS = {
-  blacklightPrism: [
-    "#00F5FF",
-    "#52E0FF",
-    "#79C8FF",
-    "#A7B5FF",
-    "#C69CFF",
-    "#EC8CFF",
-    "#FF78D8",
-    "#FFB86C",
+  jekkoAmber: [
+    "#3D2606",
+    "#5C3A0E",
+    "#8B5F1A",
+    "#B57F28",
+    "#D4A843",
+    "#E8C055",
+    "#EFD17A",
+    "#F8E3B3",
   ],
 } as const
 
-const BLACKLIGHT_PRISM_STOPS = HIGH_CONTRAST_BLACK_COLORMAPS.blacklightPrism.map(hexToRGB)
-const WORDMARK_PRISM_STOPS = HIGH_CONTRAST_BLACK_COLORMAPS.blacklightPrism
+const JEKKO_AMBER_STOPS = HIGH_CONTRAST_BLACK_COLORMAPS.jekkoAmber.map(hexToRGB)
+const WORDMARK_AMBER_STOPS = HIGH_CONTRAST_BLACK_COLORMAPS.jekkoAmber
   .slice(0, 7)
   .map(hexToRGB)
 
@@ -220,8 +218,8 @@ function buildGradientLUT(
   return out
 }
 
-const GLOBAL_PRISM = buildGradientLUT(BLACKLIGHT_PRISM_STOPS, GRADIENT_STEPS, 8.0)
-const WORDMARK_PRISM = buildGradientLUT(WORDMARK_PRISM_STOPS, GRADIENT_STEPS, 8.8)
+const GLOBAL_AMBER_LUT = buildGradientLUT(JEKKO_AMBER_STOPS, GRADIENT_STEPS, 8.0)
+const WORDMARK_AMBER_LUT = buildGradientLUT(WORDMARK_AMBER_STOPS, GRADIENT_STEPS, 8.8)
 
 function colorFromLUT(lut: RGB[], t: number): RGB {
   const idx = Math.max(
@@ -255,7 +253,7 @@ function globalGradientColor(
   height: number,
   dim = false,
 ): RGB {
-  const base = colorFromLUT(GLOBAL_PRISM, globalDiagonalT(x, y, width, height))
+  const base = colorFromLUT(GLOBAL_AMBER_LUT, globalDiagonalT(x, y, width, height))
   return dim ? dimReadable(base, 0.24, 5.8) : base
 }
 
@@ -279,7 +277,7 @@ function wordmarkColor(
   width: number,
   height: number,
 ): RGB {
-  return colorFromLUT(WORDMARK_PRISM, wordmarkT(sourceX, sourceY, width, height))
+  return colorFromLUT(WORDMARK_AMBER_LUT, wordmarkT(sourceX, sourceY, width, height))
 }
 
 function wordmarkShadowColor(
@@ -293,11 +291,13 @@ function wordmarkShadowColor(
   const shifted = clamp01(
     baseT + (layer === "far" ? 0.16 : layer === "mid" ? 0.11 : 0.06),
   )
-  const base = colorFromLUT(WORDMARK_PRISM, shifted)
+  const base = colorFromLUT(WORDMARK_AMBER_LUT, shifted)
 
-  if (layer === "far") return dimReadable(base, 0.44, 3.8)
-  if (layer === "mid") return dimReadable(base, 0.35, 4.6)
-  return dimReadable(base, 0.26, 5.8)
+  // Shadow colors are dimmed aggressively (70-80% toward black) so the bright
+  // face pixels are clearly distinguishable from the depth extrusion.
+  if (layer === "far") return dimReadable(base, 0.85, 1.5)
+  if (layer === "mid") return dimReadable(base, 0.80, 1.5)
+  return dimReadable(base, 0.70, 2.0)
 }
 
 function resolveWordmarkSource(
@@ -614,10 +614,9 @@ const WORDMARK_SHADOW_LAYERS: Array<{
   dy: number
   layer: "wordmarkShadowNear" | "wordmarkShadowMid" | "wordmarkShadowFar"
 }> = [
-    { dx: 2, dy: 1, layer: "wordmarkShadowNear" },
-    { dx: 4, dy: 2, layer: "wordmarkShadowMid" },
-    { dx: 6, dy: 3, layer: "wordmarkShadowFar" },
-  ]
+  { dx: 1, dy: 1, layer: "wordmarkShadowNear" },
+  { dx: 2, dy: 1, layer: "wordmarkShadowMid" },
+]
 
 function maxShadowDx(): number {
   return WORDMARK_SHADOW_LAYERS.length === 0
@@ -774,92 +773,6 @@ export function logoWidth(rows: LogoRow[], minimum = OUTER_WIDTH): number {
 // Logo builders
 // ---------------------------------------------------------------------------
 
-export function parseAnsiArt(ansi: string): LogoRow[] {
-  const rows: LogoRow[] = []
-  let currentRow: LogoCell[] = []
-  let currentFg: RGB | undefined = undefined
-  let currentBg: RGB | undefined = undefined
-
-  const parts = ansi.split("[")
-
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]!
-    if (i === 0) {
-      for (const char of part) {
-        if (char === "\n") {
-          rows.push({ cells: currentRow })
-          currentRow = []
-        } else {
-          currentRow.push({ char, layer: "global", fg: currentFg, bg: currentBg })
-        }
-      }
-      continue
-    }
-
-    const mIndex = part.indexOf("m")
-    const jIndex = part.indexOf("J")
-    const hIndex = part.indexOf("H")
-
-    let seqEnd = -1
-    let type = ""
-    if (mIndex >= 0 && (seqEnd === -1 || mIndex < seqEnd)) { seqEnd = mIndex; type = "m" }
-    if (jIndex >= 0 && (seqEnd === -1 || jIndex < seqEnd)) { seqEnd = jIndex; type = "J" }
-    if (hIndex >= 0 && (seqEnd === -1 || hIndex < seqEnd)) { seqEnd = hIndex; type = "H" }
-
-    if (seqEnd === -1) {
-      currentRow.push({ char: "[", layer: "global", fg: currentFg, bg: currentBg })
-      for (const char of part) {
-        if (char === "\n") {
-          rows.push({ cells: currentRow })
-          currentRow = []
-        } else {
-          currentRow.push({ char, layer: "global", fg: currentFg, bg: currentBg })
-        }
-      }
-      continue
-    }
-
-    const seq = part.substring(0, seqEnd)
-    const text = part.substring(seqEnd + 1)
-
-    if (type === "m") {
-      const codes = seq.split(";").map(Number)
-      let cIdx = 0
-      while (cIdx < codes.length) {
-        const code = codes[cIdx]
-        if (code === 0) {
-          currentFg = undefined
-          currentBg = undefined
-          cIdx++
-        } else if (code === 38 && codes[cIdx + 1] === 2) {
-          currentFg = { r: codes[cIdx + 2] ?? 0, g: codes[cIdx + 3] ?? 0, b: codes[cIdx + 4] ?? 0 }
-          cIdx += 5
-        } else if (code === 48 && codes[cIdx + 1] === 2) {
-          currentBg = { r: codes[cIdx + 2] ?? 0, g: codes[cIdx + 3] ?? 0, b: codes[cIdx + 4] ?? 0 }
-          cIdx += 5
-        } else {
-          cIdx++
-        }
-      }
-    }
-
-    for (const char of text) {
-      if (char === "\n") {
-        rows.push({ cells: currentRow })
-        currentRow = []
-      } else {
-        currentRow.push({ char, layer: "global", fg: currentFg, bg: currentBg })
-      }
-    }
-  }
-
-  if (currentRow.length > 0) {
-    rows.push({ cells: currentRow })
-  }
-
-  return rows
-}
-
 export function buildLogoRows(props: LogoProps = {}): LogoRow[] {
   const support = props.support ?? "ZYAL"
 
@@ -931,8 +844,7 @@ function GradientRow(props: {
 
           return (
             <text
-              fg={cell.fg ? toRGBA(cell.fg) : toRGBA(color)}
-              bg={cell.bg ? toRGBA(cell.bg) : undefined}
+              fg={toRGBA(color)}
               attributes={attrs}
               selectable={false}
             >

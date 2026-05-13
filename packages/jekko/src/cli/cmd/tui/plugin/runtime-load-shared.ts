@@ -7,7 +7,7 @@ import { activatePluginEntry } from "./runtime-api"
 import { addExternalPluginEntries, resolveExternalPlugins } from "./runtime-load-external"
 export { addExternalPluginEntries, resolveExternalPlugins } from "./runtime-load-external"
 import { installPlugin as installModulePlugin, patchPluginConfig, readPluginManifest } from "@/plugin/install"
-import { errorMessage } from "@/util/error"
+import { errorCause, errorMessage } from "@/util/error"
 import { Process } from "@/util/process"
 import type { TuiPluginInstallResult } from "@jekko-ai/plugin/tui"
 
@@ -19,14 +19,8 @@ export function defaultPluginOrigin(state: RuntimeState, spec: string): ConfigPl
   }
 }
 
-export function installCause(err: unknown) {
-  if (!err || typeof err !== "object") return
-  if (!("cause" in err)) return
-  return (err as { cause?: unknown }).cause
-}
-
 export function installDetail(err: unknown) {
-  const hit = installCause(err) ?? err
+  const hit = errorCause(err) ?? err
   if (!(hit instanceof Process.RunFailedError)) {
     return {
       message: errorMessage(hit),

@@ -12,6 +12,6 @@ fn provider_defaults_keep_the_expected_allowlist_and_receipts_shape() {
     let policy = ProviderPolicy::default();
     assert!(policy.allow.contains(&"openalex".to_string()));
     assert!(policy.allow.contains(&"jina".to_string()));
-    assert_eq!(ProviderSearchResponse::empty().hits.len(), 0);
-    assert_eq!(ResearchResponse::empty().warnings.len(), 0);
+    assert_eq!(ProviderSearchResponse::default().hits.len(), 0);
+    assert_eq!(ResearchResponse::default().warnings.len(), 0);
 }

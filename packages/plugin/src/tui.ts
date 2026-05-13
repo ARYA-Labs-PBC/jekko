@@ -353,6 +353,14 @@ export type TuiHostSlotMap = {
   sidebar_footer: {
     session_id: string
   }
+  shell_left_tabs: {
+    active_pane?: string
+  }
+  shell_left_active_pane: {
+    active_pane?: string
+  }
+  shell_center_feed: {}
+  shell_footer: {}
 }
 
 export type TuiSlotMap<Slots extends Record<string, object> = {}> = TuiHostSlotMap & Slots

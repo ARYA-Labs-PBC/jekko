@@ -17,7 +17,7 @@ import { DialogProvider as DialogProviderList } from "@tui/component/dialog-prov
 import { PluginRouteMissing } from "@tui/component/plugin-route-missing"
 import { useEvent } from "@tui/context/event"
 import { useSDK } from "@tui/context/sdk"
-import { StartupLoading } from "@tui/component/startup-loading"
+import { SplashScreen } from "@tui/component/splash-screen"
 import { useSync } from "@tui/context/sync"
 import { useLocal } from "@tui/context/local"
 import { useCommandDialog } from "@tui/component/dialog-command"
@@ -25,6 +25,7 @@ import { KeybindProvider, useKeybind } from "@tui/context/keybind"
 import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { Home } from "@tui/routes/home"
 import { Session } from "@tui/routes/session"
+import { Shell } from "@tui/routes/shell/shell-view"
 import { useToast } from "./ui/toast"
 import { ExitProvider, useExit } from "./context/exit"
 import { KVProvider, useKV } from "./context/kv"
@@ -95,6 +96,7 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
     renderer,
   })
   const [ready, setReady] = createSignal(process.env.JEKKO_FAST_BOOT === "1")
+  const [splashDismissed, setSplashDismissed] = createSignal(false)
   const pluginStartedAt = Date.now()
   bootLog.info("plugin init start", {
     fast_boot: process.env.JEKKO_FAST_BOOT === "1",
@@ -248,46 +250,37 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
   })
 
   return (
-    <box
-      width={dimensions().width}
-      height={dimensions().height}
-      backgroundColor={theme.background}
-      flexDirection="column"
+    <Show
+      when={splashDismissed()}
+      fallback={<SplashScreen ready={ready} onDismiss={() => setSplashDismissed(true)} />}
     >
-      <Show when={Flag.JEKKO_SHOW_TTFD}>
-        <TimeToFirstDraw />
-      </Show>
-      <Show when={!ready()}>
-        <box
-          position="absolute"
-          zIndex={4000}
-          left={0}
-          right={0}
-          top={0}
-          bottom={0}
-          justifyContent="center"
-          alignItems="center"
-        >
-          <box backgroundColor={theme.backgroundPanel} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-            <text fg={theme.textMuted}>Loading TUI plugins...</text>
+      <box
+        width={dimensions().width}
+        height={dimensions().height}
+        backgroundColor={theme.background}
+        flexDirection="column"
+      >
+        <Show when={Flag.JEKKO_SHOW_TTFD}>
+          <TimeToFirstDraw />
+        </Show>
+        <Show when={ready()}>
+          <NavigationHeader />
+          <box flexGrow={1} minHeight={0} flexDirection="column">
+            <Switch>
+              <Match when={route.data.type === "home"}>
+                <Home />
+              </Match>
+              <Match when={route.data.type === "shell"}>
+                <Shell />
+              </Match>
+              <Match when={route.data.type === "session"}>
+                <Session />
+              </Match>
+            </Switch>
+            {plugin()}
           </box>
-        </box>
-      </Show>
-      <Show when={ready()}>
-        <NavigationHeader />
-        <box flexGrow={1} minHeight={0} flexDirection="column">
-          <Switch>
-            <Match when={route.data.type === "home"}>
-              <Home />
-            </Match>
-            <Match when={route.data.type === "session"}>
-              <Session />
-            </Match>
-          </Switch>
-          {plugin()}
-        </box>
-      </Show>
-      <StartupLoading ready={ready} />
-    </box>
+        </Show>
+      </box>
+    </Show>
   )
 }

@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js"
+import { createMemo, onCleanup, getOwner } from "solid-js"
 import { Keybind } from "@/util/keybind"
 import { pipe, mapValues } from "remeda"
 import type { TuiConfig } from "@/cli/cmd/tui/config/tui"
@@ -9,6 +9,22 @@ import { createSimpleContext } from "./helper"
 import { useTuiConfig } from "./tui-config"
 
 export type KeybindKey = keyof NonNullable<TuiConfig.Info["keybinds"]> & string
+
+/**
+ * Payload passed to every keybind subscriber.
+ *
+ * - `name`  — the schema-registered keybind name (e.g. "shell.tab.set")
+ * - `event` — the raw ParsedKey that matched the chord; subscribers can
+ *             inspect it to disambiguate multi-chord bindings (e.g. read
+ *             `event.name` to know whether "1", "2", or "3" was pressed
+ *             for the `shell.tab.set` binding).
+ */
+export type KeybindEvent = {
+  name: string
+  event: ParsedKey
+}
+
+export type KeybindHandler = (payload: KeybindEvent) => void
 
 export const { use: useKeybind, provider: KeybindProvider } = createSimpleContext({
   name: "Keybind",
@@ -24,6 +40,14 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
       leader: false,
     })
     const renderer = useRenderer()
+
+    // Lightweight in-process subscriber registry. Phase 4/5/6 components
+    // (home, shell tabs, activity-feed) call `keybind.on("name", handler)`
+    // to receive events when matched chords fire. `app-bindings.tsx` owns
+    // the dispatcher that calls `keybind.emit(...)`. We use a plain Map of
+    // Sets so a single binding can have many subscribers, and dispatch is
+    // synchronous to avoid frame-skipping for tab/focus events.
+    const subscribers = new Map<string, Set<KeybindHandler>>()
 
     let focus: Renderable | null
     let timeout: NodeJS.Timeout
@@ -98,6 +122,50 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
         const lead = keybinds().leader?.[0]
         if (!lead) return text
         return text.replace("<leader>", Keybind.toString(lead))
+      },
+      /**
+       * Subscribe to a named keybind. Returns an unsubscribe function and
+       * auto-cleans on owning component disposal when called inside a Solid
+       * reactive scope. The dispatcher in `app-bindings.tsx` invokes these
+       * handlers when the bound chord matches the active ParsedKey.
+       */
+      on(name: string, handler: KeybindHandler): () => void {
+        let bucket = subscribers.get(name)
+        if (!bucket) {
+          bucket = new Set()
+          subscribers.set(name, bucket)
+        }
+        bucket.add(handler)
+        const off = () => {
+          const b = subscribers.get(name)
+          if (!b) return
+          b.delete(handler)
+          if (b.size === 0) subscribers.delete(name)
+        }
+        if (getOwner()) onCleanup(off)
+        return off
+      },
+      /**
+       * Emit a named keybind to all subscribers. Returns true if at least
+       * one handler was invoked (callers in the dispatcher can use this to
+       * decide whether to `evt.preventDefault()`).
+       */
+      emit(name: string, event: ParsedKey): boolean {
+        const bucket = subscribers.get(name)
+        if (!bucket || bucket.size === 0) return false
+        const payload: KeybindEvent = { name, event }
+        // Iterate over a copy so unsubscriptions during dispatch are safe.
+        for (const handler of Array.from(bucket)) {
+          try {
+            handler(payload)
+          } catch (err) {
+            // A faulty subscriber must not break the chain — surface via
+            // console.error rather than letting Solid bubble it up and
+            // tear down the whole reactive root.
+            console.error("[keybind] subscriber for", name, "threw:", err)
+          }
+        }
+        return true
       },
     }
     return result

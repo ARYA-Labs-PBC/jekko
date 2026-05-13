@@ -31,9 +31,9 @@ export const GenerateCommand = {
           {
             lang: "js",
             source: [
-              `import { createOpencodeClient } from "@jekko-ai/sdk`,
+              `import { createJekkoClient } from "@jekko-ai/sdk`,
               ``,
-              `const client = createOpencodeClient()`,
+              `const client = createJekkoClient()`,
               `await client.${operation.operationId}({`,
               `  ...`,
               `})`,

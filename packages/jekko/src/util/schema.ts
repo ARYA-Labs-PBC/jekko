@@ -73,6 +73,14 @@ export const withStatics =
   (schema: S): S & M =>
     Object.assign(schema, methods(schema))
 
+export function taggedMessageCauseError<Self>() {
+  return <const Tag extends string>(tag: Tag) =>
+    Schema.TaggedErrorClass<Self>()(tag, {
+      message: Schema.String,
+      cause: Schema.optional(Schema.Defect),
+    })
+}
+
 /**
  * Nominal wrapper for scalar types. The class itself is a valid schema —
  * pass it directly to `Schema.decode`, `Schema.decodeEffect`, etc.

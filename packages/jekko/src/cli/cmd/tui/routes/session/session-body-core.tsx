@@ -31,9 +31,29 @@ import { useSDK } from "@tui/context/sdk"
 import { useEditorContext } from "@tui/context/editor"
 import { useSessionDaemonPolling } from "./daemon-poll"
 
-export function createSessionBodyState() {
-  const route = useRouteData("session")
+export type SessionBodyStateOptions = {
+  /**
+   * Optional override for the active session ID. When supplied, the body
+   * tracks this ID instead of `useRouteData("session").sessionID`. Used by
+   * the Phase 6 shell activity-feed plugin to mount the session pipeline
+   * inside the shell route (which has no session in its route data).
+   */
+  sessionID?: () => string | undefined
+}
+
+export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
+  const routeData = useRouteData("session")
   const { navigate } = useRoute()
+  // Build a synthetic route view so callers that pass an explicit sessionID
+  // (e.g. the shell route) get a stable {sessionID} surface and the legacy
+  // session-route callers see the live route store untouched.
+  const route = options.sessionID
+    ? ({
+        get sessionID() {
+          return options.sessionID!() ?? ""
+        },
+      } as { sessionID: string })
+    : routeData
   const sync = useSync()
   const event = useEvent()
   const project = useProject()
