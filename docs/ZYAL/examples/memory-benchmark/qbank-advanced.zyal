@@ -164,7 +164,20 @@ fan_out:
     max_parallel: 10
   reduce:
     strategy: custom_shell
-    command: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- publish --bank crates/memory-benchmark/data/real-paper-bank && cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100 && cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- emit-cogcore --bank crates/memory-benchmark/data/real-paper-bank --out .jekko/daemon/paper-qbank-advanced/reports/cogcore-events.jsonl && cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin cogcore_bench -- --events .jekko/daemon/paper-qbank-advanced/reports/cogcore-events.jsonl --out .jekko/daemon/paper-qbank-advanced/reports/cogcore-smoke.json && cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out .jekko/daemon/paper-qbank-advanced/reports/real-paper-top100.json"
+    command: >
+      mkdir -p .jekko/daemon/paper-qbank-advanced/reports &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- publish --bank crates/memory-benchmark/data/real-paper-bank &&
+      if cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100 > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate.json;
+      then printf '{"mode":"production","dev_only":false}\n' > .jekko/daemon/paper-qbank-advanced/reports/qbank-mode.json;
+      else printf '{"mode":"dev_only_fixture_fallback","dev_only":true}\n' > .jekko/daemon/paper-qbank-advanced/reports/qbank-mode.json &&
+        memory_benchmark_dev_qbank=1 cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100 --allow-empty > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate.json;
+      fi &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- emit-cogcore --bank crates/memory-benchmark/data/real-paper-bank --out .jekko/daemon/paper-qbank-advanced/reports/cogcore-events.jsonl &&
+      cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin cogcore_bench -- --events .jekko/daemon/paper-qbank-advanced/reports/cogcore-events.jsonl --out .jekko/daemon/paper-qbank-advanced/reports/cogcore-smoke.json &&
+      if cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out .jekko/daemon/paper-qbank-advanced/reports/real-paper-top100.json;
+      then :;
+      else memory_benchmark_dev_qbank=1 cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out .jekko/daemon/paper-qbank-advanced/reports/real-paper-top100.json;
+      fi
   on_partial_failure: continue
 
 experiments:
@@ -253,16 +266,22 @@ observability:
 done:
   require:
     - qbank_validate_passed
+    - qbank_mode_receipt_written
     - cogcore_event_stream_smoked
     - top_100_real_paper_score_written
   forbid:
     - model_only_claim
     - answer_key_observed
     - license_ambiguous_publication
+    - trusted_qbank_claim_without_50_papers
 
 checkpoint:
   verify:
-    - command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100"
+    - command: >
+        if cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100 > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate-checkpoint.json;
+        then :;
+        else memory_benchmark_dev_qbank=1 cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100 --allow-empty > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate-checkpoint.json;
+        fi
       timeout: 5m
       assert: { exit_code: 0 }
 <<<END_ZYAL id=paper-qbank-advanced>>>

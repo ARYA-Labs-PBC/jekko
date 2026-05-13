@@ -41,6 +41,7 @@ import { Heap } from "./cli/heap"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { ensureProcessMetadata } from "@jekko-ai/core/util/jekko-process"
 import { startJnoccioHeartbeat } from "@/util/jnoccio"
+import { runHeadlessCli } from "@/cli/headless"
 
 const processMetadata = ensureProcessMetadata("main")
 
@@ -88,6 +89,14 @@ const cli = yargs(args)
   .option("pure", {
     describe: "run without external plugins",
     type: "boolean",
+  })
+  .option("headless", {
+    describe: "run a ZYAL file from the command line and exit",
+    type: "string",
+  })
+  .option("headless-cwd", {
+    describe: "workspace directory for --headless, primarily for source-tree development",
+    type: "string",
   })
   .middleware(async (opts) => {
     if (opts.pure) {
@@ -196,7 +205,12 @@ const cli = yargs(args)
   .strict()
 
 try {
-  if (args.includes("-h") || args.includes("--help")) {
+  const headlessReceipt = args.includes("-h") || args.includes("--help")
+    ? null
+    : await runHeadlessCli(args, { print: (line) => process.stderr.write(line + EOL) })
+  if (headlessReceipt !== null) {
+    process.exitCode = headlessReceipt.status === "passed" ? 0 : 1
+  } else if (args.includes("-h") || args.includes("--help")) {
     await cli.parse(args, (err: Error | undefined, _argv: unknown, out: string) => {
       if (err) throw err
       if (!out) return
