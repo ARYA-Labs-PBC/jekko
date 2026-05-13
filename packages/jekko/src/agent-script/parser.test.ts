@@ -143,6 +143,20 @@ experiments:
     )
   })
 
+  test("accepts opaque promotion gates", async () => {
+    const text = makeZyal(`
+promotion_gates:
+  threshold_score_delta: 0.75
+  references:
+    required_count: 3
+    reference_drift_max_score_points: 0.5
+  qbank:
+    reject_dev_only: true
+`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.promotion_gates?.qbank).toEqual({ reject_dev_only: true })
+  })
+
   test("detects draft ZYAL blocks without arm", () => {
     const example = getZyalExample("fix-until-tests-pass")!
     const draft = example.text.replace(/ZYAL_ARM RUN_FOREVER id=.*\n?$/, "")
