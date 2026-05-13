@@ -353,12 +353,50 @@ Returns only `agent/audit-policy.toml` audit history + generated `repo-score.jso
 | Typecheck baseline preserved | ✓ (625 errors, all pre-existing) |
 | `grep -ri opencode` clean modulo allowed exemptions | ✓ |
 | Owner-map / test-map / boundaries updated | ✓ |
+| TUI smoke-boot reaches splash render | ✓ (see Smoke Boot Result below) |
+
+---
+
+## Smoke Boot Result
+
+`JEKKO_FAST_BOOT=1 bun run --cwd packages/jekko ./src/index.ts --print-logs` reached:
+
+- Renderer created at 80×24 (alternate-screen, kitty keyboard, mouse).
+- Theme mode resolved to `dark` (`#0B0907` canvas — confirmed via raw escape sequence `[48;2;11;9;7m`).
+- First frame at +1012 ms (`solid render complete`).
+- **Splash screen rendered** with all four elements visible:
+  - NEVERHUMAN typographic wordmark `N · E · V · E · R · H · U · M · A · N` in cream `#F2E8D2`.
+  - Amber accent rule `▔▔▔▔▔▔...` rendered as RGB `212,168,67` = **`#D4A843` (canonical JEKKO gold)**.
+  - "Jekko vlocal" version line + amber "loading…" word.
+  - Braille spinner `⠋ ⠙ ⠹` animating in amber.
+  - "warming up…" status text in muted text (`#8A7E66`).
+- Plugin init started; reached `sync project ready` at +142 ms; then **failed at SQLite migration repair**:
+
+```
+ERROR  service=tui.plugin error.message=
+  SQLite migrations are out of sync and could not be repaired automatically.
+  Backups: /Users/bentaylor/.local/share/jekko/jekko-local.db.repair-2026-05-13T11-32-22-683Z*
+  Repair command: restore the backup, then rerun Jekko after fixing the migration state.
+```
+
+**Root cause:** `~/.local/share/jekko/jekko-local.db` is shared across all Jekko installs in the user's home directory. The TUIbomb copy at `~/Code/jekko/` is using a different code-side migration set than the version that last touched the global DB. This is a pre-existing environment issue, **not a TUIbomb regression**.
+
+**Workaround options:**
+
+1. **Quickest (loses local session history):** delete the DB and let Jekko recreate it.
+   ```bash
+   rm ~/.local/share/jekko/jekko-local.db ~/.local/share/jekko/jekko-local.db-wal ~/.local/share/jekko/jekko-local.db-shm
+   ```
+2. **Per-checkout DB:** export `JEKKO_DB_PATH=~/Code/jekko/.local/jekko-local.db` (or set in `jekko.json`). Confirm by reading `packages/jekko/src/storage/db.ts` for the actual env var name — `db.ts:174` invokes `repairSqliteMigrations` which is what failed.
+3. **Use only from `~/Code/opencode/` (the original):** TUIbomb is the new branding/UX in a fresh checkout; the original checkout's DB stays in sync.
+
+Bottom line: the TUI visually verifies all Phase 2-3 work (refined amber palette, splash composition, NEVERHUMAN wordmark, JEKKO gold accent). Phase 5-7 (shell route, panes, shortcuts) are gated behind the DB repair and have not been visually smoke-tested end-to-end yet.
 
 ---
 
 ## What was NOT done (and why)
 
-- **Light-mode logo specific LUT.** Logo currently uses a single (dark-mode-tuned) amber LUT for both modes. Most of the spectrum contrasts on warm-white because the LUT is monotonic and the lightest stop (`#F8E3B3`) is excluded from the wordmark slice. If the home logo looks wrong in light mode, swap by threading `mode` through `LogoProps` and selecting a parallel `WORDMARK_AMBER_LUT_LIGHT` (stops in `jekko-light.json` `defs` are ready to lift: `amberDarkDeep #6E4A0A → amberDark #A67817 → amberDarkCream #8C5F0D`).
+- **~~Light-mode logo specific LUT.~~ DONE in follow-up commit.** Parallel `WORDMARK_AMBER_LUT_LIGHT` + `GLOBAL_AMBER_LUT_LIGHT` built from 8 dark-amber stops `#2D1A04` → `#B98828` (monotone luminance ascending). `buildGradientLUT` called with `minimumContrast: 0` for the light LUTs (the `liftContrastOnBlack` helper would push them lighter toward white — wrong direction on cream canvas). `Logo` and `GoLogo` components now subscribe to `useTheme().mode` and pass mode through `GradientRow` → `cellColor` → all three color functions (`wordmarkColor`, `wordmarkShadowColor`, `globalGradientColor`). Backward-compatible: `cellColor` mode defaults to `"dark"` if omitted.
 - **Quick-jump (digits 1-9) in History pane.** Punted because `useKeybind` lacks surface-focus scoping and 1/2/3 collide with tab switcher. Users can switch via the trailing "show N more" dialog. Adding a focused-pane scope to the keybind system is the unblock.
 - **New Phase 8 snapshot tests.** The existing `.jekko/plugins/tui-smoke/*.tsx` smoke harness is preserved. New snapshots (splash-frame, home-frame, shell-frame-{jnoccio,capability,history}, theme-{dark,light}) deferred until visual review confirms the renders are what we want — snapshotting before that locks in incorrect output.
 - **Mode-aware splash spinner pulse.** Pulse implemented as a single dark-mode-tinted lerp; light mode may need contrast adjustment.

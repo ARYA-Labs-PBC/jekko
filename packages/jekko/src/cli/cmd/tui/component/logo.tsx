@@ -1,6 +1,7 @@
 // jankurai:allow HLT-000-SCORE-DIMENSION reason=large-structured-logo-renderer-with-parallel-pixel-font-patterns expires=2027-01-01
 import { RGBA } from "@opentui/core"
 import { createMemo, For } from "solid-js"
+import { useTheme } from "@tui/context/theme"
 
 export type Align = "left" | "center" | "right"
 export type RGB = { r: number; g: number; b: number }
@@ -185,10 +186,27 @@ export const HIGH_CONTRAST_BLACK_COLORMAPS = {
     "#EFD17A",
     "#F8E3B3",
   ],
+  // Light-mode amber stops: all medium-dark to dark, monotone luminance.
+  // Reads as embossed bronze on warm-cream `#FBF7EE` canvas. No contrast
+  // lift is applied (`minimumContrast: 0`) — these stops already contrast.
+  jekkoAmberLight: [
+    "#2D1A04",
+    "#4F3408",
+    "#553707",
+    "#6E4A0A",
+    "#7C5A11",
+    "#8C5F0D",
+    "#A67817",
+    "#B98828",
+  ],
 } as const
 
 const JEKKO_AMBER_STOPS = HIGH_CONTRAST_BLACK_COLORMAPS.jekkoAmber.map(hexToRGB)
 const WORDMARK_AMBER_STOPS = HIGH_CONTRAST_BLACK_COLORMAPS.jekkoAmber
+  .slice(0, 7)
+  .map(hexToRGB)
+const JEKKO_AMBER_LIGHT_STOPS = HIGH_CONTRAST_BLACK_COLORMAPS.jekkoAmberLight.map(hexToRGB)
+const WORDMARK_AMBER_LIGHT_STOPS = HIGH_CONTRAST_BLACK_COLORMAPS.jekkoAmberLight
   .slice(0, 7)
   .map(hexToRGB)
 
@@ -220,6 +238,10 @@ function buildGradientLUT(
 
 const GLOBAL_AMBER_LUT = buildGradientLUT(JEKKO_AMBER_STOPS, GRADIENT_STEPS, 8.0)
 const WORDMARK_AMBER_LUT = buildGradientLUT(WORDMARK_AMBER_STOPS, GRADIENT_STEPS, 8.8)
+const GLOBAL_AMBER_LUT_LIGHT = buildGradientLUT(JEKKO_AMBER_LIGHT_STOPS, GRADIENT_STEPS, 0)
+const WORDMARK_AMBER_LUT_LIGHT = buildGradientLUT(WORDMARK_AMBER_LIGHT_STOPS, GRADIENT_STEPS, 0)
+
+export type LogoMode = "dark" | "light"
 
 function colorFromLUT(lut: RGB[], t: number): RGB {
   const idx = Math.max(
@@ -251,9 +273,11 @@ function globalGradientColor(
   y: number,
   width: number,
   height: number,
+  mode: LogoMode,
   dim = false,
 ): RGB {
-  const base = colorFromLUT(GLOBAL_AMBER_LUT, globalDiagonalT(x, y, width, height))
+  const lut = mode === "light" ? GLOBAL_AMBER_LUT_LIGHT : GLOBAL_AMBER_LUT
+  const base = colorFromLUT(lut, globalDiagonalT(x, y, width, height))
   return dim ? dimReadable(base, 0.24, 5.8) : base
 }
 
@@ -276,8 +300,10 @@ function wordmarkColor(
   sourceY: number,
   width: number,
   height: number,
+  mode: LogoMode,
 ): RGB {
-  return colorFromLUT(WORDMARK_AMBER_LUT, wordmarkT(sourceX, sourceY, width, height))
+  const lut = mode === "light" ? WORDMARK_AMBER_LUT_LIGHT : WORDMARK_AMBER_LUT
+  return colorFromLUT(lut, wordmarkT(sourceX, sourceY, width, height))
 }
 
 function wordmarkShadowColor(
@@ -286,12 +312,14 @@ function wordmarkShadowColor(
   width: number,
   height: number,
   layer: "near" | "mid" | "far",
+  mode: LogoMode,
 ): RGB {
   const baseT = wordmarkT(sourceX, sourceY, width, height)
   const shifted = clamp01(
     baseT + (layer === "far" ? 0.16 : layer === "mid" ? 0.11 : 0.06),
   )
-  const base = colorFromLUT(WORDMARK_AMBER_LUT, shifted)
+  const lut = mode === "light" ? WORDMARK_AMBER_LUT_LIGHT : WORDMARK_AMBER_LUT
+  const base = colorFromLUT(lut, shifted)
 
   // Shadow colors are dimmed aggressively (70-80% toward black) so the bright
   // face pixels are clearly distinguishable from the depth extrusion.
@@ -733,6 +761,7 @@ export function cellColor(
   y: number,
   totalWidth: number,
   totalRows: number,
+  mode: LogoMode = "dark",
 ): RGB {
   const dim = Boolean(cell.dim ?? row.dim)
 
@@ -744,6 +773,7 @@ export function cellColor(
         wordmarkSource.sourceY,
         wordmarkSource.sourceWidth,
         wordmarkSource.sourceHeight,
+        mode,
       )
 
       return dim ? dimReadable(color, 0.2, 6.2) : color
@@ -759,10 +789,11 @@ export function cellColor(
         : wordmarkSource.layer === "wordmarkShadowMid"
           ? "mid"
           : "near",
+      mode,
     )
   }
 
-  return globalGradientColor(x, y, totalWidth, totalRows, dim)
+  return globalGradientColor(x, y, totalWidth, totalRows, mode, dim)
 }
 
 export function logoWidth(rows: LogoRow[], minimum = OUTER_WIDTH): number {
@@ -825,6 +856,7 @@ function GradientRow(props: {
   y: number
   totalRows: number
   totalWidth: number
+  mode: LogoMode
 }) {
   return (
     <box flexDirection="row">
@@ -840,6 +872,7 @@ function GradientRow(props: {
             props.y,
             props.totalWidth,
             props.totalRows,
+            props.mode,
           )
 
           return (
@@ -858,6 +891,7 @@ function GradientRow(props: {
 }
 
 export function Logo(props: LogoProps = {}) {
+  const { mode } = useTheme()
   const rows = createMemo(() => buildLogoRows(props))
   const totalWidth = createMemo(() => logoWidth(rows(), OUTER_WIDTH))
 
@@ -870,6 +904,7 @@ export function Logo(props: LogoProps = {}) {
             y={y()}
             totalRows={rows().length}
             totalWidth={totalWidth()}
+            mode={mode() as LogoMode}
           />
         )}
       </For>
@@ -878,6 +913,7 @@ export function Logo(props: LogoProps = {}) {
 }
 
 export function GoLogo(props: GoLogoProps = {}) {
+  const { mode } = useTheme()
   const rows = createMemo(() => buildGoLogoRows(props))
   const totalWidth = createMemo(() => logoWidth(rows(), 0))
 
@@ -890,6 +926,7 @@ export function GoLogo(props: GoLogoProps = {}) {
             y={y()}
             totalRows={rows().length}
             totalWidth={totalWidth()}
+            mode={mode() as LogoMode}
           />
         )}
       </For>
