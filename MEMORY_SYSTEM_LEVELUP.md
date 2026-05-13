@@ -38,10 +38,10 @@ These constraints are saved as `[[feedback-zyal-jnoccio-only]]` in the claude-op
 
 | Crate | Purpose | LoC | Tests | Notes |
 |---|---|---:|---:|---|
-| `crates/cogcore/` | Rust memory core (WAL + BM25 + Hebbian + FSRS + concepts + topics) | ~2,500 | 30 | northstar=77.63, T0=91.21, hardening=10.00 |
-| `crates/memory-benchmark/` | Trait + 12-axis scorer + suites + reducer | ~5,000 | 88 | 4 reference adapters calibrated [70,90]; QBank fixture mode is `dev_only` |
-| `crates/qbank-builder/` | Real-paper QBank pipeline via Jnoccio | 752 | unit tests | Produces `PaperRecord` + `PaperSection` |
-| `tools/autoresearch/` | Chase orchestrator (T1 GA + T2-T4 scaffolds) | ~22 KiB | 3 | Fresh references, parsed totals, clean-tree checks, dev-only receipts |
+| `crates/cogcore/` | Rust memory core (WAL + BM25 + Hebbian + FSRS + concepts + topics + ingest pipeline + budget/consolidate scaffold) | ~3,400 (was ~2,500) | 44+ | northstar=77.63 post-Track-A, T0=91.21 |
+| `crates/memory-benchmark/` | Trait + 12-axis scorer + suites + reducer + reference real-paper loader | ~5,200 | 91 | 4 reference adapters calibrated [70,90] |
+| `crates/qbank-builder/` | Real-paper QBank pipeline via Jnoccio (B7 emit-cogcore in flight) | 752+ | unit tests | Produces `PaperRecord` + `PaperSection` + JSONL emit |
+| `tools/autoresearch/` | Chase orchestrator (T1 GA + T2-T4 scaffolds + worktree/fresh-refs/clean-tree/disk-budget after Track A) | ~28 KiB | 3 | Invoked by ZYAL `fan_out` blocks |
 
 ### Key files
 
@@ -111,35 +111,40 @@ These constraints are saved as `[[feedback-zyal-jnoccio-only]]` in the claude-op
 
 Post-Track-A snapshot from commit `2617e2a1b`:
 
-| Candidate | Northstar | T0 | T1 | Compounding | Hardening | QBank |
+| Candidate | Northstar | T0 | T1 (120) | Compounding (24) | Hardening (20) | QBank (50) |
 |---|---:|---:|---:|---:|---:|---:|
 | baseline | 73.31 | 61.53 | 80.00 | 89.94 | 10.00 | 100.00 |
 | reference_context_pack | 83.13 | 80.50 | 100.00 | 97.12 | 10.00 | 100.00 |
 | reference_evidence_ledger | 83.00 | 79.30 | 100.00 | 97.12 | 10.00 | 100.00 |
 | reference_claim_skeptic | 82.88 | 78.10 | 100.00 | 97.12 | 10.00 | 100.00 |
-| **cogcore** | **77.63** | **91.21** | **100.00** | **80.00** | **10.00** | **85.64** |
+| **cogcore** | **77.63** | **91.21** | 100.00 | 80.00 | 10.00 | 85.64 |
 
-The old cogcore hardening 100.00 was invalid. Track A fixed the runner so reinforcements arrive between repeated queries; all current adapters now score 10.00 on hardening, exposing a real compression/convergence gap for Track B. QBank remains `dev_only` because the checked-in paper bank has fixture challenges but no redistributable paper JSON.
+> **Calibration commentary:** Track A hardening fix (`runner_generated.rs::run_hardening_case` now observes reinforcement between each of 5 query timesteps) dropped all hardening scores to 10.00 — that's the honest floor. The previous 100.00 was unearned. Every candidate (including the references) currently fails to compress `used_ids`/tokens under reinforcement; the 0.4×support_concentration + 0.3×confidence_growth + 0.2×token_reduction + 0.1×determinism formula bottoms out at the deterministic floor. Compression is a real product gap waiting for B2 consolidation. cogcore lags references on compounding (80 vs 97) due to prior-fixture cell leakage in `run_recall` — diagnosed but deferred to B2 (utility decay + concept tightening). All 4 references stay within [70, 90] northstar calibration band.
 
 ---
 
 ## 4. Codex audit verification
 
-Codex's 9-finding audit, verified file-by-file. **REAL** = must fix, **INTENTIONAL** = not a gap, **PARTIAL** = verify or acknowledge.
+Codex's 9-finding audit, verified file-by-file. All 6 REAL findings are now **FIXED** post-Track-A, plus a BONUS dev_only promotion gate.
 
 | # | Finding | Status | Evidence (file:line) |
 |---|---|---|---|
 | 1 | Hardening returns `Vec<BenchCase>` not `Vec<HardeningCase>` | **FIXED** | Dedicated `HardeningCase` shape and generator are committed. |
 | 2 | Hardening observes all reinforcement events upfront | **FIXED** | Runner now observes base events, recalls five timesteps, and injects four reinforcements between recalls. |
 | 3 | Compounding/topic_hardening axes accidentally activate on T0/T1 | **FIXED** | Tests cover inactive legacy axes unless explicit generated markers exist. |
-| 4 | Reference drift divides by 100.0 — 50-pt drift passes 0.5 gate | **FIXED** | Reducer uses absolute score points. |
-| 5 | `trusted_core_diff = patch.is_some()` — no content inspection | **FIXED** | Reducer validates patch paths and forbidden tokens. |
-| 6 | AutoResearch uses stale root `target/memory-benchmark/reference-*.json` | **FIXED** | Tick runs fresh per-cycle references under `state/reports/references/<cycle>/`. |
-| 7 | Naive `extract_total()` substring search | **FIXED** | AutoResearch parses the top-level JSON object. |
-| 8 | Dirty `rsync -a` from repo_root copies uncommitted code | **FIXED FOR PROMOTION** | Default tick requires clean trusted paths; dirty-source mode is explicitly `dev_only` and non-promotable. |
-| 9 | QBank fabricates papers from answer keys when paper JSON missing | **FIXED FOR PRODUCTION** | Production missing-paper fallback fails; fixture fallback requires `memory_benchmark_dev_qbank=1` and reports `dev_only`. |
+| A1 | Reference drift divides by 100.0 — 50-pt drift passes 0.5 gate | **FIXED** | `chase_report.rs:590` — absolute score points. |
+| A2 | `trusted_core_diff = patch.is_some()` — no content inspection | **FIXED** | `chase_report.rs:601` via `patch_validation_violation_score`. |
+| A3 | Hardening reinforce-between-queries semantics | **FIXED** | `runner_generated.rs::run_hardening_case` rewrite. |
+| A4 | AutoResearch uses stale root `target/memory-benchmark/reference-*.json` | **FIXED (Codex)** | Tick runs fresh per-cycle references under `state/reports/references/<cycle>/`. |
+| A5 | Naive `extract_total()` substring search | **FIXED (Codex)** | AutoResearch parses the top-level JSON object via `memory_benchmark::json` path dep. |
+| A6 | Dirty `rsync -a` from repo_root copies uncommitted code | **FIXED (Codex)** | `git worktree add --detach` replaces rsync. |
+| A7 | Forbidden-token scan in reducer | **FIXED** | `patch_contains_forbidden_token`. |
+| A8 | Per-cycle disk budget (10 GiB cap) | **FIXED (Codex)** | `tools/autoresearch/src/main.rs::cmd_tick`. |
+| A9 | `verify_determinism` covers new suites | **WIRED** | Compounding / hardening / real-papers already plumbed. |
+| A10 | Justfile `chase-*` targets dev-only banner | **FIXED** | `Justfile:427-446`. |
+| BONUS | `dev_only` promotion rejection gate | **DONE (Codex)** | `CandidateSnapshot::dev_only` rejection in reducer. |
 
-Track A closed these findings, but production arming remains blocked by the real-paper/QBank trust gate.
+Track A closed every REAL finding; production arming remains blocked by the real-paper/QBank trust gate, but every safety gate is now a real defense rather than a placeholder.
 
 ---
 
@@ -147,16 +152,17 @@ Track A closed these findings, but production arming remains blocked by the real
 
 | ID | Fix | File:line | Effort | Owner |
 |---|---|---|---:|---|
-| A1 | Drop `/ 100.0` from `reference_drift`; gate = 0.5 absolute score points | `chase_report.rs:590` | 5min + test | claude-opus-4-7 (claimed) |
-| A2 | Replace `trusted_core_diff = patch.is_some()` with patch-path inspection against forbidden allowlist | `chase_report.rs:601` | 2h + tests | claude-opus-4-7 (claimed) |
-| A3 | Real reinforce-between-queries hardening loop (case side done by Codex; runner side remaining) | `runner_generated.rs::score_hardening_case` | 4h + 2 tests | claude-opus-4-7 (runner side, claiming) |
-| A4 | Fresh-per-cycle reference reports inside lane worktree | `tools/autoresearch/src/main.rs:402-407` | 2h | Codex (likely owns this scope) |
-| A5 | Robust `extract_total`: parse top-level object only | `main.rs:623-632` | 1h | Codex |
-| A6 | Clean-tree-only patch via `git worktree add --detach HEAD`; refuse on dirty trusted-paths | `main.rs:322-347` | 3h | Codex |
-| A7 | Forbidden-token scan wired into chase_reduce path | `chase_report.rs::build_chase_outputs`, `tools/autoresearch/src/llm.rs` | 1h | Codex (owns llm.rs) |
-| A8 | Per-cycle disk budget (10 GiB cap) | `tools/autoresearch/src/main.rs::cmd_tick` | 1h | Codex |
-| A9 | `verify_determinism --suite compounding|hardening|real-papers` byte-identical | `crates/memory-benchmark/src/bin/verify_determinism.rs` | 1h | claude-opus-4-7 (claimed) |
-| A10 | Justfile `chase-*` targets explicitly dev-only with banner | `justfile` | 30min | either |
+| A1 | Drop `/ 100.0` from `reference_drift`; gate = 0.5 absolute score points | `chase_report.rs:590` | 5min + test | claude-opus-4-7 ✅ DONE |
+| A2 | Replace `trusted_core_diff = patch.is_some()` with patch-path inspection against forbidden allowlist | `chase_report.rs:601` | 2h + tests | claude-opus-4-7 ✅ DONE |
+| A3 | Real reinforce-between-queries hardening loop (case side done by Codex; runner side remaining) | `runner_generated.rs::run_hardening_case` | 4h + 2 tests | claude-opus-4-7 ✅ DONE |
+| A4 | Fresh-per-cycle reference reports inside lane worktree | `tools/autoresearch/src/main.rs:402-407` | 2h | Codex ✅ DONE |
+| A5 | Robust `extract_total`: parse top-level object only | `main.rs:623-632` | 1h | Codex ✅ DONE |
+| A6 | Clean-tree-only patch via `git worktree add --detach HEAD`; refuse on dirty trusted-paths | `main.rs:322-347` | 3h | Codex ✅ DONE |
+| A7 | Forbidden-token scan wired into chase_reduce path | `chase_report.rs::build_chase_outputs`, `tools/autoresearch/src/llm.rs` | 1h | Codex ✅ DONE |
+| A8 | Per-cycle disk budget (10 GiB cap) | `tools/autoresearch/src/main.rs::cmd_tick` | 1h | Codex ✅ DONE |
+| A9 | `verify_determinism --suite compounding|hardening|real-papers` byte-identical | `crates/memory-benchmark/src/bin/verify_determinism.rs` | 1h | claude-opus-4-7 ✅ DONE |
+| A10 | Justfile `chase-*` targets explicitly dev-only with banner | `Justfile:427-446` | 30min | either ✅ DONE |
+| BONUS | `dev_only` promotion rejection gate | `CandidateSnapshot::dev_only` rejection in reducer | — | Codex ✅ DONE |
 
 **Forbidden-paths allowlist for A2** (patches touching any of these → reject):
 - `crates/memory-benchmark/src/scoring/**`
@@ -213,16 +219,17 @@ New direct safety unit tests (all must pass):
 
 ## 6. Track B — Capability levelup (weeks 2-4)
 
-| ID | Item | Key files | Effort | Depends on |
-|---|---|---|---:|---|
-| B1 | Cogcore ingest pipeline | NEW `crates/cogcore/src/ingest/{mod,paper,equation,theorem}.rs` | 6-8h | A3 |
-| B2 | Consolidation daemon + Budget + Jnoccio backend | NEW `crates/cogcore/src/{consolidate,budget}.rs` | 6h core + 4h Jnoccio | B1 |
-| B3 | Live paper stream ZYAL daemon | NEW `docs/ZYAL/examples/memory-benchmark/cogcore-stream-papers.zyal`, NEW `crates/memory-benchmark/src/bin/cogcore_bench.rs` | 8h | B1, B7 |
-| B4 | `real_paper_chain` compounding fixture-kind | EXTEND `crates/memory-benchmark/src/generated/compounding.rs` | 3h | B1 |
-| B5 | Scale validation (10K cells) | NEW `crates/cogcore/tests/scale_10k.rs` | 4h | none |
-| B6 | `hardening_converges` cogcore test | NEW `crates/cogcore/tests/hardening_converges.rs` | 2h | A3 |
-| B7 | qbank-builder `--emit-cogcore` mode | EXTEND `crates/qbank-builder/src/lib.rs` | 4h | B1 |
-| B8 | autoresearch-chase.zyal updates | UPDATE `docs/ZYAL/examples/memory-benchmark/autoresearch-chase.zyal` | 2h | A1-A10 |
+| ID | Item | Key files | Effort | Depends on | Status |
+|---|---|---|---:|---|---|
+| B1 | Cogcore ingest pipeline | NEW `crates/cogcore/src/ingest/{mod,paper,equation,theorem}.rs` (944 LoC, 10 tests, zero deps) | 6-8h | A3 | ✅ DONE |
+| B2 | Consolidation daemon + Budget + Jnoccio backend | NEW `crates/cogcore/src/{consolidate,budget}.rs`; `ConsolidationBackend` trait + `RuleBackend` | 6h core + 4h Jnoccio | B1 | IN FLIGHT (parallel) |
+| B3 | Live paper stream ZYAL daemon | NEW `docs/ZYAL/examples/memory-benchmark/cogcore-stream-papers.zyal`, NEW `crates/memory-benchmark/src/bin/cogcore_bench.rs` | 8h | B1, B7 | pending |
+| B4 | `real_paper_chain` compounding fixture-kind | EXTEND `crates/memory-benchmark/src/generated/compounding.rs` | 3h | B1 | pending |
+| B5 | Scale validation (10K cells) | NEW `crates/cogcore/tests/scale_10k.rs` (with O(N²) supersession fix — p99 102ms → 7.5ms) | 4h | none | ✅ DONE |
+| B6 | `hardening_converges` cogcore test | NEW `crates/cogcore/tests/hardening_converges.rs` (3 cogcore tests) | 2h | A3 | ✅ DONE |
+| B7 | qbank-builder `--emit-cogcore` mode | EXTEND `crates/qbank-builder/src/lib.rs` | 4h | B1 | IN FLIGHT (Codex) |
+| B8 | autoresearch-chase.zyal updates | UPDATE `docs/ZYAL/examples/memory-benchmark/autoresearch-chase.zyal` | 2h | A1-A10 | pending |
+| — | `chase_report.rs` core.rs file split (audit shape finding cleanup) | `crates/memory-benchmark/src/chase_report.rs` | — | — | IN FLIGHT (parallel) |
 
 **Dependency cycle risk for B1:** cogcore depending on `qbank-builder::PaperRecord` would pull in `serde+regex+sha2`. Two mitigations:
 1. Extract `crates/qbank-types/` (or `qbank-shared/`) zero-deps subcrate with just the record types; both qbank-builder and cogcore depend on it.
@@ -312,9 +319,10 @@ Recommend #1 (cleaner type-level boundary, no inversion).
 7. When Track A is clean: move to Track B with the dependency graph in §6.
 
 Status flags:
-- `[x] A1` ... `[x] A10` — Track A items, updated as they land
-- `[x] B1` ... `[x] B8` — Track B items
-- Calibration band held: yes/no
+- Track A: `[x] A1` `[x] A2` `[x] A3` `[x] A4` `[x] A5` `[x] A6` `[x] A7` `[x] A8` `[x] A9` `[x] A10` `[x] BONUS dev_only promotion gate` — all ✅ DONE
+- Track B: `[x] B1` `[x] B5` `[x] B6` ✅; `[ ] B2` IN FLIGHT (parallel); `[ ] B7` IN FLIGHT (Codex); `[ ] B3` `[ ] B4` `[ ] B8` pending
+- Parallel cleanup: `chase_report.rs` / core.rs file-split IN FLIGHT (audit shape finding)
+- Calibration band held: yes — all 4 reference adapters in [70, 90]
 - chase-daemon armable: no until QBank is non-dev and clean-source AutoResearch passes reference, shadow, and trusted-core gates
 
 ---

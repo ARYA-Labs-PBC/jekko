@@ -1,16 +1,78 @@
 # refs/snapshot.md — Implementation Snapshot
 
-Captured after Phase 1-5 implementation and refreshed after the 2026-05-13 Track A hardening pass in commit `2617e2a1b`. Numbers below come from running each lane on a development machine with the toolchain pinned at Rust 1.95.0.
+Captured after Phase 1-5 implementation and refreshed after the 2026-05-13/14 Track A hardening pass in commit `2617e2a1b` plus the B1 ingest scaffold and B5/B6 follow-on tests. Numbers below come from running each lane on a development machine with the toolchain pinned at Rust 1.95.0.
 
 Correction note: the earlier 90.65 cogcore northstar and 100.00 hardening score were pre-Track-A values. The current benchmark uses reinforce-between-query hardening semantics, production QBank missing-paper failure, fresh AutoResearch references, absolute reference drift, and dev-only promotion rejection.
 
-## Test counts
+## Scoring snapshot (post-Track-A)
+
+| Candidate | Northstar | T0 | T1 (120) | Compounding (24) | Hardening (20) | QBank (50) |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | 73.31 | 61.53 | 80.00 | 89.94 | 10.00 | 100.00 |
+| reference_context_pack | 83.13 | 80.50 | 100.00 | 97.12 | 10.00 | 100.00 |
+| reference_evidence_ledger | 83.00 | 79.30 | 100.00 | 97.12 | 10.00 | 100.00 |
+| reference_claim_skeptic | 82.88 | 78.10 | 100.00 | 97.12 | 10.00 | 100.00 |
+| **cogcore** | **77.63** | **91.21** | 100.00 | 80.00 | 10.00 | 85.64 |
+
+All 4 reference adapters remain within the [70, 90] northstar calibration band. cogcore lags references on compounding (80 vs 97) and QBank (85.64 vs 100.00); honest Track B targets.
+
+## Track A snapshot (2026-05-13/14 audit hardening)
+
+All 6 Codex-flagged safety findings closed. Catastrophic gates (drift /100, trusted_core_diff = patch.is_some()) now real defenses.
+
+| Item | Status | File:line |
+|---|---|---|
+| A1 drift /100 removed | ✅ | chase_report.rs:590 |
+| A2 trusted_core path inspection | ✅ | chase_report.rs:601 + helpers (~1328-1532) |
+| A3 hardening reinforce-between-queries | ✅ | runner_generated.rs::run_hardening_case |
+| A4 fresh-per-cycle ref reports | ✅ | tools/autoresearch/src/main.rs |
+| A5 robust JSON parse | ✅ | autoresearch via memory_benchmark::json path dep |
+| A6 clean-tree-only patch | ✅ | git worktree add replaces rsync |
+| A7 forbidden-token scan in reducer | ✅ | patch_contains_forbidden_token |
+| A8 per-cycle disk budget | ✅ | tools/autoresearch/src/main.rs::cmd_tick |
+| A9 verify_determinism new suites | ✅ | already wired (compounding/hardening/real-papers) |
+| A10 Justfile chase-* dev-only banner | ✅ | Justfile:427-446 |
+| BONUS: dev_only promotion gate | ✅ | Codex — CandidateSnapshot::dev_only rejection |
+
+## Test counts post-Track-A + B1
+
+- memory-benchmark: **91** (was 70 pre-Track-A, +21 new gate/timestep/QBank-dev_only/path-inspection/etc. tests)
+- cogcore: **44** (was 30, +3 hardening_converges, +1 scale_10k, +10 ingest tests)
+- autoresearch: **3** (was 1, +2 Codex)
+- Total: **138 tests green**
 
 | Suite | Count |
 |---|---:|
-| `cargo test --manifest-path crates/memory-benchmark/Cargo.toml --locked --no-fail-fast` | 88 |
-| `cargo test --manifest-path crates/cogcore/Cargo.toml --locked --no-fail-fast` | 30 |
+| `cargo test --manifest-path crates/memory-benchmark/Cargo.toml --locked --no-fail-fast` | 91 |
+| `cargo test --manifest-path crates/cogcore/Cargo.toml --locked --no-fail-fast` | 44 |
 | `cargo test --manifest-path tools/autoresearch/Cargo.toml --locked --no-fail-fast` | 3 |
+
+## Bonus performance fix
+
+`Core::has_supersession_partner` was O(N²) — supersession check iterated all cells per candidate. Fixed to use existing `subject_index` (BTreeMap). p99 recall @ 10K cells release: **102ms → 7.5ms**. Zero API change, determinism preserved.
+
+## B1 ingest scaffold shipped
+
+`crates/cogcore/src/ingest/` (944 LoC, 10 tests, zero new deps):
+
+- `mod.rs` — `IngestBackend` trait
+- `paper.rs` — `IngestedPaper` / `PaperSection` / `SourceSpec` (cogcore-internal mirror types to avoid qbank-builder dep cycle), `RuleBackend`, `parse_jsonl_event` (consumer side of B7's emit contract)
+- `equation.rs` — LaTeX-ish extractor + SI unit normalization
+- `theorem.rs` — Theorem header regex + dependency-DAG scaffold
+
+Handoff contract for B7: JSONL of StoredEvent shape (documented at `AGENT_CHAT.md` ~2026-05-13T23:30Z post). `parse_jsonl_event` round-trip tested.
+
+## Known gaps
+
+- cogcore compounding 80 vs references 97 — root cause diagnosed: prior-fixture cells leak via BM25 token overlap. Quick literal-substring gate caught it (compounding 80→97) but cost 1.90 T0 points (revert). Real fix: B2 utility decay or concept tightening. Deferred.
+- All adapters score 10.00 on hardening — none compress `used_ids` or tokens under reinforcement. Real product gap, awaits B2 consolidation.
+- cogcore QBank 85.64 vs refs 100.00 — likely BM25 tokenization missing surface-form variants. Diagnostic open.
+- Audit score 84 (1 point shy of 85) — file-split refactor in flight to clear soft `:shape` finding.
+
+## Compounding & hardening — what they actually measure now
+
+- **Compounding** suite (24 fixtures, 6 fixture-kinds: math_chain, physics_chain, paper_distillation, procedure_evolution, cross_domain_transfer, poisoned_paper) — multi-event ingest + multi-query reasoning. Score: depth-weighted mean (depth_weights = [1.0, 1.5, 2.25, 3.4]).
+- **Hardening** suite (20 fixtures, 5 timesteps each) — canonical event + 4 reinforcement events observed between each of 5 queries. Score: 0.4*support_concentration + 0.3*confidence_growth + 0.2*token_reduction + 0.1*determinism, gated-to-zero on correctness.
 
 ## Northstar composite (T0 0.10 + T1 0.30 + Compounding 0.20 + Hardening 0.15 + QBank 0.20)
 
