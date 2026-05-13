@@ -2,7 +2,7 @@
 
 5 phases over ~5 weeks. Each phase has a sharp end condition. No phase ships unless its verification gate is green.
 
-**Implementation status (snapshot date 2026-05-13):** Phases 1–4 landed. See `refs/snapshot.md` for measured scores and shipped file list. cogcore northstar = 90.65; references calibrated 89.32–89.52; 70+30+1 = 101 tests green across the three crates.
+**Implementation status (snapshot date 2026-05-13):** Phases 1–5 landed, then the Track A audit hardening pass corrected benchmark semantics and AutoResearch safety gates. See `refs/snapshot.md` for measured scores and shipped file list. Honest post-Track-A cogcore northstar = 77.63; references calibrated 82.88–83.13; 88+30+3 = 121 tests green across the three crates. QBank remains fixture-backed `dev_only`, so `chase-daemon` is not armable.
 
 ## Phase 1 — cogcore skeleton + benchmark wiring (week 1) — ✅ DONE
 
@@ -214,7 +214,7 @@ Goal: 1 cycle of 20-worker chase runs end-to-end. T1+T2+T3+T4 all wired. Shadow 
 
 - Run `chase-tick`.
 - Verify all 20 workers emit `<id>.json` + `<id>.patch`.
-- Verify reducer produces `best-state.json`, `promotion-decision.json`, `negative-memory.jsonl`, `scoreboard.tsv`, `cycle-receipt.json`.
+- Verify reducer produces `best-state.json`, `promotion-decision.json`, `negative-memory.jsonl`, `scoreboard.tsv`, and `receipts/<cycle>.json`.
 
 ### Step 4.5 — T2 + T3 template library
 
@@ -264,7 +264,7 @@ Goal: 1 cycle of 20-worker chase runs end-to-end. T1+T2+T3+T4 all wired. Shadow 
 just chase-tick
 # .jekko/daemon/memory-benchmark-chase/best-state.json exists
 # .jekko/daemon/memory-benchmark-chase/promotion-decision.json exists
-# .jekko/daemon/memory-benchmark-chase/cycle-receipt.json exists
+# .jekko/daemon/memory-benchmark-chase/receipts/<cycle>.json exists
 # scoreboard.tsv has 20 lines
 # negative-memory.jsonl has ≤ 19 entries (some workers may have been promoted)
 
@@ -283,9 +283,23 @@ MEMORY_BENCHMARK_SHADOW_SEED=test-shadow-0001 just chase-tick
 # Receipt shows shadow_score field populated; abs(public - shadow) reported
 ```
 
+### Post-Track-A correction — ✅ DONE
+
+The initial Phase 4 skeleton was not production safe. Track A hardening landed in commit `2617e2a1b` and changed the trust boundary:
+
+- hardening now scores repeated timesteps with reinforcements injected between recalls;
+- QBank production mode fails when redistributable paper JSON is missing;
+- fixture QBank requires `memory_benchmark_dev_qbank=1` and emits `dev_only:true`;
+- AutoResearch runs fresh references per cycle;
+- reducer reference drift is measured in absolute score points;
+- reducer rejects dev-only lanes and trusted-core patch violations;
+- dirty-source AutoResearch runs are explicitly non-promotable.
+
+The chase daemon stays disarmed until QBank is non-dev and a clean-source, non-dev AutoResearch cycle passes shadow/reference/trusted-core gates.
+
 ## Phase 5 — smartmemory/ documentation + final polish (week 6) — ✅ DONE
 
-Goal: documentation matches code. Initial AutoResearch run lands a successful promotion.
+Goal: documentation matches code. Initial AutoResearch run produces a trustworthy promotion decision; promotion is allowed only when non-dev gates pass.
 
 ### Steps
 
@@ -294,15 +308,50 @@ Goal: documentation matches code. Initial AutoResearch run lands a successful pr
 3. Update `smartmemory/02-cogcore-design.md` with actual line numbers from the implemented code.
 4. Update `smartmemory/refs/critical-files.md` with final paths.
 5. Run a clean north-star (cogcore on baseline) and capture the JSON in `smartmemory/refs/baseline-northstar-snapshot.json`.
-6. Run a chase smoke (1 cycle), capture `cycle-receipt.json` in `smartmemory/refs/`.
+6. Run a chase smoke (1 cycle), capture `receipts/<cycle>.json` in `smartmemory/refs/`.
 
 ### Phase 5 verification gate
 
 - All 11 files in `smartmemory/` reference actual file paths and line numbers (no stale references).
 - One AutoResearch cycle has run cleanly without aborts.
-- One promotion has landed (or, if none promoted, the negative-memory log explains why).
+- One promotion has landed only if non-dev gates pass; otherwise the promotion decision and negative-memory log explain the rejection.
 
-## Phase 6+ (post-roadmap, optional)
+## Phase 6 — Track B capability levelup (current)
+
+Goal: recover capability after honest scoring by improving cogcore rather than weakening benchmark gates.
+
+### Active work split
+
+- Claude owns `crates/cogcore/**` Track B work: audit cleanup, compounding diagnostic, 10K scale test, hardening convergence test, and ingest scaffold.
+- Codex owns non-overlapping B8/docs work: `autoresearch-chase.zyal` contract update and stale snapshot refresh.
+
+### Track B work packets
+
+| ID | Item | Status |
+|---|---|---|
+| B1 | cogcore ingest pipeline | claimed by Claude |
+| B2 | consolidation backend + budget trait | open after B1 |
+| B3 | cogcore stream papers ZYAL + bench binary | open after B1/B7 |
+| B4 | real-paper-chain compounding fixture kind | open after B1 |
+| B5 | 10K scale validation | claimed by Claude |
+| B6 | hardening_converges cogcore test | claimed by Claude |
+| B7 | qbank-builder `--emit-cogcore` mode | open after B1 type contract |
+| B8 | autoresearch chase ZYAL gate update | in progress by Codex |
+
+### Phase 6 verification gate
+
+```bash
+cargo test --manifest-path crates/cogcore/Cargo.toml --locked --no-fail-fast
+cargo test --manifest-path crates/memory-benchmark/Cargo.toml --locked --no-fail-fast
+cargo test --manifest-path tools/autoresearch/Cargo.toml --locked --no-fail-fast
+just memory-benchmark-fast
+just memory-benchmark-new-suite-determinism cogcore
+just memory-benchmark-northstar cogcore
+```
+
+Phase 6 is not done until cogcore has meaningful hardening convergence evidence and QBank trust provenance is either real/non-dev or explicitly blocked from promotion.
+
+## Phase 7+ (post-roadmap, optional)
 
 Future work, deliberately deferred:
 
@@ -321,8 +370,10 @@ These are tracked but not gated.
 Phase 1 ──┐
 Phase 2 ──┤── must complete before Phase 4
 Phase 3 ──┘
-Phase 4 ────── ends when chase-tick runs clean + promotion landed
-Phase 5 ────── parallel with Phase 4
+Phase 4 ────── ended with skeleton only
+Phase 5 ────── docs and initial receipts
+Track A ────── corrected safety gates; chase stays disarmed while QBank is dev-only
+Track B ────── cogcore capability recovery and real-paper trust path
 ```
 
 Phases 1-2 are sequential (cogcore must exist before AutoResearch can mutate it). Phase 3 (benchmark extension) can run in parallel with Phase 2 (cogcore real) — they touch different files. Phase 4 (AutoResearch) requires both 2 and 3 complete. Phase 5 (docs) shadows Phase 4.
@@ -338,5 +389,6 @@ Estimated total: 5-6 weeks of focused work for a 1-2 person team. Solo, 8-10 wee
 | 3 | Calibration drift on references after trimming weights | Run baseline through full T0 before changing axes |
 | 4 | Worktree creation fails on macOS for sparse-checkout | Test worktree+sparse on dev machine before scripting |
 | 5 | docs go stale faster than they update | Run `just memory-benchmark-northstar` after every commit |
+| Track A/B | dev-only QBank accidentally treated as trusted | Require `dev_only:false`, 50 real accepted papers, fresh references, and reducer rejection evidence |
 
 Phase-end commits should land on a branch off main, not directly on main, until the full chase smoke is green.

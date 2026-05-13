@@ -1,7 +1,7 @@
 # MEMORY_SYSTEM_LEVELUP.md — Codex Handoff
 
 **Authors:** claude-opus-4-7 (2026-05-13 session) + Codex (concurrent author per `AGENT_CHAT.md`)
-**Status:** Phase 5 shipped (cogcore northstar 90.65, 101 tests). Track A (safety) + Track B (capability) plans approved. Implementation in flight by both authors via `AGENT_CHAT.md` coordination.
+**Status:** Phase 5 shipped, then Track A safety hardening landed in commit `2617e2a1b`. Honest post-Track-A cogcore northstar is 77.63, QBank is fixture-backed `dev_only`, and `chase-daemon` remains disarmed. Track B capability work is now split through `AGENT_CHAT.md`.
 **Plan file:** `~/.claude/plans/can-you-please-do-curried-sparrow.md` — "Curried Sparrow II"
 **Design corpus:** `smartmemory/` (00-audit through 08-glossary + refs/)
 **Coordination:** `AGENT_CHAT.md` at repo root
@@ -38,10 +38,10 @@ These constraints are saved as `[[feedback-zyal-jnoccio-only]]` in the claude-op
 
 | Crate | Purpose | LoC | Tests | Notes |
 |---|---|---:|---:|---|
-| `crates/cogcore/` | Rust memory core (WAL + BM25 + Hebbian + FSRS + concepts + topics) | ~2,500 | 30 | northstar=90.65, T0=90.80 |
-| `crates/memory-benchmark/` | Trait + 12-axis scorer + suites + reducer | ~5,000 | 70+ | 4 reference adapters calibrated [70,90] |
+| `crates/cogcore/` | Rust memory core (WAL + BM25 + Hebbian + FSRS + concepts + topics) | ~2,500 | 30 | northstar=77.63, T0=91.21, hardening=10.00 |
+| `crates/memory-benchmark/` | Trait + 12-axis scorer + suites + reducer | ~5,000 | 88 | 4 reference adapters calibrated [70,90]; QBank fixture mode is `dev_only` |
 | `crates/qbank-builder/` | Real-paper QBank pipeline via Jnoccio | 752 | unit tests | Produces `PaperRecord` + `PaperSection` |
-| `tools/autoresearch/` | Chase orchestrator (T1 GA + T2-T4 scaffolds) | ~22 KiB | 1 | Invoked by ZYAL `fan_out` blocks |
+| `tools/autoresearch/` | Chase orchestrator (T1 GA + T2-T4 scaffolds) | ~22 KiB | 3 | Fresh references, parsed totals, clean-tree checks, dev-only receipts |
 
 ### Key files
 
@@ -109,15 +109,17 @@ These constraints are saved as `[[feedback-zyal-jnoccio-only]]` in the claude-op
 
 ### Scoring snapshot (development machine, warm cache)
 
-| Candidate | Northstar | T0 | T1 (500) | Compounding | Hardening |
-|---|---:|---:|---:|---:|---:|
-| baseline | 74.52 | 57.47 | 60.00 | varies | varies |
-| reference_context_pack | 89.52 | 79.96 | 100.00 | varies | varies |
-| reference_evidence_ledger | 89.37 | 78.76 | varies | varies | varies |
-| reference_claim_skeptic | 89.32 | 77.56 | varies | varies | varies |
-| **cogcore** | **90.65** | **90.80** | 100.00 | 60.00 | 100.00 |
+Post-Track-A snapshot from commit `2617e2a1b`:
 
-**Note:** cogcore hardening = 100.00 is suspect — see Codex Finding 2 below. Track A3 fix is expected to lower this to a more honest number once reinforce-between-queries is enforced. Calibration drift on cogcore is acceptable (it's not a reference anchor); calibration drift on the four references is a hard gate.
+| Candidate | Northstar | T0 | T1 | Compounding | Hardening | QBank |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | 73.31 | 61.53 | 80.00 | 89.94 | 10.00 | 100.00 |
+| reference_context_pack | 83.13 | 80.50 | 100.00 | 97.12 | 10.00 | 100.00 |
+| reference_evidence_ledger | 83.00 | 79.30 | 100.00 | 97.12 | 10.00 | 100.00 |
+| reference_claim_skeptic | 82.88 | 78.10 | 100.00 | 97.12 | 10.00 | 100.00 |
+| **cogcore** | **77.63** | **91.21** | **100.00** | **80.00** | **10.00** | **85.64** |
+
+The old cogcore hardening 100.00 was invalid. Track A fixed the runner so reinforcements arrive between repeated queries; all current adapters now score 10.00 on hardening, exposing a real compression/convergence gap for Track B. QBank remains `dev_only` because the checked-in paper bank has fixture challenges but no redistributable paper JSON.
 
 ---
 
@@ -127,17 +129,17 @@ Codex's 9-finding audit, verified file-by-file. **REAL** = must fix, **INTENTION
 
 | # | Finding | Status | Evidence (file:line) |
 |---|---|---|---|
-| 1 | Hardening returns `Vec<BenchCase>` not `Vec<HardeningCase>` | **INTENTIONAL → FIXED BY CODEX** | `case.rs:80-87` now has dedicated `HardeningCase` shape; `generated/hardening.rs:18` returns `Vec<HardeningCase>` |
-| 2 | Hardening observes all reinforcement events upfront | **REAL** | `runner_generated.rs::score_hardening_case` loops `for step in 0..5 { recall_case() }` without intervening observes |
-| 3 | Compounding/topic_hardening axes accidentally activate on T0/T1 | **PARTIAL** | `scorer.rs:301-365` uses explicit markers; need passive activation test to confirm |
-| 4 | Reference drift divides by 100.0 — 50-pt drift passes 0.5 gate | **REAL CRITICAL** | `chase_report.rs:590` — `(selected_score - reference.score_key()).abs() / 100.0` |
-| 5 | `trusted_core_diff = patch.is_some()` — no content inspection | **REAL CRITICAL** | `chase_report.rs:601` — exactly that; gate at line 611 passes any patch |
-| 6 | AutoResearch uses stale root `target/memory-benchmark/reference-*.json` | **REAL** | `tools/autoresearch/src/main.rs:402-407` reads pre-existing files at repo root, not freshly generated |
-| 7 | Naive `extract_total()` substring search | **REAL** | `main.rs:623-632` `json.find("\"total\":")` returns first occurrence (could be nested fixture-level) |
-| 8 | Dirty `rsync -a` from repo_root copies uncommitted code | **REAL** | `main.rs:322-347` excludes only `.git` + `target`; any unstaged edits ship to worker |
-| 9 | QBank fabricates papers from answer keys when paper JSON missing | **INTENTIONAL** | `corpus/real_papers/score.rs::fixture_paper_from_challenge` is named, documented, fallback-only |
+| 1 | Hardening returns `Vec<BenchCase>` not `Vec<HardeningCase>` | **FIXED** | Dedicated `HardeningCase` shape and generator are committed. |
+| 2 | Hardening observes all reinforcement events upfront | **FIXED** | Runner now observes base events, recalls five timesteps, and injects four reinforcements between recalls. |
+| 3 | Compounding/topic_hardening axes accidentally activate on T0/T1 | **FIXED** | Tests cover inactive legacy axes unless explicit generated markers exist. |
+| 4 | Reference drift divides by 100.0 — 50-pt drift passes 0.5 gate | **FIXED** | Reducer uses absolute score points. |
+| 5 | `trusted_core_diff = patch.is_some()` — no content inspection | **FIXED** | Reducer validates patch paths and forbidden tokens. |
+| 6 | AutoResearch uses stale root `target/memory-benchmark/reference-*.json` | **FIXED** | Tick runs fresh per-cycle references under `state/reports/references/<cycle>/`. |
+| 7 | Naive `extract_total()` substring search | **FIXED** | AutoResearch parses the top-level JSON object. |
+| 8 | Dirty `rsync -a` from repo_root copies uncommitted code | **FIXED FOR PROMOTION** | Default tick requires clean trusted paths; dirty-source mode is explicitly `dev_only` and non-promotable. |
+| 9 | QBank fabricates papers from answer keys when paper JSON missing | **FIXED FOR PRODUCTION** | Production missing-paper fallback fails; fixture fallback requires `memory_benchmark_dev_qbank=1` and reports `dev_only`. |
 
-**Two findings (4, 5) are catastrophic for the AutoResearch trust model**: the reducer's promotion gate is currently passable with arbitrary score drift and arbitrary patch content. **No ZYAL-armed chase should run until A1 + A2 land.**
+Track A closed these findings, but production arming remains blocked by the real-paper/QBank trust gate.
 
 ---
 
@@ -279,7 +281,7 @@ Recommend #1 (cleaner type-level boundary, no inversion).
 
 | Phase | Window | Deliverable |
 |---|---|---|
-| 6 | week 1 | Track A1-A10 complete. ZYAL chase-arming gate cleared. |
+| 6 | week 1 | Track A1-A10 complete; chase remains disarmed until non-dev QBank. |
 | 7 | week 2 | B1 (cogcore ingest) + B6 (hardening_converges) + B4 (real_paper_chain). |
 | 8 | week 3 | B2 (consolidate + budget + Jnoccio backend) + B5 (scale validation). |
 | 9 | week 4 | B3 (live paper stream ZYAL) + B7 (qbank emit-cogcore) + B8 (autoresearch-chase ZYAL update). |
@@ -291,7 +293,7 @@ Recommend #1 (cleaner type-level boundary, no inversion).
 
 1. **Jnoccio Rust SDK** — if no callable from cogcore, defer `JnoccioBackend`, ship trait + RuleBackend.
 2. **qbank-builder dependency cycle** — extract `qbank-types` no-deps subcrate.
-3. **Calibration drift after hardening fix** — cogcore hardening currently 100.00 is suspect; A3 fix may drop it. Recalibrate via `cogcore/src/config.rs` (T1-mutable).
+3. **Capability gap after hardening fix** — cogcore hardening is now honestly measured at 10.00. Track B should improve convergence/compression behavior rather than retune benchmark weights.
 4. **ZYAL contract drift** — `zyal-spec-check` Justfile target catches Jekko-parse failures.
 5. **Forbidden-token scanner false positives** — scan code-only, skip `//` comments.
 6. **Disk budget false positives in CI** — tune for cold-cache cargo target (4-8 GiB); raise via ZYAL if needed.
@@ -313,7 +315,7 @@ Status flags:
 - `[x] A1` ... `[x] A10` — Track A items, updated as they land
 - `[x] B1` ... `[x] B8` — Track B items
 - Calibration band held: yes/no
-- chase-daemon armable: no until A1 + A2 + A5 + A6 + A7 all green
+- chase-daemon armable: no until QBank is non-dev and clean-source AutoResearch passes reference, shadow, and trusted-core gates
 
 ---
 
@@ -323,6 +325,7 @@ Status flags:
 2. Jnoccio Rust client — does it exist at `crates/jnoccio-fusion/` or similar, or is Jnoccio invocation strictly ZYAL-mediated?
 3. Real-paper corpus — is the current `data/real-paper-bank/` a checked-in fixture, or will it be populated by a ZYAL daemon (qbank-advanced or cogcore-stream-papers) at runtime?
 4. AutoResearch tier policy — for early shakedown cycles, prefer T1-only (config sweeps), or open T2/T3 once trusted-core gate is solid?
+5. Should the fixture QBank stay checked in as a dev smoke fixture after a real redistributable paper bank lands?
 
 These don't block Track A. They shape Track B scoping.
 
@@ -330,6 +333,6 @@ These don't block Track A. They shape Track B scoping.
 
 ## 12. Single-line summary
 
-cogcore Phase 1-5 shipped → Codex audit found 6 real safety gaps (2 catastrophic) → Track A fixes them in week 1, Track B then lands real paper ingestion + Jnoccio consolidation + cogcore-stream-papers ZYAL in weeks 2-4 → AutoResearch arming gate cleared at end of Track A → northstar target 92+ at end of Track B.
+cogcore Phase 1-5 shipped → Codex/Claude audit found and fixed Track A safety gaps → honest post-Track-A cogcore northstar is 77.63 with hardening 10.00 and QBank `dev_only` → Track B now targets paper ingestion, consolidation, hardening convergence, scale validation, and trusted real-paper QBank before `chase-daemon` can be armed.
 
 — claude-opus-4-7 (2026-05-13)
