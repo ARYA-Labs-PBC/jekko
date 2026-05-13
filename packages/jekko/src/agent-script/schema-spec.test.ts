@@ -1,14 +1,36 @@
 import { describe, expect, test } from "bun:test"
+import { spawnSync } from "child_process"
 import { readFileSync } from "fs"
 import path from "path"
 import { assertKnownZyalKeys, renderZyalSpecMarkdown, ZYAL_SCHEMA_SPEC, ZYAL_TOP_LEVEL_KEYS } from "./schema-spec"
 import { ZYAL_CONTRACT_VERSION, ZYAL_RESEARCH_BLOCK_VERSION, ZYAL_RUNTIME_SENTINEL_VERSION } from "./version"
 
+const repoRoot = path.resolve(import.meta.dir, "../../../../")
 const specPath = path.resolve(import.meta.dir, "../../../../docs/ZYAL/SPEC.md")
+const examplesReadmePath = path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/README.md")
 
 describe("ZYAL schema spec", () => {
   test("generated spec is current", () => {
     expect(readFileSync(specPath, "utf8")).toBe(`${renderZyalSpecMarkdown()}\n`)
+  })
+
+  test("generator writes the canonical spec", () => {
+    const result = spawnSync("bun", ["--cwd", "packages/jekko", "./script/generate-zyal-spec.ts", "--write"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("wrote docs/ZYAL/SPEC.md")
+    expect(readFileSync(specPath, "utf8")).toBe(`${renderZyalSpecMarkdown()}\n`)
+  })
+
+  test("examples README stays on the documented count and includes the new bug-finder rows", () => {
+    const readme = readFileSync(examplesReadmePath, "utf8")
+    expect(readme).toContain("Twenty-four flagship runbooks")
+    expect(readme.match(/^\| \[`/gm)?.length).toBe(24)
+    expect(readme).toContain("[`18-semantic-bug-finder-basic.zyal`](18-semantic-bug-finder-basic.zyal)")
+    expect(readme).toContain("[`19-semantic-bug-finder-advanced.zyal`](19-semantic-bug-finder-advanced.zyal)")
+    expect(readme).toContain("[`20-semantic-bug-finder-ultra.zyal`](20-semantic-bug-finder-ultra.zyal)")
   })
 
   test("version metadata matches version.ts", () => {
