@@ -1,0 +1,193 @@
+# ZYAL v2.6 - Paper QBank Simple
+
+<<<ZYAL v1:daemon id=paper-qbank-simple>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Paper QBank simple"
+  objective: |
+    Build a smoke-sized native paper QBank from one redistributable open-access
+    paper. Generate hard answerable questions, verify them with focused agents,
+    reject model-only answers, validate the checked-in bank, and run the
+    real-paper memory benchmark with top-50 selection.
+  risk:
+    - Full text may be checked in only when the license permits redistribution
+    - Answer keys must never appear in benchmark memory observations
+    - Runtime receipts stay under .jekko/daemon/paper-qbank-simple
+
+loop:
+  policy: once
+  continue_on: [compaction]
+  pause_on: [checkpoint_failed]
+
+stop:
+  all:
+    - shell:
+        command: "test -d crates/memory-benchmark/data/real-paper-bank"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+permissions:
+  research: allow
+  websearch: allow
+  webfetch: allow
+  edit: ask
+
+research:
+  version: v1
+  mode: academic
+  autonomy: require_plan
+  max_parallel: 2
+  timeout_seconds: 45
+  provider_policy:
+    prefer: [official_api, primary_source, privacy_first]
+    allow: [openalex, crossref, arxiv, pubmed, semantic_scholar, unpaywall]
+    missing_provider: skip_with_receipt
+  extraction:
+    enabled: true
+    max_pages: 1
+    allowed_extractors: [built_in, jina]
+  evidence:
+    require_citations: true
+    claim_level: true
+    store: sqlite
+  safety:
+    redact_secrets: true
+    block_internal_urls: true
+    prompt_injection: quarantine
+    taint_label: web_content
+  budgets:
+    max_queries: 4
+    max_pages: 2
+    max_cost_usd: 0.50
+  paper_scan:
+    enabled: true
+    domains: [science, math]
+    queries: ["open access paper with concise theorem or result"]
+    open_access: required
+    max_papers: 1
+    output_root: crates/memory-benchmark/data/real-paper-bank/papers
+    raw_receipts: .jekko/daemon/paper-qbank-simple/discovery
+  full_text:
+    enabled: true
+    store: checked_in_json
+    raw_receipts: .jekko/daemon/paper-qbank-simple/full-text
+    extraction_receipts: .jekko/daemon/paper-qbank-simple/reports/extraction
+    license_policy: public_license_only
+  dedupe:
+    enabled: true
+    state_root: crates/memory-benchmark/data/real-paper-bank/papers
+    duplicate_policy: skip_existing
+    hash_keys: [doi, arxiv, pmid, pmcid, openalex, url, content_hash]
+  context_packing:
+    strategy: hard
+    target_fill_ratio: 0.82
+    output_reserve_tokens: 4096
+    safe_window_tokens: 128000
+  question_bank:
+    output_root: crates/memory-benchmark/data/real-paper-bank
+    papers_root: crates/memory-benchmark/data/real-paper-bank/papers
+    challenges_root: crates/memory-benchmark/data/real-paper-bank/challenges
+    rejected_root: crates/memory-benchmark/data/real-paper-bank/rejected
+    work_items:
+      - id: smoke-generator
+        publication_hash: pending
+        role: question_generator
+    acceptance:
+      min_auditor_agreement: 0.75
+      min_answerability: 0.90
+      max_blind_correct_rate_for_hard: 0.50
+      reject_if_ambiguous: true
+  agent_trials:
+    question_generators: 2
+    answerers: 2
+    model_profile: builder
+  audit:
+    critics: 1
+    focused_auditors: 1
+    min_auditor_agreement: 0.75
+    min_answerability: 0.90
+
+fleet:
+  max_workers: 2
+  isolation: same_session
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    spawn_on_demand: false
+    register_workers: false
+    max_instances: 2
+
+fan_out:
+  strategy: scatter_gather
+  split:
+    shell: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- make-work --bank crates/memory-benchmark/data/real-paper-bank --out .jekko/daemon/paper-qbank-simple/work.jsonl"
+  worker:
+    agent: build
+    isolation: same_session
+    timeout: 30m
+    max_parallel: 2
+  reduce:
+    strategy: custom_shell
+    command: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- publish --bank crates/memory-benchmark/data/real-paper-bank && cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty --top-n 50"
+  on_partial_failure: continue
+
+experiments:
+  strategy: disjoint_tournament
+  lanes:
+    - id: qbank_smoke
+      hypothesis: "One-paper smoke path validates hashes, support, and answer-key non-leakage."
+      prompt_strategy: paper_qbank_smoke
+      agent: build
+      model: builder
+      isolation: same_session
+      timeout: 30m
+      budget: { max_iterations: 3, max_diff_lines: 500, max_cost_usd: 1.00 }
+  max_parallel: 1
+  scoring:
+    primary: executable_rust_oracles
+    goal_direction: maximize
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+
+models:
+  profiles:
+    builder:
+      provider: jnoccio
+      model: jnoccio-fusion
+      reasoning: true
+    critic:
+      provider: jnoccio
+      model: jnoccio-fusion
+      reasoning: true
+  routes:
+    build: builder
+    judge: critic
+
+sandbox:
+  paths:
+    - path: crates/memory-benchmark/data/real-paper-bank
+      access: write
+    - path: .jekko/daemon/paper-qbank-simple
+      access: write
+  network:
+    outbound: allow
+
+done:
+  require:
+    - qbank_validate_passed
+    - real_paper_top_50_scored
+  forbid:
+    - model_only_claim
+    - answer_key_observed
+
+checkpoint:
+  verify:
+    - command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty --top-n 50"
+      timeout: 2m
+      assert: { exit_code: 0 }
+<<<END_ZYAL id=paper-qbank-simple>>>
+ZYAL_ARM RUN_FOREVER id=paper-qbank-simple

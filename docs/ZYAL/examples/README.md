@@ -1,6 +1,6 @@
 # ZYAL Powerful Examples
 
-Thirty-one flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
+Thirty-four flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
 
 | File | Demonstrates | Power blocks |
 |---|---|---|
@@ -35,6 +35,9 @@ Thirty-one flagship runbooks that show what ZYAL v2.6 makes possible. Each is a 
 | [`memory-benchmark/executable-benchmark.zyal`](memory-benchmark/executable-benchmark.zyal) | Deterministic Rust harness scoring for baseline, candidate, and reference memory systems | `fan_out`, `experiments`, `evidence`, `sandbox`, `observability` |
 | [`memory-benchmark/autoresearch-chase.zyal`](memory-benchmark/autoresearch-chase.zyal) | Advanced sandboxed AutoResearch tournament with 20 lanes, persistent best-state promotion, and reducer state | `fan_out`, `experiments`, `memory`, `research`, `sandbox`, `evidence`, `observability` |
 | [`memory-benchmark/generated-challenge.zyal`](memory-benchmark/generated-challenge.zyal) | Seeded generated public/private memory benchmark challenge with seed commitments | `evidence`, `permissions`, `done`, `security` |
+| [`memory-benchmark/qbank-simple.zyal`](memory-benchmark/qbank-simple.zyal) | Smoke native paper-QBank generation for one redistributable paper with top-50 real-paper scoring | `research.question_bank`, `fan_out`, `fleet.jnoccio`, `checkpoint` |
+| [`memory-benchmark/qbank-advanced.zyal`](memory-benchmark/qbank-advanced.zyal) | Production native paper-QBank workflow with discovery, hashing, tournament generation, audit, validation, and top-100 scoring | `research`, `research.question_bank`, `experiments`, `memory`, `observability` |
+| [`memory-benchmark/qbank-ultra.zyal`](memory-benchmark/qbank-ultra.zyal) | Full-power QBank showcase with dispatch, incubator retries, taint quarantine, sandbox controls, budgets, and ask-before-push checkpointing | `dispatch`, `research.question_bank`, `incubator`, `taint`, `sandbox`, `security`, `budgets` |
 
 ## Running an example
 

@@ -30,6 +30,10 @@ pub struct SuiteConfig {
     pub difficulty: u8,
     pub context_budget: u32,
     pub paper_bank_path: Option<String>,
+    pub qbank_top_n: usize,
+    pub qbank_selection_path: Option<String>,
+    pub qbank_topic_focus: Option<String>,
+    pub safe_window_tokens: u32,
 }
 
 impl Default for SuiteConfig {
@@ -42,6 +46,10 @@ impl Default for SuiteConfig {
             difficulty: 2,
             context_budget: 4096,
             paper_bank_path: None,
+            qbank_top_n: 100,
+            qbank_selection_path: None,
+            qbank_topic_focus: None,
+            safe_window_tokens: 128000,
         }
     }
 }

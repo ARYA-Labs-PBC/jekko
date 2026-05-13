@@ -19,6 +19,7 @@ pub(crate) mod json_parser;
 pub mod memory_api;
 pub mod oracle;
 pub mod population_memory;
+pub mod qbank_hash;
 pub mod report;
 pub mod result;
 pub mod runner;

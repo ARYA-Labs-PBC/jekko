@@ -770,7 +770,11 @@ fn snapshot_from_candidate_like(
     let total = json_number(obj, "total").unwrap_or(0.0);
     let ci95_low_raw = json_number_in(obj, &["bootstrap_ci", "ci95_low"]);
     let ci95_low = if let Some(v) = ci95_low_raw {
-        if v < total { total } else { v }
+        if v < total {
+            total
+        } else {
+            v
+        }
     } else {
         total
     };

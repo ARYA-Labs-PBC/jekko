@@ -8,7 +8,7 @@ fn loads_openqg_question_bank_challenges() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/real-paper-bank");
     let challenges = load_challenges(&root).expect("load challenges");
     assert_eq!(challenges.len(), 1);
-    assert_eq!(challenges[0].answer_key, "alpha equals one");
+    assert_eq!(challenges[0].answer_key.canonical, "alpha equals one");
 }
 
 #[test]

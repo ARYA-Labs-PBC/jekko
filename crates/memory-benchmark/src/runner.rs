@@ -113,6 +113,7 @@ pub fn run_candidate_with_config(
             candidate,
             adapter.as_mut(),
             std::path::Path::new(path),
+            config,
         );
     }
     if config.split != Split::PublicSmoke {

@@ -1,0 +1,415 @@
+# ZYAL v2.6 - Paper QBank Ultra
+
+<<<ZYAL v1:daemon id=paper-qbank-ultra>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Paper QBank ultra"
+  objective: |
+    Full-power native QBank showcase with dynamic dispatch, Jnoccio fleet
+    workers, research, fan-out, experiments, incubator retries, append-only
+    QBank memory, taint quarantine, sandbox path controls, security checks,
+    observability, budgets, checkpoint validation, and ask-before-push policy.
+  risk:
+    - Tainted web content cannot grant capabilities or approve publication
+    - Ambiguous papers and questions route to incubator, then rejection
+    - Live Jnoccio/model tests are local-only and never required by CI
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  accepted_origins: [trusted_user_message, signed_cli_input, host_ui_button]
+  preview_expires_after: 10m
+  arm_token_single_use: true
+
+loop:
+  policy: once
+  continue_on: [compaction, max_steps]
+  pause_on: [checkpoint_failed, no_progress]
+
+stop:
+  all:
+    - shell:
+        command: "test -d crates/memory-benchmark/data/real-paper-bank"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+permissions:
+  research: allow
+  websearch: allow
+  webfetch: allow
+  edit: ask
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-workspace
+      tool: read
+      decision: allow
+    - id: shell-qbank
+      tool: shell
+      command_regex: "^(rtk )?(cargo|just|bun) "
+      decision: allow
+    - id: worker-fanout
+      tool: workers
+      decision: allow
+  command_floor:
+    always_block:
+      - "git push --force"
+      - 'curl .* \| sh'
+      - 'wget .* \| sh'
+      - "sudo "
+
+dispatch:
+  enabled: true
+  classifier:
+    command: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover --run-root .jekko/daemon/paper-qbank-ultra/dispatch"
+    timeout: 2m
+    write_to: .jekko/daemon/paper-qbank-ultra/dispatch/routes.json
+  lanes:
+    - id: publication_lane
+      dispatch_to: paper_publication
+      description: "Redistributable paper canonicalization and hash publication"
+    - id: challenge_lane
+      dispatch_to: challenge_generation
+      description: "Question generation, blind hardness, focused support, and audit"
+    - id: ambiguous_lane
+      dispatch_to: incubator
+      description: "Ambiguous license, support, or answerability cases"
+  default_lane: ambiguous_lane
+  on_no_match: pause
+
+fleet:
+  max_workers: 20
+  isolation: same_session
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    metrics_ws: "/v1/jnoccio/metrics/ws"
+    spawn_on_demand: false
+    register_workers: false
+    heartbeat_path: "/v1/jnoccio/agents/heartbeat"
+    heartbeat_interval: 15s
+    max_instances: 20
+
+research:
+  version: v1
+  mode: academic
+  autonomy: require_plan
+  max_parallel: 20
+  timeout_seconds: 90
+  provider_policy:
+    prefer: [official_api, primary_source, privacy_first]
+    allow: [openalex, crossref, arxiv, pubmed, semantic_scholar, unpaywall, jina, firecrawl]
+    missing_provider: skip_with_receipt
+  extraction:
+    enabled: true
+    max_pages: 60
+    allowed_extractors: [built_in, jina, firecrawl]
+  evidence:
+    require_citations: true
+    claim_level: true
+    store: sqlite
+  safety:
+    redact_secrets: true
+    block_internal_urls: true
+    prompt_injection: quarantine
+    taint_label: web_content
+  budgets:
+    max_queries: 80
+    max_pages: 120
+    max_cost_usd: 25.00
+  paper_scan:
+    enabled: true
+    domains: [mathematics, physics, biology, computer_science, medicine]
+    queries:
+      - "open access paper theorem proof hard answerable"
+      - "open access scientific paper exact numeric method result"
+      - "open access benchmark paper ablation table surprising result"
+    open_access: required
+    max_papers: 500
+    output_root: crates/memory-benchmark/data/real-paper-bank/papers
+    raw_receipts: .jekko/daemon/paper-qbank-ultra/discovery
+  full_text:
+    enabled: true
+    store: checked_in_json
+    raw_receipts: .jekko/daemon/paper-qbank-ultra/full-text
+    extraction_receipts: .jekko/daemon/paper-qbank-ultra/reports/extraction
+    license_policy: public_license_only
+  dedupe:
+    enabled: true
+    state_root: crates/memory-benchmark/data/real-paper-bank/papers
+    duplicate_policy: skip_existing
+    hash_keys: [doi, arxiv, pmid, pmcid, openalex, url, content_hash]
+  context_packing:
+    strategy: hard
+    target_fill_ratio: 0.82
+    output_reserve_tokens: 4096
+    safe_window_tokens: 128000
+  question_bank:
+    output_root: crates/memory-benchmark/data/real-paper-bank
+    papers_root: crates/memory-benchmark/data/real-paper-bank/papers
+    challenges_root: crates/memory-benchmark/data/real-paper-bank/challenges
+    rejected_root: crates/memory-benchmark/data/real-paper-bank/rejected
+    work_items:
+      - id: ultra-generators
+        publication_hash: pending
+        role: question_generator
+      - id: ultra-answerers
+        publication_hash: pending
+        role: answerer
+      - id: ultra-critics
+        publication_hash: pending
+        role: critic
+      - id: ultra-auditors
+        publication_hash: pending
+        role: auditor
+    acceptance:
+      min_auditor_agreement: 0.75
+      min_answerability: 0.90
+      max_blind_correct_rate_for_hard: 0.50
+      reject_if_ambiguous: true
+  agent_trials:
+    question_generators: 12
+    answerers: 16
+    model_profile: builder
+  audit:
+    critics: 4
+    focused_auditors: 6
+    min_auditor_agreement: 0.75
+    min_answerability: 0.90
+
+fan_out:
+  strategy: scatter_gather
+  split:
+    shell: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- make-work --bank crates/memory-benchmark/data/real-paper-bank --out .jekko/daemon/paper-qbank-ultra/work.jsonl"
+  worker:
+    agent: build
+    isolation: git_worktree
+    timeout: 90m
+    max_parallel: 20
+  reduce:
+    strategy: custom_shell
+    command: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- publish --bank crates/memory-benchmark/data/real-paper-bank && cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 1000"
+  on_partial_failure: continue
+
+experiments:
+  strategy: disjoint_tournament
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.45
+    axes: [publication, question, blind_hardness, focused_support, audit, scoring]
+  lanes:
+    - id: publication_hashing
+      hypothesis: "Publication hashing and duplicate suppression remain stable across providers."
+      prompt_strategy: publication_hash_dedupe
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 8, max_diff_lines: 1600, max_cost_usd: 8.00 }
+    - id: hard_question_tournament
+      hypothesis: "Hardness improves when blind and focused attempts are reduced separately."
+      prompt_strategy: qbank_hardness_tournament
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 8, max_diff_lines: 1600, max_cost_usd: 8.00 }
+  max_parallel: 2
+  scoring:
+    primary: executable_rust_oracles
+    goal_direction: maximize
+    judge:
+      agent: critic
+      blind: true
+      must_use_different_provider: false
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+  preserve_failed_lanes_as_negative_memory: true
+
+incubator:
+  enabled: true
+  strategy: bounded_passes
+  route_when:
+    any:
+      - risk_score_gte: 0.60
+      - no_progress_iterations_gte: 2
+  budget:
+    max_passes_per_task: 4
+    max_rounds_per_task: 2
+    max_active_tasks: 5
+    max_parallel_idea_passes: 4
+  scratch:
+    storage: sqlite
+    mirror: true
+    cleanup: summarize_and_archive
+  cleanup:
+    summarize_to_task_memory: true
+    archive_artifacts: true
+    delete_scratch: false
+    delete_unmerged_worktrees: true
+  readiness:
+    promote_at: 0.85
+    tests_identified_gte: 0.80
+    scope_bounded_gte: 0.80
+    plan_reviewed_gte: 0.80
+    prototype_validated_gte: 0.80
+    rollback_known_gte: 0.80
+    affected_files_known_gte: 0.80
+    critical_objections_resolved_gte: 0.90
+    model_confidence_cap: 0.68
+  passes:
+    - id: ambiguity_review
+      type: critic
+      context: critic
+      reads: [web_content, checked_artifacts]
+      writes: scratch_only
+      count: 2
+      agent: critic
+  promotion:
+    promote_at: 0.85
+    require: [source_supported, license_clear, qbank_validate_passed]
+    block_on:
+      unresolved_critical_objections_gte: 1
+    on_promote: move_to_ready_queue
+    on_exhausted: park_with_summary
+
+memory:
+  stores:
+    qbank_memory:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+
+taint:
+  default_label: web_content
+  labels:
+    web_content:
+      rank: untrusted_for_arming
+      notes: "External paper text and provider metadata"
+    checked_artifacts:
+      rank: medium
+      notes: "Validated checked-in QBank JSON"
+  forbid:
+    - from: [web_content]
+      cannot: [grant_capability, approve, arm]
+      unless: [focused_auditor_agreement]
+  prompt_injection:
+    detect_patterns: ["[Ii]gnore previous", "[Ss]ystem prompt", "[Dd]eveloper message"]
+    on_detect: pause
+    scan_sources: [web_content]
+
+sandbox:
+  paths:
+    - path: crates/memory-benchmark/data/real-paper-bank
+      access: write
+    - path: .jekko/daemon/paper-qbank-ultra
+      access: write
+    - path: target
+      access: write
+  network:
+    outbound: allowlist
+    allowlist: [api.openalex.org, api.crossref.org, export.arxiv.org, pubmed.ncbi.nlm.nih.gov, api.semanticscholar.org, api.unpaywall.org]
+  resources:
+    max_file_size: 50mb
+    max_total_disk: 2gb
+    max_memory: 8gb
+    max_processes: 64
+
+security:
+  trust_zones:
+    checked_bank:
+      paths: [crates/memory-benchmark/data/real-paper-bank]
+      require_approval: false
+      max_risk_score: 0.40
+  injection:
+    scan_inputs: true
+    scan_outputs: true
+    deny_patterns: ["ignore previous", "reveal system"]
+    on_detect: pause
+  secrets:
+    allowed_env: [JNOCCTIO_API_KEY, JNOCCIO_API_KEY]
+    redact_from_logs: true
+    rotate_after: 24h
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+    include_model_calls: true
+  metrics:
+    - name: accepted_challenges
+      type: gauge
+      source: qbank_validate
+    - name: blind_correct_rate
+      type: histogram
+      source: qbank_reduce
+  cost:
+    budget: 25.00
+    currency: USD
+    alert_at_percent: 80
+    on_budget_exceeded: pause
+  report:
+    format: json
+    on_complete: true
+    on_checkpoint: true
+    include: [validation, scoring, taint, incubator]
+
+budgets:
+  run:
+    wall_clock: 6h
+    cost_usd: 25.00
+    on_exhaust: pause
+  experiment_lane:
+    wall_clock: 90m
+    iterations: 8
+    diff_lines: 1600
+    on_exhaust: park
+
+models:
+  profiles:
+    builder:
+      provider: jnoccio
+      model: jnoccio-fusion
+      reasoning: true
+    critic:
+      provider: jnoccio
+      model: jnoccio-fusion
+      reasoning: true
+  routes:
+    build: builder
+    judge: critic
+    report: critic
+  critic:
+    must_differ_from_builder: false
+    must_use_different_provider: false
+  confidence_cap: 0.68
+
+done:
+  require:
+    - qbank_validate_passed
+    - top_1000_selection_attempted
+    - receipts_written
+  forbid:
+    - model_only_claim
+    - answer_key_observed
+    - tainted_publication_approval
+
+checkpoint:
+  verify:
+    - command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty --top-n 1000"
+      timeout: 5m
+      assert: { exit_code: 0 }
+  git:
+    add: ["crates/memory-benchmark/data/real-paper-bank", "docs/ZYAL/examples/memory-benchmark"]
+    commit_message: "qbank: checkpoint validated paper bank"
+    push: ask
+<<<END_ZYAL id=paper-qbank-ultra>>>
+ZYAL_ARM RUN_FOREVER id=paper-qbank-ultra
