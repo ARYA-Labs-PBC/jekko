@@ -44,6 +44,11 @@ fn percentile(mut nanos: Vec<u128>, p: f64) -> u128 {
     nanos[idx]
 }
 
+// Performance assertion: skipped in dev profile (cargo test) where
+// recall p99 is dominated by debug-overhead. Always runs in release
+// (cargo test --release). Run explicitly with:
+//   cargo test --manifest-path crates/cogcore/Cargo.toml --release scale_10k
+#[cfg_attr(debug_assertions, ignore)]
 #[test]
 fn scale_10k_ingest_then_recall_under_budget() {
     let mut core = Core::default();
