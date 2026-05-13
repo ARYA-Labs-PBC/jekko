@@ -841,6 +841,11 @@ fn score_compounding_case(result: &RecallResult, case: &BenchCase) -> GeneratedO
             stages.push(control_ok);
             stages.push(warning_ok);
         }
+        "real_paper_chain" => {
+            stages.push(include_ok);
+            stages.push(contain_ok);
+            stages.push(result.used_ids.len() >= 3);
+        }
         _ => {
             stages.push(score_generated_result(result, case) >= 0.50);
         }
@@ -1050,6 +1055,8 @@ fn compounding_kind_from_id(id: &str) -> &'static str {
         "math_chain"
     } else if id.ends_with("-physics") {
         "physics_chain"
+    } else if id.ends_with("-real-paper") {
+        "real_paper_chain"
     } else if id.ends_with("-paper") {
         "paper_distillation"
     } else if id.ends_with("-proc") {
@@ -1071,6 +1078,7 @@ fn compounding_depth_weight(kind: &str) -> f32 {
         "procedure_evolution" => 3.4,
         "cross_domain_transfer" => 1.5,
         "poisoned_paper" => 2.25,
+        "real_paper_chain" => 3.4,
         _ => 1.0,
     }
 }
@@ -1083,6 +1091,7 @@ fn compounding_hop_depth(kind: &str) -> u32 {
         "procedure_evolution" => 2,
         "cross_domain_transfer" => 2,
         "poisoned_paper" => 2,
+        "real_paper_chain" => 4,
         _ => 1,
     }
 }

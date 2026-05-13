@@ -2,13 +2,14 @@
 //! Compounding suite — multi-hop chain reasoning over an ingest stream.
 //!
 //! Each case ingests N related events, then asks a query whose answer
-//! requires traversing them. Six fixture-kinds rotate by `idx % 6`:
+//! requires traversing them. Seven fixture-kinds rotate by `idx % 7`:
 //!   * `math_chain`            — 3-hop arithmetic
 //!   * `physics_chain`         — unit conversion across events
 //!   * `paper_distillation`    — multi-section paper + citing paper
 //!   * `procedure_evolution`   — workflow mutation with supersession
 //!   * `cross_domain_transfer` — math fact applied in physics question
 //!   * `poisoned_paper`        — high-quality fact + low-quality contradiction
+//!   * `real_paper_chain`      — paper sections + downstream citation chain
 //!
 //! Pure-Rust oracles; no LLM. Determinism inherits from `SeedRng`.
 
@@ -105,6 +106,8 @@ fn compounding_kind(id: &str) -> &'static str {
         "math_chain"
     } else if id.ends_with("-physics") {
         "physics_chain"
+    } else if id.ends_with("-real-paper") {
+        "real_paper_chain"
     } else if id.ends_with("-paper") {
         "paper_distillation"
     } else if id.ends_with("-proc") {
@@ -126,6 +129,7 @@ fn compounding_depth_weight(kind: &str) -> f32 {
         "procedure_evolution" => 3.4,
         "cross_domain_transfer" => 1.5,
         "poisoned_paper" => 2.25,
+        "real_paper_chain" => 3.4,
         _ => 1.0,
     }
 }
@@ -138,6 +142,7 @@ fn compounding_hop_depth(kind: &str) -> u8 {
         "procedure_evolution" => 2,
         "cross_domain_transfer" => 2,
         "poisoned_paper" => 2,
+        "real_paper_chain" => 4,
         _ => 1,
     }
 }
@@ -187,13 +192,14 @@ fn standard_steps() -> Vec<EpisodeStep> {
 }
 
 fn case_at(rng: &mut SeedRng, idx: usize) -> BenchCase {
-    match idx % 6 {
+    match idx % 7 {
         0 => math_chain(rng, idx),
         1 => physics_chain(rng, idx),
         2 => paper_distillation(rng, idx),
         3 => procedure_evolution(rng, idx),
         4 => cross_domain_transfer(rng, idx),
-        _ => poisoned_paper(rng, idx),
+        5 => poisoned_paper(rng, idx),
+        _ => real_paper_chain(rng, idx),
     }
 }
 
@@ -543,6 +549,91 @@ fn poisoned_paper(rng: &mut SeedRng, idx: usize) -> BenchCase {
             required_warnings: vec!["contradicted".to_string()],
             expected_answer: None,
             max_used_ids: 4,
+            max_context_tokens: 2048,
+        },
+    }
+}
+
+fn real_paper_chain(rng: &mut SeedRng, idx: usize) -> BenchCase {
+    let delta = rng.range(12, 48) as i64;
+    let subject = format!("open paper RP{}", idx);
+    let abstract_id = format!("g-{:05}-rpc-abstract", idx);
+    let method_id = format!("g-{:05}-rpc-method", idx);
+    let result_id = format!("g-{:05}-rpc-result", idx);
+    let review_id = format!("g-{:05}-rpc-review", idx);
+    let abstract_ev = event(
+        &abstract_id,
+        EventKind::Claim,
+        &subject,
+        format!(
+            "Abstract of {}: adaptive retrieval is evaluated for long-context paper memory.",
+            subject
+        ),
+        format!("2026-08-{:02}T00:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    let method_ev = event(
+        &method_id,
+        EventKind::Claim,
+        &subject,
+        format!(
+            "Methods of {}: contrastive section packing links theorem statements, equations, and result tables.",
+            subject
+        ),
+        format!("2026-08-{:02}T01:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    let result_ev = event(
+        &result_id,
+        EventKind::Experiment,
+        &subject,
+        format!(
+            "Results of {}: contrastive section packing reduces retrieval error by {} percent.",
+            subject, delta
+        ),
+        format!("2026-08-{:02}T02:00:00Z", idx % 28 + 1),
+        0.96,
+    );
+    let review_ev = event(
+        &review_id,
+        EventKind::Claim,
+        &subject,
+        format!(
+            "A downstream survey cites {} and concludes adaptive retrieval improves paper memory because contrastive section packing reduces retrieval error by {} percent.",
+            subject, delta
+        ),
+        format!("2026-08-{:02}T05:00:00Z", idx % 28 + 1),
+        0.93,
+    );
+    BenchCase {
+        id: format!("{}-{:05}-real-paper", Split::PublicCompounding.name(), idx),
+        block: FixtureBlock::RecallCurrent,
+        domain: Domain::Science,
+        pathologies: vec![Pathology::CompressionDrift],
+        public_bench: vec![PublicBench::ScienceMemoryBench],
+        events: vec![abstract_ev, method_ev, result_ev, review_ev],
+        steps: standard_steps(),
+        query: Some(Query {
+            text: format!(
+                "Why does the downstream survey say {} improves paper memory?",
+                subject
+            ),
+            intent: QueryIntent::Citation,
+            mentions: vec![subject.clone()],
+            token_budget: 2048,
+        }),
+        lens: TemporalLens::Current,
+        world_time: None,
+        tx_time: None,
+        oracle: CaseOracle {
+            kind: OracleKind::Compounding,
+            must_include: vec![method_id, result_id, review_id],
+            must_exclude: vec![],
+            must_contain: vec!["contrastive section packing".to_string(), delta.to_string()],
+            must_not_contain: vec![],
+            required_warnings: vec![],
+            expected_answer: None,
+            max_used_ids: 6,
             max_context_tokens: 2048,
         },
     }
