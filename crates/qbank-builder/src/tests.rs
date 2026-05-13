@@ -225,3 +225,27 @@ fn cogcore_events_are_deterministic_and_omit_answer_keys() {
     assert!(!jsonl.contains("secret answer key should not leak"));
     assert!(!jsonl.contains("rejected answer should not leak"));
 }
+
+#[test]
+fn read_challenges_skips_directory_manifest() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let challenge_dir = root.path().join("challenges");
+    std::fs::create_dir_all(&challenge_dir).expect("challenge dir");
+
+    let paper = canonicalize_paper(sample_paper()).expect("paper");
+    let challenge = accepted_challenge(&paper, "alpha equals one", true);
+    write_json_pretty(
+        &challenge_dir.join(format!("{}.json", challenge.challenge_hash)),
+        &challenge,
+    )
+    .expect("challenge write");
+    std::fs::write(
+        challenge_dir.join("manifest.json"),
+        "[{\"challenge_hash\":\"fixture-manifest-entry\"}]\n",
+    )
+    .expect("manifest write");
+
+    let loaded = read_challenges(root.path()).expect("read challenges");
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].challenge_hash, challenge.challenge_hash);
+}

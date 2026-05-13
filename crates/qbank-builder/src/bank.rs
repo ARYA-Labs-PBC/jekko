@@ -110,6 +110,9 @@ pub fn read_challenges(root: &Path) -> Result<Vec<ChallengeRecord>, String> {
     collect_json_files(&challenge_root, &mut paths)?;
     let mut out = Vec::new();
     for path in paths {
+        if path.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
+            continue;
+        }
         out.push(read_json(&path)?);
     }
     Ok(out)
