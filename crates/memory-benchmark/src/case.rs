@@ -7,6 +7,10 @@ pub enum Split {
     PrivateGenerated,
     Stress,
     RealPapers,
+    /// Multi-hop chain reasoning suite (v3 north-star).
+    PublicCompounding,
+    /// 5-timestep repeated-query convergence suite (v3 north-star).
+    PublicHardening,
 }
 
 impl Split {
@@ -17,6 +21,8 @@ impl Split {
             Split::PrivateGenerated => "private-generated",
             Split::Stress => "stress",
             Split::RealPapers => "real-papers",
+            Split::PublicCompounding => "public-compounding",
+            Split::PublicHardening => "public-hardening",
         }
     }
 }
@@ -105,6 +111,10 @@ pub enum OracleKind {
     Provenance,
     Workflow,
     Metamorphic,
+    /// Multi-hop chain — used by `Split::PublicCompounding`.
+    Compounding,
+    /// Repeated-query convergence — used by `Split::PublicHardening`.
+    Hardening,
 }
 
 impl From<&crate::fixture::Fixture> for BenchCase {

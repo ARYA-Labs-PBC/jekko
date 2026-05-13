@@ -2,11 +2,12 @@ use super::super::model::{
     wanted_section_ids, LoadedChallenge, NumericTolerance, PaperChallenge, PaperRecord,
     PaperSection,
 };
-use crate::{
-    AxisScores, ClaimModality, Event, EventKind, MemorySystem, PrivacyClass, Source,
-};
+use crate::{AxisScores, ClaimModality, Event, EventKind, MemorySystem, PrivacyClass, Source};
 
-pub(crate) fn observe_paper(adapter: &mut dyn MemorySystem, loaded: &LoadedChallenge) -> Result<(), String> {
+pub(crate) fn observe_paper(
+    adapter: &mut dyn MemorySystem,
+    loaded: &LoadedChallenge,
+) -> Result<(), String> {
     let challenge = &loaded.challenge;
     let paper = match &loaded.paper {
         Some(paper) => paper.clone(),
@@ -83,7 +84,11 @@ fn fixture_paper_from_challenge(challenge: &PaperChallenge) -> PaperRecord {
     }
 }
 
-pub(crate) fn grade_answer(answer: &str, used_ids: &[String], challenge: &PaperChallenge) -> AxisScores {
+pub(crate) fn grade_answer(
+    answer: &str,
+    used_ids: &[String],
+    challenge: &PaperChallenge,
+) -> AxisScores {
     let answer_lower = answer.to_ascii_lowercase();
     let mut required = challenge.answer_key.must_include.clone();
     if required.is_empty() {
@@ -173,6 +178,8 @@ pub(crate) fn grade_answer(answer: &str, used_ids: &[String], challenge: &PaperC
         procedural_skill: f32::NAN,
         feedback_adaptation: f32::NAN,
         determinism_rebuild: f32::NAN,
+        compounding: f32::NAN,
+        topic_hardening: f32::NAN,
     }
 }
 
@@ -227,6 +234,12 @@ pub(crate) fn weighted_average_total(avg: &AxisScores, counts: &AxisScores) -> f
             avg.determinism_rebuild,
             w.determinism_rebuild,
             counts.determinism_rebuild,
+        ),
+        (avg.compounding, w.compounding, counts.compounding),
+        (
+            avg.topic_hardening,
+            w.topic_hardening,
+            counts.topic_hardening,
         ),
     ];
     let mut sum = 0.0_f32;

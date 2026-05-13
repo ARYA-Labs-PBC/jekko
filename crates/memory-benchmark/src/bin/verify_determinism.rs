@@ -21,11 +21,36 @@ fn main() {
             "--suite" => {
                 if let Some(value) = args.get(i + 1) {
                     config.split = match value.as_str() {
+                        "public-generated" => Split::PublicGenerated,
                         "generated" => Split::PublicGenerated,
+                        "private-generated" => Split::PrivateGenerated,
                         "stress" => Split::Stress,
                         "public" => Split::PublicSmoke,
+                        "real-papers" => Split::RealPapers,
+                        "compounding" => Split::PublicCompounding,
+                        "hardening" => Split::PublicHardening,
                         _ => config.split,
                     };
+                }
+                i += 2;
+            }
+            "--paper-bank" => {
+                config.paper_bank_path = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--qbank-top-n" => {
+                if let Some(value) = args.get(i + 1).and_then(|v| v.parse::<usize>().ok()) {
+                    config.qbank_top_n = value;
+                }
+                i += 2;
+            }
+            "--qbank-selection" => {
+                config.qbank_selection_path = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--context-budget" => {
+                if let Some(value) = args.get(i + 1).and_then(|v| v.parse::<u32>().ok()) {
+                    config.context_budget = value;
                 }
                 i += 2;
             }

@@ -11,6 +11,7 @@ use crate::runner::CandidateReport;
 use crate::runner_support::{accumulate, average, weighted_fraction};
 use crate::{AxisScores, MemorySystem, Query, QueryIntent, SuiteConfig};
 use std::collections::BTreeMap;
+use std::env;
 use std::path::Path;
 
 pub fn default_bank_path() -> &'static Path {
@@ -62,6 +63,13 @@ pub fn run_candidate(
         return Err(format!(
             "no accepted challenge JSON found under {}",
             bank.display()
+        ));
+    }
+    if loaded.len() < 50 && env::var("memory_benchmark_dev_qbank").ok().as_deref() != Some("1") {
+        return Err(format!(
+            "real-papers bank at {} has only {} accepted challenges (need 50 unless memory_benchmark_dev_qbank=1)",
+            bank.display(),
+            loaded.len()
         ));
     }
 

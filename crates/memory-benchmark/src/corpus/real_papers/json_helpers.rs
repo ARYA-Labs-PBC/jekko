@@ -58,7 +58,10 @@ pub(crate) fn optional_f32(obj: &BTreeMap<String, Json>, key: &str) -> Option<f3
     }
 }
 
-pub(crate) fn required_array<'a>(obj: &'a BTreeMap<String, Json>, key: &str) -> Result<&'a [Json], String> {
+pub(crate) fn required_array<'a>(
+    obj: &'a BTreeMap<String, Json>,
+    key: &str,
+) -> Result<&'a [Json], String> {
     required_array_value(required(obj, key)?, key)
 }
 
@@ -70,7 +73,10 @@ pub(crate) fn required_array_value<'a>(value: &'a Json, key: &str) -> Result<&'a
 }
 
 pub(crate) fn optional_string_array(obj: &BTreeMap<String, Json>, key: &str) -> Vec<String> {
-    match obj.get(key).and_then(|value| required_array_value(value, key).ok()) {
+    match obj
+        .get(key)
+        .and_then(|value| required_array_value(value, key).ok())
+    {
         Some(items) => items
             .iter()
             .filter_map(as_str)

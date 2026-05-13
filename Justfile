@@ -364,24 +364,59 @@ qbank-builder-test:
 # redistributable paper artifacts are intentionally published.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 qbank-validate:
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 50
 
 # Real-paper QBank benchmark lane against the checked-in bank.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 memory-benchmark-real-papers:
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty --top-n 100
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/tests/fixtures/real-paper-bank --qbank-top-n 100 --out target/memory-benchmark/real-paper-fixture.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out target/memory-benchmark/real-paper-fixture.json
 
 # Smoke top-50 QBank selection path for the default checked-in bank.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 memory-benchmark-qbank-smoke:
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --allow-empty --top-n 50
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 50
+
+# North-star composite: T0 + T1 + compounding + hardening + qbank → score_mix.
+# Targets < 5 min wall clock on commodity hardware (warm cache).
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+memory-benchmark-northstar candidate="baseline":
+	mkdir -p target/memory-benchmark/northstar
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate {{candidate}} --suite public --out target/memory-benchmark/northstar/t0.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate {{candidate}} --suite generated --seed {{memory_benchmark_seed}} --fixtures 120 --out target/memory-benchmark/northstar/t1.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate {{candidate}} --suite compounding --seed compound-public-0001 --fixtures 24 --out target/memory-benchmark/northstar/compounding.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate {{candidate}} --suite hardening --seed harden-public-0001 --fixtures 20 --out target/memory-benchmark/northstar/hardening.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate {{candidate}} --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 50 --out target/memory-benchmark/northstar/qbank.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin score_mix -- --name northstar --input t0:0.10:target/memory-benchmark/northstar/t0.json --input t1:0.30:target/memory-benchmark/northstar/t1.json --input compounding:0.20:target/memory-benchmark/northstar/compounding.json --input hardening:0.15:target/memory-benchmark/northstar/hardening.json --input qbank:0.20:target/memory-benchmark/northstar/qbank.json --out target/memory-benchmark/northstar.json
+
+# Run northstar twice and byte-compare for determinism.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+memory-benchmark-northstar-determinism candidate="baseline":
+	just memory-benchmark-northstar {{candidate}}
+	cp target/memory-benchmark/northstar.json target/memory-benchmark/northstar.first.json
+	rm -rf target/memory-benchmark/northstar
+	just memory-benchmark-northstar {{candidate}}
+	cmp target/memory-benchmark/northstar.first.json target/memory-benchmark/northstar.json
+
+# Byte-compare the newer generated suites and real-paper path.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+memory-benchmark-new-suite-determinism candidate="cogcore":
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin verify_determinism -- --candidate {{candidate}} --suite compounding --seed compound-public-0001 --fixtures 36
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin verify_determinism -- --candidate {{candidate}} --suite hardening --seed harden-public-0001 --fixtures 30
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin verify_determinism -- --candidate {{candidate}} --suite private-generated --seed private-dev-0001 --fixtures 60
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin verify_determinism -- --candidate {{candidate}} --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 50
+
+# Shadow suite: candidate vs private seed (env-driven; commitment, not seed value, may be committed).
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+memory-benchmark-shadow candidate="cogcore":
+	mkdir -p target/memory-benchmark
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate {{candidate}} --suite generated --seed ${MEMORY_BENCHMARK_PRIVATE_SEED:-private-default-0001} --fixtures 60 --out target/memory-benchmark/shadow.json
 
 # Mix generated and QBank reports deterministically.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 memory-benchmark-score-mix:
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate baseline --suite generated --seed {{memory_benchmark_seed}} --fixtures 25 --out target/memory-benchmark/baseline-generated-smoke.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/tests/fixtures/real-paper-bank --qbank-top-n 50 --out target/memory-benchmark/real-paper-fixture.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 50 --out target/memory-benchmark/real-paper-fixture.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin score_mix -- --name smoke --input generated:0.60:target/memory-benchmark/baseline-generated-smoke.json --input qbank:0.40:target/memory-benchmark/real-paper-fixture.json --out target/memory-benchmark/mixed-fixture.json
 
 # LOCAL ONLY: live QBank/Jnoccio smoke. Requires local Jnoccio credentials and
@@ -389,19 +424,38 @@ memory-benchmark-score-mix:
 qbank-live-local:
 	cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover --query "open access hard answerable scientific paper" --run-root .jekko/daemon/paper-qbank-live-local/discovery
 
+# AutoResearch orchestrator: seed the chase state directory.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+chase-seed:
+	cargo run --manifest-path tools/autoresearch/Cargo.toml --bin autoresearch -- seed
+
+# AutoResearch orchestrator: run one cycle of N workers.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+chase-tick workers="4" candidate="cogcore":
+	cargo run --manifest-path tools/autoresearch/Cargo.toml --bin autoresearch -- tick --workers {{workers}} --candidate {{candidate}}
+
+# AutoResearch orchestrator: loop until paused.flag / aborted.flag.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+chase-daemon workers="4" candidate="cogcore":
+	cargo run --manifest-path tools/autoresearch/Cargo.toml --bin autoresearch -- daemon --workers {{workers}} --candidate {{candidate}}
+
+# Strict reducer lane for the current chase state.
+chase-reduce:
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin chase_reduce -- --lanes .jekko/daemon/memory-benchmark-chase/reports/lanes --current-best-state .jekko/daemon/memory-benchmark-chase/best-state.json --current-candidates .jekko/daemon/memory-benchmark-chase/reports/lanes --scoreboard .jekko/daemon/memory-benchmark-chase/scoreboard.tsv --best-state .jekko/daemon/memory-benchmark-chase/best-state.json --promotion-decision .jekko/daemon/memory-benchmark-chase/promotion-decision.json --negative-memory .jekko/daemon/memory-benchmark-chase/negative-memory.jsonl --curriculum .jekko/daemon/memory-benchmark-chase/curriculum-proposals.json --best-patch .jekko/daemon/memory-benchmark-chase/best.patch --out .jekko/daemon/memory-benchmark-chase/reports/final-score.json --markdown .jekko/daemon/memory-benchmark-chase/reports/final-score.md
+
 # Chase preflight lane for the sandboxed AutoResearch memory benchmark.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 memory-benchmark-chase-preflight:
 	mkdir -p .jekko/daemon/memory-benchmark-chase/preflight-candidates
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin generate_suite -- --split public-dev --seed {{memory_benchmark_seed}} --fixtures 500 --out target/memory-benchmark/generated-public-dev.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate ledger_first --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate ledger_first --suite real-papers --paper-bank crates/memory-benchmark/tests/fixtures/real-paper-bank --qbank-top-n 100 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first-qbank.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate ledger_first --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first-qbank.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin score_mix -- --name ledger_first --input generated:0.60:.jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json --input qbank:0.40:.jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first-qbank.json --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate hybrid_index --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/hybrid_index.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate temporal_graph --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/temporal_graph.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate compression_first --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/compression_first.json
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate skeptic_dataset --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/skeptic_dataset.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin population_report -- --current-candidates .jekko/daemon/memory-benchmark-chase/preflight-candidates --best-state .jekko/daemon/memory-benchmark-chase/best-state.json --scoreboard .jekko/daemon/memory-benchmark-chase/scoreboard.tsv --promotion-decision .jekko/daemon/memory-benchmark-chase/promotion-decision.json --negative-memory .jekko/daemon/memory-benchmark-chase/negative-memory.jsonl --curriculum .jekko/daemon/memory-benchmark-chase/curriculum-proposals.json --best-patch .jekko/daemon/memory-benchmark-chase/best.patch --out .jekko/daemon/memory-benchmark-chase/reports/final-score.json --markdown .jekko/daemon/memory-benchmark-chase/reports/final-score.md
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin chase_reduce -- --lanes .jekko/daemon/memory-benchmark-chase/preflight-candidates --current-best-state .jekko/daemon/memory-benchmark-chase/best-state.json --current-candidates .jekko/daemon/memory-benchmark-chase/preflight-candidates --scoreboard .jekko/daemon/memory-benchmark-chase/scoreboard.tsv --best-state .jekko/daemon/memory-benchmark-chase/best-state.json --promotion-decision .jekko/daemon/memory-benchmark-chase/promotion-decision.json --negative-memory .jekko/daemon/memory-benchmark-chase/negative-memory.jsonl --curriculum .jekko/daemon/memory-benchmark-chase/curriculum-proposals.json --best-patch .jekko/daemon/memory-benchmark-chase/best.patch --out .jekko/daemon/memory-benchmark-chase/reports/final-score.json --markdown .jekko/daemon/memory-benchmark-chase/reports/final-score.md
 
 # Composed memory-benchmark fast lane.
 memory-benchmark-fast: memory-benchmark-check memory-benchmark-test memory-benchmark-determinism

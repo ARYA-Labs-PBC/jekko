@@ -1,5 +1,7 @@
-use super::model::{stable_challenge_hash, stable_section_hash, BankValidation, ContextPack, PaperChallenge};
-use super::parse::{collect_json_files, read_challenge, read_paper};
+use super::model::{
+    stable_challenge_hash, stable_section_hash, BankValidation, ContextPack, PaperChallenge,
+};
+use super::parse::{collect_json_files, read_challenges, read_paper};
 use crate::qbank_hash::sha256_hex;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -50,28 +52,30 @@ pub fn validate_bank(
     let mut accepted = Vec::new();
     let mut seen_challenges = BTreeSet::new();
     for path in &challenge_paths {
-        match read_challenge(path) {
-            Ok(challenge) => {
-                if !seen_challenges.insert(challenge.challenge_hash.clone()) {
-                    result
-                        .errors
-                        .push(format!("duplicate challenge {}", challenge.challenge_hash));
+        match read_challenges(path) {
+            Ok(challenges) => {
+                for challenge in challenges {
+                    if !seen_challenges.insert(challenge.challenge_hash.clone()) {
+                        result
+                            .errors
+                            .push(format!("duplicate challenge {}", challenge.challenge_hash));
+                    }
+                    if let Err(err) = validate_challenge_hash(&challenge) {
+                        result.errors.push(format!("{}: {err}", path.display()));
+                    }
+                    if let Err(err) = validate_acceptance(&challenge) {
+                        result.errors.push(format!("{}: {err}", path.display()));
+                    }
+                    if challenge.context_pack.estimated_tokens
+                        > context_token_budget(&challenge.context_pack)
+                    {
+                        result.errors.push(format!(
+                            "{}: context pack exceeds token limit",
+                            path.display()
+                        ));
+                    }
+                    accepted.push(challenge);
                 }
-                if let Err(err) = validate_challenge_hash(&challenge) {
-                    result.errors.push(format!("{}: {err}", path.display()));
-                }
-                if let Err(err) = validate_acceptance(&challenge) {
-                    result.errors.push(format!("{}: {err}", path.display()));
-                }
-                if challenge.context_pack.estimated_tokens
-                    > context_token_budget(&challenge.context_pack)
-                {
-                    result.errors.push(format!(
-                        "{}: context pack exceeds token limit",
-                        path.display()
-                    ));
-                }
-                accepted.push(challenge);
             }
             Err(err) => result.errors.push(err),
         }

@@ -1,0 +1,444 @@
+//! Compounding suite — multi-hop chain reasoning over an ingest stream.
+//!
+//! Each case ingests N related events, then asks a query whose answer
+//! requires traversing them. Six fixture-kinds rotate by `idx % 6`:
+//!   * `math_chain`            — 3-hop arithmetic
+//!   * `physics_chain`         — unit conversion across events
+//!   * `paper_distillation`    — multi-section paper + citing paper
+//!   * `procedure_evolution`   — workflow mutation with supersession
+//!   * `cross_domain_transfer` — math fact applied in physics question
+//!   * `poisoned_paper`        — high-quality fact + low-quality contradiction
+//!
+//! Pure-Rust oracles; no LLM. Determinism inherits from `SeedRng`.
+
+use crate::case::{BenchCase, CaseOracle, EpisodeStep, OracleKind, Split};
+use crate::{
+    ClaimModality, Domain, Event, EventKind, FixtureBlock, Pathology, PrivacyClass, PublicBench,
+    Query, QueryIntent, Source, TemporalLens,
+};
+
+use super::seed::SeedRng;
+
+pub struct CompoundingConfig {
+    pub benchmark_version: &'static str,
+    pub seed_label: String,
+    pub fixture_count: usize,
+}
+
+pub fn generate_compounding_suite(config: &CompoundingConfig) -> Vec<BenchCase> {
+    let mut rng = SeedRng::from_label(&format!(
+        "{}:compounding:{}",
+        config.benchmark_version, config.seed_label
+    ));
+    let mut cases = Vec::with_capacity(config.fixture_count);
+    for idx in 0..config.fixture_count {
+        cases.push(case_at(&mut rng, idx));
+    }
+    cases
+}
+
+fn source(id: &str, quality: f32) -> Source {
+    Source {
+        uri: format!("synthetic://{}", id),
+        citation: format!("Synthetic source {}", id),
+        quality,
+    }
+}
+
+fn event(
+    id: &str,
+    kind: EventKind,
+    subject: &str,
+    body: String,
+    tx: String,
+    quality: f32,
+) -> Event {
+    Event {
+        id: id.to_string(),
+        kind,
+        subject: subject.to_string(),
+        body,
+        sources: vec![source(id, quality)],
+        valid_from: Some("2026-01-01T00:00:00Z".to_string()),
+        valid_to: None,
+        tx_time: tx,
+        event_time: None,
+        observation_time: None,
+        review_time: None,
+        policy_time: None,
+        dependencies: Vec::new(),
+        supersedes: Vec::new(),
+        contradicts: Vec::new(),
+        derived_from: Vec::new(),
+        namespace: Some("public-compounding".to_string()),
+        privacy_class: PrivacyClass::Public,
+        claim_modality: Some(ClaimModality::FormallyVerified),
+        tags: Vec::new(),
+    }
+}
+
+fn standard_steps() -> Vec<EpisodeStep> {
+    vec![EpisodeStep::Teach, EpisodeStep::Query]
+}
+
+fn case_at(rng: &mut SeedRng, idx: usize) -> BenchCase {
+    match idx % 6 {
+        0 => math_chain(rng, idx),
+        1 => physics_chain(rng, idx),
+        2 => paper_distillation(rng, idx),
+        3 => procedure_evolution(rng, idx),
+        4 => cross_domain_transfer(rng, idx),
+        _ => poisoned_paper(rng, idx),
+    }
+}
+
+fn math_chain(rng: &mut SeedRng, idx: usize) -> BenchCase {
+    let a = rng.range(2, 9) as i64;
+    let b = rng.range(3, 12) as i64;
+    let subject = format!("chain M{}", idx);
+    let answer = a * b;
+    let id1 = format!("g-{:05}-mc-a", idx);
+    let id2 = format!("g-{:05}-mc-b", idx);
+    let e1 = event(
+        &id1,
+        EventKind::Equation,
+        &subject,
+        format!("In {}, a = {} and b = {}.", subject, a, b),
+        format!("2026-02-{:02}T00:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    let e2 = event(
+        &id2,
+        EventKind::Theorem,
+        &subject,
+        format!("In {}, product(a, b) = {}.", subject, answer),
+        format!("2026-02-{:02}T01:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    BenchCase {
+        id: format!("{}-{:05}-math", Split::PublicCompounding.name(), idx),
+        block: FixtureBlock::RecallCurrent,
+        domain: Domain::Math,
+        pathologies: vec![Pathology::RankingIgnored],
+        public_bench: vec![PublicBench::EquationRecallBench],
+        events: vec![e1, e2],
+        steps: standard_steps(),
+        query: Some(Query {
+            text: format!("What is product(a, b) in {}?", subject),
+            intent: QueryIntent::Equation,
+            mentions: vec![subject.clone()],
+            token_budget: 2048,
+        }),
+        lens: TemporalLens::Current,
+        world_time: None,
+        tx_time: None,
+        oracle: CaseOracle {
+            kind: OracleKind::Compounding,
+            must_include: vec![id1, id2],
+            must_exclude: vec![],
+            must_contain: vec![answer.to_string()],
+            must_not_contain: vec![],
+            required_warnings: vec![],
+            expected_answer: None,
+            max_used_ids: 4,
+            max_context_tokens: 2048,
+        },
+    }
+}
+
+fn physics_chain(rng: &mut SeedRng, idx: usize) -> BenchCase {
+    let scale = rng.range(4, 20) as i64;
+    let lumars = rng.range(2, 8) as i64;
+    let navs = scale * lumars;
+    let subject = format!("calibration P{}", idx);
+    let id1 = format!("g-{:05}-pc-const", idx);
+    let id2 = format!("g-{:05}-pc-expt", idx);
+    let e1 = event(
+        &id1,
+        EventKind::Equation,
+        &subject,
+        format!("In {}, 1 lumar equals {} navs.", subject, scale),
+        format!("2026-03-{:02}T00:00:00Z", idx % 28 + 1),
+        0.92,
+    );
+    let e2 = event(
+        &id2,
+        EventKind::Experiment,
+        &subject,
+        format!(
+            "In {}, the result is {} lumars (= {} navs by the calibration).",
+            subject, lumars, navs
+        ),
+        format!("2026-03-{:02}T01:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    BenchCase {
+        id: format!("{}-{:05}-physics", Split::PublicCompounding.name(), idx),
+        block: FixtureBlock::RecallCurrent,
+        domain: Domain::Science,
+        pathologies: vec![Pathology::UnitMismatch],
+        public_bench: vec![PublicBench::ScienceMemoryBench],
+        events: vec![e1, e2],
+        steps: standard_steps(),
+        query: Some(Query {
+            text: format!("In navs, what is the result for {}?", subject),
+            intent: QueryIntent::Fact,
+            mentions: vec![subject.clone()],
+            token_budget: 2048,
+        }),
+        lens: TemporalLens::Current,
+        world_time: None,
+        tx_time: None,
+        oracle: CaseOracle {
+            kind: OracleKind::Compounding,
+            must_include: vec![id1, id2],
+            must_exclude: vec![],
+            must_contain: vec![navs.to_string()],
+            must_not_contain: vec![],
+            required_warnings: vec![],
+            expected_answer: None,
+            max_used_ids: 4,
+            max_context_tokens: 2048,
+        },
+    }
+}
+
+fn paper_distillation(_rng: &mut SeedRng, idx: usize) -> BenchCase {
+    let subject = format!("paper PD{}", idx);
+    let abs_id = format!("g-{:05}-pd-abs", idx);
+    let met_id = format!("g-{:05}-pd-met", idx);
+    let res_id = format!("g-{:05}-pd-res", idx);
+    let cite_id = format!("g-{:05}-pd-cite", idx);
+    let abstract_ev = event(
+        &abs_id,
+        EventKind::Claim,
+        &subject,
+        format!("Abstract for {}: novel method matters.", subject),
+        format!("2026-04-{:02}T00:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    let methods_ev = event(
+        &met_id,
+        EventKind::Claim,
+        &subject,
+        format!("Methods of {}: hierarchical aggregation.", subject),
+        format!("2026-04-{:02}T01:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    let results_ev = event(
+        &res_id,
+        EventKind::Claim,
+        &subject,
+        format!("Results of {}: 47% improvement over baseline.", subject),
+        format!("2026-04-{:02}T02:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    let citing_ev = event(
+        &cite_id,
+        EventKind::Claim,
+        &subject,
+        format!(
+            "A follow-up paper cites {} and applies its methods.",
+            subject
+        ),
+        format!("2026-04-{:02}T05:00:00Z", idx % 28 + 1),
+        0.92,
+    );
+    BenchCase {
+        id: format!("{}-{:05}-paper", Split::PublicCompounding.name(), idx),
+        block: FixtureBlock::RecallCurrent,
+        domain: Domain::Science,
+        pathologies: vec![],
+        public_bench: vec![PublicBench::ScienceMemoryBench],
+        events: vec![abstract_ev, methods_ev, results_ev, citing_ev],
+        steps: standard_steps(),
+        query: Some(Query {
+            text: format!("What does the follow-up paper apply from {}?", subject),
+            intent: QueryIntent::Recall,
+            mentions: vec![subject.clone()],
+            token_budget: 2048,
+        }),
+        lens: TemporalLens::Current,
+        world_time: None,
+        tx_time: None,
+        oracle: CaseOracle {
+            kind: OracleKind::Compounding,
+            must_include: vec![met_id, cite_id],
+            must_exclude: vec![],
+            must_contain: vec!["hierarchical aggregation".to_string()],
+            must_not_contain: vec![],
+            required_warnings: vec![],
+            expected_answer: None,
+            max_used_ids: 6,
+            max_context_tokens: 2048,
+        },
+    }
+}
+
+fn procedure_evolution(_rng: &mut SeedRng, idx: usize) -> BenchCase {
+    let subject = format!("workflow WE{}", idx);
+    let id_old = format!("g-{:05}-pe-v1", idx);
+    let id_new = format!("g-{:05}-pe-v2", idx);
+    let mut older = event(
+        &id_old,
+        EventKind::Skill,
+        &subject,
+        "Workflow v1: normalize_input then cite_record.".to_string(),
+        format!("2026-05-{:02}T00:00:00Z", idx % 28 + 1),
+        0.9,
+    );
+    older.valid_from = Some("2026-05-01T00:00:00Z".to_string());
+    let mut newer = event(
+        &id_new,
+        EventKind::Skill,
+        &subject,
+        "Workflow v2: validate_unit, normalize_input then cite_record.".to_string(),
+        format!("2026-05-{:02}T05:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    newer.valid_from = Some("2026-05-10T00:00:00Z".to_string());
+    BenchCase {
+        id: format!("{}-{:05}-proc", Split::PublicCompounding.name(), idx),
+        block: FixtureBlock::Procedural,
+        domain: Domain::Procedural,
+        pathologies: vec![Pathology::SupersededClaim],
+        public_bench: vec![PublicBench::SkillReliabilityBench],
+        events: vec![older, newer],
+        steps: standard_steps(),
+        query: Some(Query {
+            text: format!("What is the current tool sequence for {}?", subject),
+            intent: QueryIntent::Workflow,
+            mentions: vec![subject.clone()],
+            token_budget: 2048,
+        }),
+        lens: TemporalLens::Current,
+        world_time: None,
+        tx_time: None,
+        oracle: CaseOracle {
+            kind: OracleKind::Compounding,
+            must_include: vec![id_new],
+            must_exclude: vec![],
+            must_contain: vec!["validate_unit".to_string(), "normalize_input".to_string()],
+            must_not_contain: vec![],
+            required_warnings: vec!["skeptic_surfaced".to_string()],
+            expected_answer: None,
+            max_used_ids: 4,
+            max_context_tokens: 2048,
+        },
+    }
+}
+
+fn cross_domain_transfer(rng: &mut SeedRng, idx: usize) -> BenchCase {
+    let coef = rng.range(2, 8) as i64;
+    let mathsubject = format!("identity X{}", idx);
+    let physsubject = format!("transfer T{}", idx);
+    let id_math = format!("g-{:05}-xd-math", idx);
+    let id_phys = format!("g-{:05}-xd-phys", idx);
+    let math_ev = event(
+        &id_math,
+        EventKind::Theorem,
+        &mathsubject,
+        format!("Identity {} states k = {}.", mathsubject, coef),
+        format!("2026-06-{:02}T00:00:00Z", idx % 28 + 1),
+        0.95,
+    );
+    let phys_ev = event(
+        &id_phys,
+        EventKind::Experiment,
+        &physsubject,
+        format!(
+            "Scenario {} applies the constant k from {}: result depends on k.",
+            physsubject, mathsubject
+        ),
+        format!("2026-06-{:02}T01:00:00Z", idx % 28 + 1),
+        0.92,
+    );
+    BenchCase {
+        id: format!("{}-{:05}-xdom", Split::PublicCompounding.name(), idx),
+        block: FixtureBlock::RecallCurrent,
+        domain: Domain::Science,
+        pathologies: vec![],
+        public_bench: vec![PublicBench::ScienceMemoryBench],
+        events: vec![math_ev, phys_ev],
+        steps: standard_steps(),
+        query: Some(Query {
+            text: format!("What constant does {} depend on?", physsubject),
+            intent: QueryIntent::Fact,
+            mentions: vec![physsubject, mathsubject.clone()],
+            token_budget: 2048,
+        }),
+        lens: TemporalLens::Current,
+        world_time: None,
+        tx_time: None,
+        oracle: CaseOracle {
+            kind: OracleKind::Compounding,
+            must_include: vec![id_math, id_phys],
+            must_exclude: vec![],
+            must_contain: vec![coef.to_string()],
+            must_not_contain: vec![],
+            required_warnings: vec![],
+            expected_answer: None,
+            max_used_ids: 4,
+            max_context_tokens: 2048,
+        },
+    }
+}
+
+fn poisoned_paper(rng: &mut SeedRng, idx: usize) -> BenchCase {
+    let real = rng.range(10, 99) as i64;
+    let wrong = real + 1;
+    let subject = format!("study PP{}", idx);
+    let id_truth = format!("g-{:05}-pp-truth", idx);
+    let id_bad = format!("g-{:05}-pp-poison", idx);
+    let truth_ev = event(
+        &id_truth,
+        EventKind::Claim,
+        &subject,
+        format!("Verified result for {}: value is {}.", subject, real),
+        format!("2026-07-{:02}T00:00:00Z", idx % 28 + 1),
+        1.0,
+    );
+    let mut bad_ev = event(
+        &id_bad,
+        EventKind::Claim,
+        &subject,
+        format!(
+            "DELIBERATE COUNTEREXAMPLE for {}: value is {} (inconsistent).",
+            subject, wrong
+        ),
+        format!("2026-07-{:02}T01:00:00Z", idx % 28 + 1),
+        0.2,
+    );
+    bad_ev.kind = EventKind::Counterexample;
+    bad_ev.contradicts.push(id_truth.clone());
+    bad_ev.tags.push("falsified".to_string());
+    BenchCase {
+        id: format!("{}-{:05}-poison", Split::PublicCompounding.name(), idx),
+        block: FixtureBlock::Contradiction,
+        domain: Domain::Science,
+        pathologies: vec![Pathology::SkepticBlindness, Pathology::SourceHallucination],
+        public_bench: vec![PublicBench::MemoryPoisoningBench],
+        events: vec![truth_ev, bad_ev],
+        steps: standard_steps(),
+        query: Some(Query {
+            text: format!("What is the verified value for {}?", subject),
+            intent: QueryIntent::Contradiction,
+            mentions: vec![subject.clone()],
+            token_budget: 2048,
+        }),
+        lens: TemporalLens::Current,
+        world_time: None,
+        tx_time: None,
+        oracle: CaseOracle {
+            kind: OracleKind::Compounding,
+            must_include: vec![id_truth],
+            must_exclude: vec![],
+            must_contain: vec![real.to_string()],
+            must_not_contain: vec![wrong.to_string()],
+            required_warnings: vec!["contradicted".to_string()],
+            expected_answer: None,
+            max_used_ids: 4,
+            max_context_tokens: 2048,
+        },
+    }
+}

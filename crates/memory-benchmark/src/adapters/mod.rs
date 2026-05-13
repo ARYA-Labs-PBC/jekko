@@ -15,6 +15,7 @@
 //! The `baseline` adapter is intentionally weak (calibration anchor).
 
 pub mod baseline;
+pub mod cogcore_adapter;
 pub mod reference_claim_skeptic;
 pub mod reference_context_pack;
 pub mod reference_evidence_ledger;

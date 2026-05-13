@@ -1,7 +1,7 @@
 use super::*;
 use crate::adapters::baseline;
-use crate::{Query, QueryIntent};
 use crate::MemorySystem;
+use crate::{Query, QueryIntent};
 use std::path::Path;
 
 #[test]
@@ -10,6 +10,41 @@ fn legacy_fixture_challenge_still_loads() {
     let challenges = load_challenges(&root).expect("load challenges");
     assert_eq!(challenges.len(), 1);
     assert_eq!(challenges[0].answer_key.canonical, "alpha equals one");
+}
+
+#[test]
+fn manifest_array_loads_multiple_challenges() {
+    let root = std::env::temp_dir().join(format!(
+        "memory-benchmark-qbank-array-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("challenges")).expect("create temp qbank");
+    std::fs::write(
+        root.join("challenges/manifest.json"),
+        r#"[
+  {
+    "challenge_hash": "qbank-a",
+    "publication_hash": "paper-a",
+    "question": "What is result A?",
+    "answer_key": "result A",
+    "support_sections": ["s1"],
+    "acceptance": { "accepted": true, "reason": "fixture" }
+  },
+  {
+    "challenge_hash": "qbank-b",
+    "publication_hash": "paper-b",
+    "question": "What is result B?",
+    "answer_key": "result B",
+    "support_sections": ["s1"],
+    "acceptance": { "accepted": true, "reason": "fixture" }
+  }
+]"#,
+    )
+    .expect("write manifest");
+    let challenges = load_challenges(&root).expect("load manifest array");
+    assert_eq!(challenges.len(), 2);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]

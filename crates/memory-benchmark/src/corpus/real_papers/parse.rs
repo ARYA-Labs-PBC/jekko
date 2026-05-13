@@ -1,9 +1,11 @@
-use super::model::{AnswerKey, ContextPack, NumericTolerance, PaperChallenge, PaperRecord, PaperSection, SupportRef};
+use super::model::{
+    AnswerKey, ContextPack, NumericTolerance, PaperChallenge, PaperRecord, PaperSection, SupportRef,
+};
 #[path = "json_helpers.rs"]
 mod helpers;
-use helpers::*;
 use crate::json::{self, Json};
 use crate::types::Domain;
+use helpers::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -17,7 +19,7 @@ pub(crate) fn load_all_challenges(root: &Path) -> Result<Vec<PaperChallenge>, St
     collect_json_files(&challenge_root, &mut files)?;
     let mut out = Vec::new();
     for file in files {
-        out.push(read_challenge(&file)?);
+        out.extend(read_challenges(&file)?);
     }
     Ok(out)
 }
@@ -34,11 +36,35 @@ pub(crate) fn read_paper(file: &Path) -> Result<PaperRecord, String> {
     paper_from_json(&parsed).map_err(|err| format!("{}: {}", file.display(), err))
 }
 
+#[allow(dead_code)]
 pub(crate) fn read_challenge(file: &Path) -> Result<PaperChallenge, String> {
+    let mut challenges = read_challenges(file)?;
+    match challenges.len() {
+        1 => Ok(challenges.remove(0)),
+        0 => Err(format!("{}: no challenges found", file.display())),
+        _ => Err(format!(
+            "{}: expected a single challenge object, found {}",
+            file.display(),
+            challenges.len()
+        )),
+    }
+}
+
+pub(crate) fn read_challenges(file: &Path) -> Result<Vec<PaperChallenge>, String> {
     let text =
         fs::read_to_string(file).map_err(|err| format!("read {}: {}", file.display(), err))?;
     let parsed = json::parse(&text).map_err(|err| format!("parse {}: {}", file.display(), err))?;
-    challenge_from_json(&parsed).map_err(|err| format!("{}: {}", file.display(), err))
+    match &parsed {
+        Json::Array(items) => items
+            .iter()
+            .map(|item| {
+                challenge_from_json(item).map_err(|err| format!("{}: {}", file.display(), err))
+            })
+            .collect(),
+        _ => challenge_from_json(&parsed)
+            .map(|challenge| vec![challenge])
+            .map_err(|err| format!("{}: {}", file.display(), err)),
+    }
 }
 
 pub(crate) fn collect_json_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -171,7 +197,11 @@ fn challenge_from_json(value: &Json) -> Result<PaperChallenge, String> {
         Some(value) => value,
         None => 0.0,
     };
-    let context_pack = match obj.get("context_pack").map(context_pack_from_json).transpose()? {
+    let context_pack = match obj
+        .get("context_pack")
+        .map(context_pack_from_json)
+        .transpose()?
+    {
         Some(pack) => pack,
         None => ContextPack::default(),
     };

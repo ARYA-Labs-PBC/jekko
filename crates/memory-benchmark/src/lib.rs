@@ -64,7 +64,9 @@ mod tests {
             + w.privacy_redaction
             + w.procedural_skill
             + w.feedback_adaptation
-            + w.determinism_rebuild;
+            + w.determinism_rebuild
+            + w.compounding
+            + w.topic_hardening;
         assert!((s - 100.0).abs() < 0.001, "weights sum to {}", s);
     }
 

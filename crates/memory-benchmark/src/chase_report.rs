@@ -13,6 +13,7 @@ pub struct CliOptions {
     pub population: Option<String>,
     pub baseline_path: Option<String>,
     pub exec_path: Option<String>,
+    pub shadow_report: Option<String>,
     pub lanes_path: Option<String>,
     pub current_best_state: Option<String>,
     pub current_candidates: Option<String>,
@@ -26,6 +27,7 @@ pub struct CliOptions {
     pub comparison: Option<String>,
     pub triangulation: Option<String>,
     pub curriculum: Option<String>,
+    pub reference_reports: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -220,6 +222,8 @@ pub fn run(mut options: CliOptions) -> Result<(), String> {
 
     let baseline = read_score(options.baseline_path.as_deref());
     let exec = read_score(options.exec_path.as_deref());
+    let shadow = read_score(options.shadow_report.as_deref());
+    let reference_reports = read_score_paths(&options.reference_reports);
     let population_count = read_population(options.population.as_deref());
     let lane_bundle = read_report_dir(options.lanes_path.as_deref(), ReadScope::LaneReport);
     let (current_best, current_best_errors) = read_current_best(
@@ -243,6 +247,8 @@ pub fn run(mut options: CliOptions) -> Result<(), String> {
             current_best,
             baseline.clone(),
             exec.clone(),
+            shadow,
+            reference_reports,
             read_errors,
         ))
     } else {
@@ -341,6 +347,13 @@ pub fn read_score(path: Option<&str>) -> Option<Json> {
     let path = path?;
     let text = fs::read_to_string(path).ok()?;
     json::parse(&text).ok()
+}
+
+pub fn read_score_paths(paths: &[String]) -> Vec<Json> {
+    paths
+        .iter()
+        .filter_map(|path| read_score(Some(path.as_str())))
+        .collect()
 }
 
 pub fn read_population(path: Option<&str>) -> usize {
@@ -515,6 +528,8 @@ pub fn build_chase_outputs(
     current_best: CandidateSnapshot,
     baseline: Option<Json>,
     exec: Option<Json>,
+    shadow: Option<Json>,
+    reference_reports: Vec<Json>,
     read_errors: Vec<ReadError>,
 ) -> ChaseOutputs {
     let mut candidates = Vec::new();
@@ -553,15 +568,47 @@ pub fn build_chase_outputs(
         .first()
         .cloned()
         .unwrap_or_else(|| current_best.clone());
+    let shadow_snapshot = snapshot_from_score_json("shadow", "shadow", shadow.as_ref());
+    let reference_snapshots: Vec<CandidateSnapshot> = reference_reports
+        .iter()
+        .filter_map(|report| snapshot_from_score_json("reference", "reference", Some(report)))
+        .collect();
 
     let current_score = current_best.score_key();
     let selected_score = selected.score_key();
     let delta = selected_score - current_score;
+    let shadow_delta = shadow_snapshot
+        .as_ref()
+        .map(|shadow| selected_score - shadow.score_key())
+        .unwrap_or(0.0);
+    let public_shadow_divergence = shadow_snapshot
+        .as_ref()
+        .map(|shadow| (selected_score - shadow.score_key()).abs())
+        .unwrap_or(0.0);
+    let reference_drift = reference_snapshots
+        .iter()
+        .map(|reference| (selected_score - reference.score_key()).abs() / 100.0)
+        .fold(0.0, f64::max);
+    let reference_mean = if reference_snapshots.is_empty() {
+        0.0
+    } else {
+        reference_snapshots
+            .iter()
+            .map(|r| r.score_key())
+            .sum::<f64>()
+            / reference_snapshots.len() as f64
+    };
+    let trusted_core_diff = if selected.patch.is_some() { 0.0 } else { 1.0 };
     let promoted = !same_identity(&selected, &current_best)
         && selected.gates.is_clean()
         && !selected.gates.has_new_failures_against(&current_best.gates)
         && selected.patch.is_some()
         && delta >= 0.75;
+    let promoted = promoted
+        && shadow_delta >= 0.0
+        && public_shadow_divergence <= 5.0
+        && reference_drift <= 0.5
+        && trusted_core_diff <= 0.0;
     let winner = if promoted {
         selected.clone()
     } else {
@@ -584,6 +631,14 @@ pub fn build_chase_outputs(
         ("current", current_best.to_json()),
         ("winner", winner.to_json()),
         ("score_delta", Json::Float(delta)),
+        ("shadow_delta", Json::Float(shadow_delta)),
+        (
+            "public_shadow_divergence",
+            Json::Float(public_shadow_divergence),
+        ),
+        ("reference_drift", Json::Float(reference_drift)),
+        ("reference_mean", Json::Float(reference_mean)),
+        ("trusted_core_diff", Json::Float(trusted_core_diff)),
         ("eligible_lane_count", Json::Int(eligible.len() as i64)),
         (
             "blocked_lane_count",
@@ -615,6 +670,14 @@ pub fn build_chase_outputs(
         ("selected", selected.to_json()),
         ("winner", winner.to_json()),
         ("score_delta", Json::Float(delta)),
+        ("shadow_delta", Json::Float(shadow_delta)),
+        (
+            "public_shadow_divergence",
+            Json::Float(public_shadow_divergence),
+        ),
+        ("reference_drift", Json::Float(reference_drift)),
+        ("reference_mean", Json::Float(reference_mean)),
+        ("trusted_core_diff", Json::Float(trusted_core_diff)),
         ("eligible_lane_count", Json::Int(eligible.len() as i64)),
         (
             "blocked_lane_count",

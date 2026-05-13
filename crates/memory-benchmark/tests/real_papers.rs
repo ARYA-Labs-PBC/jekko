@@ -13,7 +13,7 @@ fn loads_openqg_question_bank_challenges() {
 
 #[test]
 fn bench_real_papers_suite_requires_explicit_bank() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/real-paper-bank");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/real-paper-bank");
     let config = SuiteConfig {
         split: Split::RealPapers,
         paper_bank_path: Some(root.display().to_string()),
@@ -21,6 +21,6 @@ fn bench_real_papers_suite_requires_explicit_bank() {
     };
     let report =
         run_candidate_with_config("reference_evidence_ledger", &config).expect("real paper report");
-    assert_eq!(report.fixtures_run, 1);
+    assert_eq!(report.fixtures_run, 50);
     assert!(report.json.contains("\"suite\":\"real-papers\""));
 }
