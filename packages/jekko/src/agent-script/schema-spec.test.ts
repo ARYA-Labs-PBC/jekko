@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { spawnSync } from "child_process"
-import { readFileSync } from "fs"
+import { readFileSync, readdirSync, statSync } from "fs"
 import path from "path"
 import { assertKnownZyalKeys, renderZyalSpecMarkdown, ZYAL_SCHEMA_SPEC, ZYAL_TOP_LEVEL_KEYS } from "./schema-spec"
 import { ZYAL_CONTRACT_VERSION, ZYAL_RESEARCH_BLOCK_VERSION, ZYAL_RUNTIME_SENTINEL_VERSION } from "./version"
@@ -24,19 +24,15 @@ describe("ZYAL schema spec", () => {
     expect(readFileSync(specPath, "utf8")).toBe(`${renderZyalSpecMarkdown()}\n`)
   })
 
-  test("examples README stays on the documented count and includes the new feature-maker rows", () => {
+  test("examples README links exactly match tracked ZYAL examples", () => {
     const readme = readFileSync(examplesReadmePath, "utf8")
-    expect(readme).toContain("Thirty flagship runbooks")
-    expect(readme.match(/^\| \[`/gm)?.length).toBe(30)
-    expect(readme).toContain("[`18-semantic-bug-finder-basic.zyal`](18-semantic-bug-finder-basic.zyal)")
-    expect(readme).toContain("[`19-semantic-bug-finder-advanced.zyal`](19-semantic-bug-finder-advanced.zyal)")
-    expect(readme).toContain("[`20-semantic-bug-finder-ultra.zyal`](20-semantic-bug-finder-ultra.zyal)")
-    expect(readme).toContain("[`21-semantic-improvement-finder-simple.zyal`](21-semantic-improvement-finder-simple.zyal)")
-    expect(readme).toContain("[`22-semantic-improvement-finder-advanced.zyal`](22-semantic-improvement-finder-advanced.zyal)")
-    expect(readme).toContain("[`23-semantic-improvement-finder-insane.zyal`](23-semantic-improvement-finder-insane.zyal)")
-    expect(readme).toContain("[`24-semantic-feature-maker-simple.zyal`](24-semantic-feature-maker-simple.zyal)")
-    expect(readme).toContain("[`25-semantic-feature-maker-advanced.zyal`](25-semantic-feature-maker-advanced.zyal)")
-    expect(readme).toContain("[`26-semantic-feature-maker-insane.zyal`](26-semantic-feature-maker-insane.zyal)")
+    const examplesDir = path.dirname(examplesReadmePath)
+    const expected = collectZyalFiles(examplesDir).sort()
+    const links = [...readme.matchAll(/^\| \[`[^`]+\.zyal`\]\(([^)]+\.zyal)\) \|/gm)]
+      .map((match) => match[1])
+      .sort()
+    expect(readme).toContain("Thirty-one flagship runbooks")
+    expect(links).toEqual(expected)
   })
 
   test("version metadata matches version.ts", () => {
@@ -84,4 +80,18 @@ function visitNode(node: typeof ZYAL_SCHEMA_SPEC.root, visit: (node: typeof ZYAL
   if (node.kind === "array") {
     visitNode(node.item as typeof ZYAL_SCHEMA_SPEC.root, visit)
   }
+}
+
+function collectZyalFiles(dir: string, prefix = ""): string[] {
+  const files: string[] = []
+  for (const entry of readdirSync(dir).sort()) {
+    const fullPath = path.join(dir, entry)
+    const relativePath = prefix ? `${prefix}/${entry}` : entry
+    if (statSync(fullPath).isDirectory()) {
+      files.push(...collectZyalFiles(fullPath, relativePath))
+      continue
+    }
+    if (entry.endsWith(".zyal")) files.push(relativePath)
+  }
+  return files
 }

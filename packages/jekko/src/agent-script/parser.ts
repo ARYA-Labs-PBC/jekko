@@ -1411,13 +1411,21 @@ function validateZyalSemantics(spec: ZyalScript) {
   }
 
   // ─── v2: approvals ─────────────────────────────────────────────────────
-  if (spec.approvals?.gates && spec.workflow) {
+  if (spec.workflow) {
     // Validate that approval gates referenced in workflow states exist
     for (const [stateName, state] of Object.entries(spec.workflow.states)) {
-      if (state.approval && !spec.approvals.gates[state.approval]) {
+      if (state.approval && !spec.approvals?.gates?.[state.approval]) {
         throw new ZyalParseError(
           `workflow.states.${stateName}.approval '${state.approval}' is not defined in approvals.gates`,
         )
+      }
+      for (const [i, transition] of state.transitions?.entries() ?? []) {
+        const gate = transition.when.approval_granted
+        if (gate && !spec.approvals?.gates?.[gate]) {
+          throw new ZyalParseError(
+            `workflow.states.${stateName}.transitions[${i}].when.approval_granted '${gate}' is not defined in approvals.gates`,
+          )
+        }
       }
     }
   }

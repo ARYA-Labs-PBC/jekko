@@ -305,9 +305,9 @@ const constraintNode = objectNode("Named constraint.", {
 })
 
 const workflowConditionNode = objectNode("Workflow transition condition.", {
-  evidence_exists: booleanNode("Require evidence to exist."),
+  evidence_exists: stringNode("Required evidence artifact name."),
   risk_score_gte: numberNode("Risk threshold."),
-  approval_granted: booleanNode("Approval required."),
+  approval_granted: stringNode("Required approval gate name."),
   all_checks_pass: booleanNode("All checks must pass."),
   checks_failed: booleanNode("Checks must fail."),
   constraint_violated: booleanNode("Constraint must be violated."),

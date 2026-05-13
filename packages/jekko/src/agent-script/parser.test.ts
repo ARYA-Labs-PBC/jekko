@@ -6,6 +6,7 @@ import path from "path"
 import { detectZyal, scanZyalEnvelope } from "./activation"
 import { getZyalExample, listZyalExamples } from "./examples"
 import { extractZyalBlock, parseZyal } from "./parser"
+import type { ZyalSpec } from "./schema-core"
 import { ZYAL_CONTRACT_VERSION, ZYAL_RESEARCH_BLOCK_VERSION, ZYAL_RUNTIME_SENTINEL_VERSION } from "./version"
 
 describe("ZYAL parser", () => {
@@ -584,15 +585,33 @@ ZYAL_ARM RUN_FOREVER id=one`
     const parsed = await Effect.runPromise(
       parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/24-semantic-feature-maker-simple.zyal"), "utf8")),
     )
+    const expectedIndexes = [
+      "README.md",
+      "MISSION.md",
+      "ROADMAP.md",
+      "docs/adr/",
+      "package.json",
+      "Cargo.toml",
+      "vite.config.ts",
+      "routes/",
+      "api/",
+      "db/migrations/",
+      "tests/",
+      "Dockerfile",
+      ".github/workflows/",
+    ]
     expect(parsed.preview.repo_intel_enabled).toBe(true)
     expect(parsed.preview.repo_intel_summary).toContain("scale:medium")
-    expect(parsed.preview.repo_intel_summary).toContain("indexes:13")
+    expect(parsed.preview.repo_intel_summary).toContain(`indexes:${parsed.spec.repo_intelligence?.indexes.length}`)
+    expect(parsed.spec.repo_intelligence?.indexes).toEqual(expectedIndexes)
     expect(parsed.preview.evidence_graph_enabled).toBe(true)
-    expect(parsed.preview.evidence_graph_summary).toContain("nodes:4")
+    expect(parsed.preview.evidence_graph_summary).toContain("nodes:5")
     expect(parsed.preview.workflow_enabled).toBe(true)
     expect(parsed.preview.workflow_summary).toContain("state_machine")
     expect(parsed.preview.workflow_summary).toContain("states:4")
     expect(parsed.preview.approval_gate_count).toBe(1)
+    expect(requiredEvidenceTypes(parsed.spec)).toEqual(expect.arrayContaining(["project_atlas_summary"]))
+    expect(parsed.spec.workflow?.states.discover?.produces).toContain("project_atlas_summary")
     expect(parsed.preview.evidence_summary).toContain("feature_thesis")
     expect(parsed.preview.evidence_summary).toContain("proof_command")
     expect(parsed.preview.rollback_enabled).toBe(true)
@@ -603,15 +622,33 @@ ZYAL_ARM RUN_FOREVER id=one`
       "validates",
     ])
     expect(parsed.spec.done?.require).toContain("docs/ZYAL/FEATURE_MAKER.md")
+    expect(parsed.spec.done?.require).toContain("target/zyal/feature-maker/project-atlas-summary.md")
+    expect(parsed.spec.hooks?.after_checkpoint?.[0]?.run).toContain("git push -u origin HEAD && gh pr create")
   })
 
   test("accepts the advanced semantic feature-maker example", async () => {
     const parsed = await Effect.runPromise(
       parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/25-semantic-feature-maker-advanced.zyal"), "utf8")),
     )
+    const expectedIndexes = [
+      "README.md",
+      "MISSION.md",
+      "ROADMAP.md",
+      "docs/adr/",
+      "packages/",
+      "crates/",
+      "routes/",
+      "api/",
+      "db/migrations/",
+      "tests/",
+      ".github/workflows/",
+      "Dockerfile",
+      "target/zyal/feature-maker/",
+    ]
     expect(parsed.preview.repo_intel_enabled).toBe(true)
     expect(parsed.preview.repo_intel_summary).toContain("scale:large")
-    expect(parsed.preview.repo_intel_summary).toContain("indexes:13")
+    expect(parsed.preview.repo_intel_summary).toContain(`indexes:${parsed.spec.repo_intelligence?.indexes.length}`)
+    expect(parsed.spec.repo_intelligence?.indexes).toEqual(expectedIndexes)
     expect(parsed.preview.repo_intel_summary).toContain("scoped")
     expect(parsed.preview.dispatch_enabled).toBe(true)
     expect(parsed.preview.dispatch_lane_count).toBe(8)
@@ -632,8 +669,10 @@ ZYAL_ARM RUN_FOREVER id=one`
     expect(parsed.preview.jankurai_verification_summary).toContain("test_map")
     expect(parsed.preview.workflow_summary).toContain("state_machine")
     expect(parsed.preview.workflow_summary).toContain("states:5")
-    expect(parsed.preview.evidence_graph_summary).toContain("nodes:6")
+    expect(parsed.preview.evidence_graph_summary).toContain("nodes:7")
     expect(parsed.preview.approvals_summary).toContain("feature_review:reviewer")
+    expect(requiredEvidenceTypes(parsed.spec)).toEqual(expect.arrayContaining(["project_atlas_summary"]))
+    expect(parsed.spec.workflow?.states.discover?.produces).toContain("project_atlas_summary")
     expect(parsed.spec.dispatch?.lanes?.map((lane) => lane.id)).toEqual([
       "mission_gap",
       "latent_data",
@@ -649,15 +688,34 @@ ZYAL_ARM RUN_FOREVER id=one`
       "reject_revert",
       "edit",
     ])
+    expect(parsed.spec.done?.require).toContain("target/zyal/feature-maker/project-atlas-summary.md")
+    expect(parsed.spec.hooks?.after_checkpoint?.[0]?.run).toContain("git push -u origin HEAD && gh pr create")
   })
 
   test("accepts the insane semantic feature-maker example", async () => {
     const parsed = await Effect.runPromise(
       parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/26-semantic-feature-maker-insane.zyal"), "utf8")),
     )
+    const expectedIndexes = [
+      "README.md",
+      "MISSION.md",
+      "ROADMAP.md",
+      "docs/adr/",
+      "packages/",
+      "crates/",
+      "routes/",
+      "api/",
+      "db/migrations/",
+      "ui/",
+      "tests/",
+      ".github/workflows/",
+      "Dockerfile",
+      "target/zyal/feature-maker/",
+    ]
     expect(parsed.preview.repo_intel_enabled).toBe(true)
     expect(parsed.preview.repo_intel_summary).toContain("scale:billion_loc")
-    expect(parsed.preview.repo_intel_summary).toContain("indexes:14")
+    expect(parsed.preview.repo_intel_summary).toContain(`indexes:${parsed.spec.repo_intelligence?.indexes.length}`)
+    expect(parsed.spec.repo_intelligence?.indexes).toEqual(expectedIndexes)
     expect(parsed.preview.dispatch_enabled).toBe(true)
     expect(parsed.preview.dispatch_lane_count).toBe(13)
     expect(parsed.preview.dispatch_summary).toContain("lanes:13")
@@ -700,6 +758,16 @@ ZYAL_ARM RUN_FOREVER id=one`
     expect(parsed.preview.quality_enabled).toBe(true)
     expect(parsed.preview.quality_summary).toContain("anti_vibe")
     expect(parsed.preview.quality_summary).toContain("checks:3")
+    expect(requiredEvidenceTypes(parsed.spec)).toEqual(expect.arrayContaining(["project_atlas_summary"]))
+    expect(parsed.spec.workflow?.states.intake?.produces).toContain("project_atlas_summary")
+    expect(parsed.spec.evidence_graph?.nodes?.project_atlas_summary?.required).toBe(true)
+    expect(parsed.spec.sandbox?.paths).toContainEqual({
+      path: ".jekko/daemon/feature-review/**",
+      access: "write",
+    })
+    expect(parsed.spec.jankurai?.reviewer?.checklist?.filter((item) =>
+      item.id === "rewrite_scope" || item.id === "core_ip_link"
+    ).map((item) => item.severity)).toEqual(["blocker", "blocker"])
     expect(parsed.spec.dispatch?.lanes?.map((lane) => lane.id)).toEqual([
       "mission_gap",
       "latent_data",
@@ -720,7 +788,10 @@ ZYAL_ARM RUN_FOREVER id=one`
       "reject_revert",
       "edit",
     ])
+    expect(parsed.spec.done?.require).toContain("target/zyal/feature-maker/project-atlas-summary.md")
     expect(parsed.spec.done?.require).toContain(".jekko/daemon/feature-review/candidate.patch")
+    expect(parsed.spec.done?.forbid).toEqual(expect.arrayContaining(["broad_rewrite", "weak_core_ip_link"]))
+    expect(parsed.spec.hooks?.after_checkpoint?.[0]?.run).toContain("git push -u origin HEAD && gh pr create")
   })
 
   test("accepts first-class paper question bank research blocks", async () => {
@@ -1045,6 +1116,15 @@ constraints:
 })
 
 /** Helper: produce a minimal armed ZYAL block with extra YAML appended */
+function requiredEvidenceTypes(spec: ZyalSpec) {
+  const types = new Set<string>()
+  for (const evidence of spec.evidence?.require_before_promote ?? []) types.add(evidence.type)
+  for (const gate of Object.values(spec.approvals?.gates ?? {})) {
+    for (const evidence of gate.require_evidence ?? []) types.add(evidence)
+  }
+  return [...types].sort()
+}
+
 function makeZyal(extra: string) {
   const body = `version: v1
 intent: daemon
@@ -1208,6 +1288,42 @@ workflow:
     await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
   })
 
+  test("rejects boolean workflow evidence references", async () => {
+    const text = makeZyal(`
+workflow:
+  type: state_machine
+  initial: a
+  states:
+    a:
+      transitions:
+        - to: b
+          when:
+            evidence_exists: true
+    b:
+      terminal: true`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+
+  test("rejects boolean workflow approval references", async () => {
+    const text = makeZyal(`
+workflow:
+  type: state_machine
+  initial: a
+  states:
+    a:
+      transitions:
+        - to: b
+          when:
+            approval_granted: true
+    b:
+      terminal: true
+approvals:
+  gates:
+    feature_review:
+      required_role: reviewer`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+
   test("accepts a valid memory block", async () => {
     const text = makeZyal(`
 memory:
@@ -1337,6 +1453,26 @@ approvals:
     other_gate:
       required_role: admin`)
     await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
+  })
+
+  test("rejects approval_granted transitions that do not reference approvals.gates", async () => {
+    const text = makeZyal(`
+workflow:
+  type: state_machine
+  initial: a
+  states:
+    a:
+      transitions:
+        - to: b
+          when:
+            approval_granted: missing_gate
+    b:
+      terminal: true
+approvals:
+  gates:
+    other_gate:
+      required_role: reviewer`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow("approval_granted")
   })
 
   test("accepts combined v2 blocks", async () => {

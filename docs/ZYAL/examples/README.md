@@ -1,6 +1,6 @@
 # ZYAL Powerful Examples
 
-Thirty flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
+Thirty-one flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
 
 | File | Demonstrates | Power blocks |
 |---|---|---|
@@ -14,6 +14,7 @@ Thirty flagship runbooks that show what ZYAL v2.6 makes possible. Each is a comp
 | [`08-full-power-runbook.zyal`](08-full-power-runbook.zyal) | Every v2.1 power block in one runbook | All |
 | [`09-control-plane-preview.zyal`](09-control-plane-preview.zyal) | Preview-only control-plane contract with interop, runtime, trust, taint, and release metadata | `interop`, `runtime`, `capability_negotiation`, `memory_kernel`, `evidence_graph`, `trust`, `taint`, `requirements`, `evaluation`, `release`, `roles`, `channels`, `imports`, `reasoning_privacy`, `unsupported_feature_policy` |
 | [`10-jankurai-master-loop.zyal`](10-jankurai-master-loop.zyal) | Advanced host-enforced jankurai repair and porting loop with repair-plan ingestion, incubator routing, rollback, branch/main regression, taint, memory, evidence, and metrics | `jankurai`, `taint`, `fleet.jnoccio`, `incubator`, `experiments`, `memory`, `evidence`, `rollback`, `done`, `observability` |
+| [`11-jankurai-fleet-loop.zyal`](11-jankurai-fleet-loop.zyal) | Host-enforced Jankurai fleet loop with repeated audits, worker pool repair, checkpoint proof, and score receipts | `jankurai`, `fleet`, `checkpoint`, `observability`, `done` |
 | [`12-jankurai-min-loop.zyal`](12-jankurai-min-loop.zyal) | Minimal host-enforced jankurai continuous repair loop for ten low-risk workers, verification, checkpoint commit, and push | `jankurai`, `fleet`, `checkpoint`, `observability` |
 | [`13-advanced-research-loop.zyal`](13-advanced-research-loop.zyal) | Evidence-first external research loop with parallel cited search and extraction controls; powers the README demo asset | `research`, `permissions`, `evidence`, `budgets` |
 | [`14-jankurai-autoport-basic.zyal`](14-jankurai-autoport-basic.zyal) | Entry-level forever loop for a fresh repo: self-bootstraps jankurai, audits, drives caps and high/medium findings to zero with a single worker, commits on green, stops at score ≥ 90 with three consecutive clean runs | `jankurai.bootstrap`, `hooks`, `quality`, `done` |
