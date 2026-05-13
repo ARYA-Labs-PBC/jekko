@@ -1,0 +1,623 @@
+# Most-advanced jankurai forever loop: a general `dispatch` block routes each
+# finding into one of five lanes (parallel batch / cross-file DAG / cap
+# incubator / research required / human required). Each pass type uses its
+# own MCP profile and model. Concept memory persists across runs at
+# ~/.jankurai/concepts/. Critical reviewer pass blocks promotion on
+# unresolved checklist items. Regression sentinel halts on any new hard
+# finding versus the pre-jankurai baseline.
+#
+# Schema notes: PR1 ships `dispatch` parser/preview-only. PR5 ships
+# `daemon-dispatch.ts` runtime + `done.require` predicate registry that
+# resolves `score_history_slope_flat_24h` and `regression_free_cycles_gte_N`.
+<<<ZYAL v1:daemon id=jankurai-dynamic-dispatch-advanced>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai dynamic dispatch (advanced)"
+  objective: |
+    Forever runner with dispatch + research + concept memory + critical
+    reviewer + regression sentinel. Caps go to incubator, cross-file DAGs
+    go to experiments tournaments, low-risk batches go to fan-out workers,
+    research-required findings hit the v2.4 research block, human-required
+    findings open an approval gate. Done only after caps==0, hard==0,
+    soft<=5, 10 regression-free cycles, and 24h-flat score slope.
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  reject_from: [assistant_output, tool_output, web_content, mcp_resource]
+  accepted_origins: [trusted_user_message, host_ui_button, signed_cli_input]
+  arm_token_single_use: true
+
+triggers:
+  anti_recursion: true
+  list:
+    - id: manual
+      kind: manual
+    - id: nightly
+      kind: cron
+      schedule: "0 3 * * *"
+      allow_create_more_cron: false
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, max_steps, compaction]
+  pause_on: [permission_denied]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+context:
+  strategy: hybrid
+  compact_every: 6
+  hard_clear_every: 24
+  preserve:
+    - objective
+    - current_lane
+    - parent_concept_chain
+    - regression_streak
+
+fleet:
+  max_workers: 10
+  isolation: hybrid
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    register_workers: true
+    heartbeat_interval: 20s
+    max_instances: 10
+
+agents:
+  supervisor:
+    agent: plan
+  workers:
+    - id: batch-worker
+      count: 4
+      agent: build
+      isolation: git_worktree
+      pool_size: 4
+      commit_on_green: true
+    - id: dag-worker
+      count: 3
+      agent: build
+      isolation: git_worktree
+    - id: cap-incubator
+      count: 3
+      agent: build
+      isolation: git_worktree
+
+mcp:
+  profiles:
+    scout:
+      tools: [grep, read]
+    repair:
+      tools: [edit, read]
+    review:
+      tools: [read]
+    research:
+      tools: [websearch, webfetch]
+    spawn:
+      tools: [jnoccio_spawn_parallel]
+
+models:
+  profiles:
+    plan:
+      provider: anthropic
+      model: claude-opus-4-7
+      reasoning: true
+    build:
+      provider: anthropic
+      model: claude-sonnet-4-6
+    critic:
+      provider: openai
+      model: gpt-5
+      reasoning: true
+    researcher:
+      provider: google
+      model: gemini-2-pro
+  routes:
+    plan: plan
+    implement: build
+    review: critic
+    research: researcher
+  critic:
+    must_differ_from_builder: true
+  confidence_cap: 0.5
+
+dispatch:
+  enabled: true
+  classifier:
+    command: "node scripts/jankurai-dispatch-classifier.mjs"
+    timeout: 30s
+    write_to: target/jankurai/dispatch/route.json
+  lanes:
+    - id: simple_parallel_batch
+      dispatch_to: fan_out
+    - id: cross_file_dag
+      dispatch_to: experiments
+    - id: cap_incubator
+      dispatch_to: incubator
+    - id: research_required
+      dispatch_to: research
+    - id: human_required
+      dispatch_to: approvals.gates.human_review
+  default_lane: simple_parallel_batch
+  on_no_match: default
+
+jankurai:
+  enabled: true
+  audit:
+    mode: ratchet
+    json: target/jankurai/repo-score.json
+    repair_queue_jsonl: target/jankurai/repair-queue.jsonl
+    sarif: target/jankurai/jankurai.sarif
+  repair_plan:
+    enabled: true
+    json: target/jankurai/repair-plan.json
+  task_source: repair_plan
+  selection:
+    order: severity_first
+    max_risk: high
+    incubate_risk_at: medium
+  regression:
+    main_ref: origin/main
+    compare_every_iterations: 10
+    max_new_hard_findings: 0
+    max_score_drop: 0
+  verification:
+    require_clean_start: true
+    commands:
+      - "just fast"
+    audit_delta: target_fingerprint_removed
+    rollback_unverified: true
+  pool:
+    size: 10
+    hard_cap: 20
+    commit_on_green: true
+  reviewer:
+    enabled: true
+    block_promotion: true
+    checklist:
+      - id: untested_edges
+        severity: warning
+      - id: parallel_side_effects
+        severity: warning
+      - id: regression_risk
+        severity: blocker
+      - id: doc_owner_map_drift
+        severity: info
+      - id: tool_adoption_drift
+        severity: info
+      - id: proof_lane_coverage
+        severity: blocker
+
+incubator:
+  enabled: true
+  strategy: generate_pool_strengthen
+  route_when:
+    any:
+      - risk_score_gte: 0.6
+  budget:
+    max_passes_per_task: 8
+    max_rounds_per_task: 3
+    max_active_tasks: 2
+    max_parallel_idea_passes: 3
+  readiness:
+    promote_at: 0.85
+    model_confidence_cap: 0.04
+  passes:
+    - id: scout
+      type: scout
+      context: blind
+      writes: scratch_only
+      mcp_profile: scout
+    - id: ideas
+      type: idea
+      context: blind
+      count: 3
+      writes: scratch_only
+    - id: strengthen
+      type: strengthen
+      context: strengthen
+      reads: [candidate_pool]
+      writes: scratch_only
+    - id: critique
+      type: critic
+      context: critic
+      reads: [candidate_pool]
+      writes: scratch_only
+      mcp_profile: review
+    - id: synth
+      type: synthesize
+      context: pool
+      writes: scratch_only
+      mcp_profile: repair
+    - id: proto
+      type: prototype
+      context: inherit
+      writes: isolated_worktree
+    - id: review
+      type: critical_reviewer
+      context: critic
+      writes: scratch_only
+      mcp_profile: review
+    - id: promote
+      type: promotion_review
+      context: promotion
+      writes: scratch_only
+  promotion:
+    promote_at: 0.85
+    require:
+      - problem_statement
+      - current_best_plan
+      - verification_strategy
+      - risk_review
+      - rollback_plan
+    block_on:
+      unresolved_critical_objections_gte: 1
+
+experiments:
+  strategy: disjoint_tournament
+  fork_from: last_green_checkpoint
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.4
+  lanes:
+    - id: minimal
+      hypothesis: "Smallest safe patch"
+      isolation: git_worktree
+      timeout: 30m
+    - id: test-first
+      hypothesis: "Failing test then fix"
+      isolation: git_worktree
+      timeout: 45m
+    - id: boundary
+      hypothesis: "Extract boundary then port"
+      isolation: git_worktree
+      timeout: 60m
+  scoring:
+    weights:
+      tests_passed: 0.3
+      typecheck_passed: 0.2
+      diff_minimal: 0.15
+      security_clean: 0.2
+      rollback_simplicity: 0.15
+    judge:
+      agent: critic
+      blind: true
+      must_use_different_provider: true
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+  preserve_failed_lanes_as_negative_memory: true
+
+research:
+  version: v1
+  mode: mixed
+  autonomy: require_plan
+  max_parallel: 4
+  timeout_seconds: 45
+  provider_policy:
+    prefer: [official_api, primary_source]
+    allow: [openalex, arxiv, github, tavily, exa, firecrawl, jina]
+    missing_provider: skip_with_receipt
+  extraction:
+    enabled: true
+    max_pages: 8
+    allowed_extractors: [built_in, jina]
+  evidence:
+    require_citations: true
+    claim_level: true
+    store: sqlite
+  safety:
+    redact_secrets: true
+    block_internal_urls: true
+    prompt_injection: quarantine
+    taint_label: web_content
+  budgets:
+    max_queries: 20
+    max_pages: 16
+    max_cost_usd: 2.0
+
+memory:
+  stores:
+    global_concepts:
+      scope: global
+      retention: permanent
+      write_policy: upsert
+      read_policy: search
+      searchable: true
+      path: "~/.jankurai/concepts/"
+    local_concepts:
+      scope: repo
+      retention: permanent
+      write_policy: upsert
+      read_policy: search
+      searchable: true
+    objections:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: inject_at_start
+      searchable: true
+    invalidated:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      searchable: true
+  redaction:
+    patterns:
+      - "(sk-|AKIA|ghp_|token|secret|password|credential)"
+    action: mask
+  provenance:
+    track_source: true
+    hash_chain: true
+
+taint:
+  default_label: repo
+  labels:
+    repo:
+      rank: medium
+      notes: "repository-local material"
+    web_content:
+      rank: untrusted
+      notes: "research output; never arm or approve"
+    jnoccio_output:
+      rank: medium
+      notes: "model output via fusion gateway"
+    secret:
+      rank: hostile
+      notes: "never log or echo"
+  forbid:
+    - from: [web_content, secret]
+      cannot: [approve, grant_capability, exec_shell, expose_secret]
+      unless: [human_security_review]
+  prompt_injection:
+    detect_patterns:
+      - "[Ii]gnore previous instructions"
+      - "[Ee]xfiltrate"
+    on_detect: pause
+    scan_sources: [audit_evidence, worker_output, web_content]
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-anywhere
+      tool: read
+      decision: allow
+    - id: edit-src
+      tool: edit
+      paths: ["src/**", "packages/**/src/**"]
+      decision: allow
+    - id: edit-auth
+      tool: edit
+      paths: ["**/auth/**"]
+      decision: ask
+    - id: edit-migrations
+      tool: edit
+      paths: ["**/migrations/**"]
+      decision: ask
+  command_floor:
+    always_block:
+      - "git push --force"
+      - "rm -rf /"
+      - "sudo "
+
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_assertion_weakening: true
+    block_silent_catch: true
+    block_ts_ignore: true
+    require_root_cause_for_bugfix: true
+  diff_budget:
+    max_files_changed: 15
+    max_added_lines: 800
+    on_violation: require_approval
+
+evidence:
+  require_before_promote:
+    - type: jankurai_delta
+      max_increase: 0
+    - type: proof_lane
+      must_pass: true
+    - type: rollback_plan
+      must_exist: true
+    - type: blind_critic_score
+      must_pass: true
+    - type: objection_checklist
+      must_pass: true
+    - type: concept_link
+      must_exist: true
+  sign: sha256
+  archive: true
+
+approvals:
+  gates:
+    human_review:
+      required_role: tech_lead
+      timeout: 24h
+      decisions: [approve, reject, edit, escalate]
+    human_security_review:
+      required_role: security
+      timeout: 24h
+  escalation:
+    chain: [tech_lead, staff_engineer]
+    auto_escalate_after: 48h
+
+rollback:
+  required_when:
+    touches_paths: ["**/migrations/**", "**/auth/**"]
+    risk_score_gte: 0.5
+  plan_required: true
+  verify_command: "git apply --reverse --check < .jekko/daemon/rollback.patch"
+  on_failure_after_merge: revert_commit
+
+budgets:
+  run:
+    wall_clock: 72h
+    cost_usd: 200.00
+    on_exhaust: renew_with_approval
+  task:
+    iterations: 30
+    cost_usd: 10.00
+    on_exhaust: park
+  iteration:
+    tool_calls: 50
+    diff_lines: 1500
+    on_exhaust: pause
+  experiment_lane:
+    wall_clock: 60m
+    cost_usd: 5.00
+    on_exhaust: abort
+
+hooks:
+  on_start:
+    - run: 'jankurai audit . --mode advisory --json target/jankurai/pre-jankurai-baseline.json --no-score-history'
+    - run: 'mkdir -p ~/.jankurai/concepts'
+  before_iteration:
+    - run: 'node scripts/jankurai-dispatch-classifier.mjs'
+      on_fail: warn
+  after_iteration:
+    - run: 'node scripts/regression-sentinel.mjs target/jankurai/pre-jankurai-baseline.json target/jankurai/repo-score.json .jekko/daemon/regression-streak'
+      on_fail: warn
+
+on:
+  - signal: error
+    message_contains: "regression"
+    do:
+      - pause: true
+      - notify: "Regression sentinel tripped"
+  - signal: checkpoint_failed
+    do:
+      - incubate_current_task: true
+  - signal: no_progress
+    count_gte: 3
+    do:
+      - switch_agent: plan
+      - notify: "no_progress: switching to plan"
+
+constraints:
+  - name: test-count-stable
+    check:
+      shell: "bun test --dry-run 2>&1 | grep -c test"
+      timeout: 30s
+    baseline: capture_on_start
+    invariant: gte_baseline
+    on_violation: pause
+
+sandbox:
+  paths:
+    - path: "secrets/**"
+      access: deny
+    - path: ".env*"
+      access: deny
+    - path: ".ssh/**"
+      access: deny
+  network:
+    outbound: allowlist
+    allowlist:
+      - "api.github.com"
+      - "registry.npmjs.org"
+      - "127.0.0.1"
+
+security:
+  injection:
+    scan_inputs: true
+    scan_outputs: true
+    deny_patterns:
+      - "ignore previous instructions"
+      - "you are now a different agent"
+    on_detect: pause
+  secrets:
+    redact_from_logs: true
+    rotate_after: 24h
+
+observability:
+  spans:
+    emit: all
+    include_tool_calls: true
+    include_model_calls: true
+  metrics:
+    - name: jankurai_score
+      type: gauge
+      source: target/jankurai/repo-score.json
+    - name: caps_total
+      type: gauge
+      source: target/jankurai/repo-score.json
+    - name: regression_streak
+      type: gauge
+      source: .jekko/daemon/regression-streak
+    - name: router_decisions
+      type: counter
+      source: target/jankurai/dispatch/route.json
+  cost:
+    budget: 200.0
+    currency: USD
+    alert_at_percent: 75
+    on_budget_exceeded: pause
+  report:
+    format: markdown
+    on_checkpoint: true
+    include: [score, caps, router_decisions, regression, concept_chain]
+
+stop:
+  all:
+    - shell:
+        command: "jq -e '(.caps_applied // []) | length == 0' target/jankurai/repo-score.json"
+        timeout: 5s
+    - shell:
+        command: "test $(wc -l < .jekko/daemon/regression-streak 2>/dev/null || echo 0) -ge 10"
+        timeout: 5s
+    - git_clean:
+        allow_untracked: false
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "just fast"
+      timeout: 30m
+  git:
+    add: ["."]
+    commit_message: "jankurai(dispatch): ${task.id}"
+    push: ask
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: ask
+  workers: allow
+  mcp: allow
+  research: allow
+  websearch: allow
+  webfetch: allow
+
+done:
+  require:
+    - stop_conditions_met
+    - score_history_slope_flat_24h
+    - regression_free_cycles_gte_10
+    - evidence_complete
+    - no_unresolved_critical_objections
+    - rollback_plan_recorded
+    - jankurai_caps_zero
+  forbid:
+    - model_only_claim
+    - tests_not_run
+    - pending_human_gate
+    - generated_output_hand_edit
+    - leaked_secret_evidence
+
+ui:
+  theme: jekko-gold
+  banner: forever
+<<<END_ZYAL id=jankurai-dynamic-dispatch-advanced>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-dynamic-dispatch-advanced

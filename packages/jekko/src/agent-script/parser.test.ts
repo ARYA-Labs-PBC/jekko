@@ -359,6 +359,7 @@ ZYAL_ARM RUN_FOREVER id=one`
       "14-jankurai-autoport-basic.zyal",
       "15-jankurai-fleet-parallel.zyal",
       "16-jankurai-incubator-concepts.zyal",
+      "17-dynamic-dispatch-advanced.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
       "memory-benchmark/executable-benchmark.zyal",
