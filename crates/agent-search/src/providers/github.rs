@@ -11,7 +11,10 @@ pub struct GithubProvider {
 
 impl GithubProvider {
     pub fn new(token: Option<String>) -> Self {
-        Self { client: client(), token }
+        Self {
+            client: client(),
+            token,
+        }
     }
 
     pub fn parse_fixture(value: &Value) -> Result<ProviderSearchResponse> {
@@ -33,7 +36,9 @@ impl GithubProvider {
 
 #[async_trait]
 impl SearchProvider for GithubProvider {
-    fn id(&self) -> ProviderId { ProviderId::Github }
+    fn id(&self) -> ProviderId {
+        ProviderId::Github
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(false, false, false, true, false, false, true)
@@ -57,7 +62,9 @@ impl SearchProvider for GithubProvider {
         }
         let json: Value = request.send().await?.error_for_status()?.json().await?;
         let mut response = Self::parse_fixture(&json)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

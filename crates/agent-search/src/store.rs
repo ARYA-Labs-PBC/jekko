@@ -38,7 +38,12 @@ impl ProvenanceStore {
         Ok(())
     }
 
-    pub fn insert_hit(&self, hit: &SearchHit, query: &str, ttl_days: i64) -> Result<bool, rusqlite::Error> {
+    pub fn insert_hit(
+        &self,
+        hit: &SearchHit,
+        query: &str,
+        ttl_days: i64,
+    ) -> Result<bool, rusqlite::Error> {
         let expires_at = (Utc::now() + Duration::days(ttl_days)).to_rfc3339();
         let citation_ids = serde_json::json!(hit.citation_ids).to_string();
         let changed = self.conn.execute(
@@ -65,7 +70,11 @@ impl ProvenanceStore {
         Ok(changed > 0)
     }
 
-    pub fn insert_evidence(&self, evidence: &EvidenceRecord, ttl_days: i64) -> Result<bool, rusqlite::Error> {
+    pub fn insert_evidence(
+        &self,
+        evidence: &EvidenceRecord,
+        ttl_days: i64,
+    ) -> Result<bool, rusqlite::Error> {
         let expires_at = (Utc::now() + Duration::days(ttl_days)).to_rfc3339();
         let citation_ids = serde_json::json!([evidence.citation_id.clone()]).to_string();
         let changed = self.conn.execute(
@@ -93,8 +102,10 @@ impl ProvenanceStore {
     }
 
     pub fn prune_expired(&self, now: DateTime<Utc>) -> Result<usize, rusqlite::Error> {
-        self.conn
-            .execute("DELETE FROM provenance WHERE expires_at < ?1", params![now.to_rfc3339()])
+        self.conn.execute(
+            "DELETE FROM provenance WHERE expires_at < ?1",
+            params![now.to_rfc3339()],
+        )
     }
 
     pub fn contains_hash(&self, hash: &str) -> Result<bool, rusqlite::Error> {

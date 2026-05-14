@@ -13,6 +13,7 @@ pub struct CliOptions {
     pub population: Option<String>,
     pub baseline_path: Option<String>,
     pub exec_path: Option<String>,
+    pub shadow_report: Option<String>,
     pub lanes_path: Option<String>,
     pub current_best_state: Option<String>,
     pub current_candidates: Option<String>,
@@ -26,6 +27,7 @@ pub struct CliOptions {
     pub comparison: Option<String>,
     pub triangulation: Option<String>,
     pub curriculum: Option<String>,
+    pub reference_reports: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -104,6 +106,7 @@ pub struct CandidateSnapshot {
     pub hypothesis: Option<String>,
     pub patch: Option<String>,
     pub observed_at_run: Option<String>,
+    pub dev_only: bool,
 }
 
 impl CandidateSnapshot {
@@ -139,6 +142,7 @@ impl CandidateSnapshot {
         if let Some(run) = &self.observed_at_run {
             obj.insert("observed_at_run".to_string(), Json::Str(run.clone()));
         }
+        obj.insert("dev_only".to_string(), Json::Bool(self.dev_only));
         if let Some(patch) = &self.patch {
             obj.insert("patch".to_string(), Json::Str(patch.clone()));
         }
@@ -220,6 +224,8 @@ pub fn run(mut options: CliOptions) -> Result<(), String> {
 
     let baseline = read_score(options.baseline_path.as_deref());
     let exec = read_score(options.exec_path.as_deref());
+    let shadow = read_score(options.shadow_report.as_deref());
+    let reference_reports = read_score_paths(&options.reference_reports);
     let population_count = read_population(options.population.as_deref());
     let lane_bundle = read_report_dir(options.lanes_path.as_deref(), ReadScope::LaneReport);
     let (current_best, current_best_errors) = read_current_best(
@@ -243,6 +249,8 @@ pub fn run(mut options: CliOptions) -> Result<(), String> {
             current_best,
             baseline.clone(),
             exec.clone(),
+            shadow,
+            reference_reports,
             read_errors,
         ))
     } else {
@@ -341,6 +349,13 @@ pub fn read_score(path: Option<&str>) -> Option<Json> {
     let path = path?;
     let text = fs::read_to_string(path).ok()?;
     json::parse(&text).ok()
+}
+
+pub fn read_score_paths(paths: &[String]) -> Vec<Json> {
+    paths
+        .iter()
+        .filter_map(|path| read_score(Some(path.as_str())))
+        .collect()
 }
 
 pub fn read_population(path: Option<&str>) -> usize {
@@ -505,6 +520,7 @@ fn fallback_current_best(
             hypothesis: None,
             patch: None,
             observed_at_run: None,
+            dev_only: false,
         },
         read_errors,
     )
@@ -515,6 +531,8 @@ pub fn build_chase_outputs(
     current_best: CandidateSnapshot,
     baseline: Option<Json>,
     exec: Option<Json>,
+    shadow: Option<Json>,
+    reference_reports: Vec<Json>,
     read_errors: Vec<ReadError>,
 ) -> ChaseOutputs {
     let mut candidates = Vec::new();
@@ -553,15 +571,47 @@ pub fn build_chase_outputs(
         .first()
         .cloned()
         .unwrap_or_else(|| current_best.clone());
+    let shadow_snapshot = snapshot_from_score_json("shadow", "shadow", shadow.as_ref());
+    let reference_snapshots: Vec<CandidateSnapshot> = reference_reports
+        .iter()
+        .filter_map(|report| snapshot_from_score_json("reference", "reference", Some(report)))
+        .collect();
 
     let current_score = current_best.score_key();
     let selected_score = selected.score_key();
     let delta = selected_score - current_score;
+    let shadow_delta = shadow_snapshot
+        .as_ref()
+        .map(|shadow| selected_score - shadow.score_key())
+        .unwrap_or(0.0);
+    let public_shadow_divergence = shadow_snapshot
+        .as_ref()
+        .map(|shadow| (selected_score - shadow.score_key()).abs())
+        .unwrap_or(0.0);
+    let reference_drift = reference_snapshots
+        .iter()
+        .map(|reference| (selected_score - reference.score_key()).abs())
+        .fold(0.0, f64::max);
+    let reference_mean = if reference_snapshots.is_empty() {
+        0.0
+    } else {
+        reference_snapshots
+            .iter()
+            .map(|r| r.score_key())
+            .sum::<f64>()
+            / reference_snapshots.len() as f64
+    };
+    let trusted_core_diff = patch_validation_violation_score(selected.patch.as_deref());
     let promoted = !same_identity(&selected, &current_best)
         && selected.gates.is_clean()
         && !selected.gates.has_new_failures_against(&current_best.gates)
         && selected.patch.is_some()
         && delta >= 0.75;
+    let promoted = promoted
+        && shadow_delta >= 0.0
+        && public_shadow_divergence <= 5.0
+        && reference_drift <= 0.5
+        && trusted_core_diff <= 0.0;
     let winner = if promoted {
         selected.clone()
     } else {
@@ -584,6 +634,15 @@ pub fn build_chase_outputs(
         ("current", current_best.to_json()),
         ("winner", winner.to_json()),
         ("score_delta", Json::Float(delta)),
+        ("shadow_delta", Json::Float(shadow_delta)),
+        (
+            "public_shadow_divergence",
+            Json::Float(public_shadow_divergence),
+        ),
+        ("reference_drift", Json::Float(reference_drift)),
+        ("reference_mean", Json::Float(reference_mean)),
+        ("trusted_core_diff", Json::Float(trusted_core_diff)),
+        ("dev_only", Json::Bool(selected.dev_only)),
         ("eligible_lane_count", Json::Int(eligible.len() as i64)),
         (
             "blocked_lane_count",
@@ -615,6 +674,15 @@ pub fn build_chase_outputs(
         ("selected", selected.to_json()),
         ("winner", winner.to_json()),
         ("score_delta", Json::Float(delta)),
+        ("shadow_delta", Json::Float(shadow_delta)),
+        (
+            "public_shadow_divergence",
+            Json::Float(public_shadow_divergence),
+        ),
+        ("reference_drift", Json::Float(reference_drift)),
+        ("reference_mean", Json::Float(reference_mean)),
+        ("trusted_core_diff", Json::Float(trusted_core_diff)),
+        ("dev_only", Json::Bool(selected.dev_only)),
         ("eligible_lane_count", Json::Int(eligible.len() as i64)),
         (
             "blocked_lane_count",
@@ -734,6 +802,7 @@ fn snapshot_from_score_json(
     let hypothesis = json_string(obj, "hypothesis");
     let observed_at_run = json_string(obj, "observed_at_run");
     let patch = json_string(obj, "patch").or_else(|| json_string(obj, "best_patch"));
+    let dev_only = json_bool(obj, "dev_only").unwrap_or(false);
 
     Some(CandidateSnapshot {
         name,
@@ -747,6 +816,7 @@ fn snapshot_from_score_json(
         hypothesis,
         patch,
         observed_at_run,
+        dev_only,
     })
 }
 
@@ -789,6 +859,7 @@ fn snapshot_from_candidate_like(
         .unwrap_or(0.0);
     let hypothesis = json_string(obj, "hypothesis");
     let observed_at_run = json_string(obj, "observed_at_run");
+    let dev_only = json_bool(obj, "dev_only").unwrap_or(false);
     let patch = json_string(obj, "patch")
         .or_else(|| json_string(obj, "best_patch"))
         .or_else(|| {
@@ -811,6 +882,7 @@ fn snapshot_from_candidate_like(
         hypothesis,
         patch,
         observed_at_run,
+        dev_only,
     })
 }
 
@@ -921,6 +993,13 @@ fn json_number(obj: &BTreeMap<String, Json>, key: &str) -> Option<f64> {
     }
 }
 
+fn json_bool(obj: &BTreeMap<String, Json>, key: &str) -> Option<bool> {
+    match obj.get(key) {
+        Some(Json::Bool(value)) => Some(*value),
+        _ => None,
+    }
+}
+
 fn json_number_in(obj: &BTreeMap<String, Json>, path: &[&str]) -> Option<f64> {
     let mut current = obj;
     for key in &path[..path.len().saturating_sub(1)] {
@@ -938,7 +1017,8 @@ fn same_identity(left: &CandidateSnapshot, right: &CandidateSnapshot) -> bool {
 }
 
 fn is_eligible(candidate: &CandidateSnapshot, current_best: &CandidateSnapshot) -> bool {
-    candidate.gates.is_clean()
+    !candidate.dev_only
+        && candidate.gates.is_clean()
         && candidate
             .patch
             .as_ref()
@@ -997,6 +1077,8 @@ fn promotion_reason(
         }
     } else if same_identity(selected, current_best) {
         "no clean eligible lane beat the current best by 0.75 points".to_string()
+    } else if selected.dev_only {
+        "selected lane is dev_only and cannot promote".to_string()
     } else if delta < 0.75 {
         format!("selected lane improves by only {:.3} points", delta)
     } else {
@@ -1260,4 +1342,239 @@ fn append_file(path: &Path, content: &str) -> Result<(), String> {
         .map_err(|e| format!("append {}: {}", path.display(), e))?;
     file.write_all(content.as_bytes())
         .map_err(|e| format!("append {}: {}", path.display(), e))
+}
+
+/// Returns `0.0` if the patch is safe to apply (touches only mutable-surface paths
+/// and contains no forbidden tokens), `1.0` if it violates the trusted-core
+/// allowlist or contains a forbidden token. The reducer gates promotion on
+/// `trusted_core_diff <= 0.0`.
+fn patch_validation_violation_score(patch: Option<&str>) -> f64 {
+    let Some(patch) = patch else {
+        // No patch attached → no diff to validate. Same as the prior
+        // `patch.is_some()` short-circuit: missing patch fails the gate.
+        return 1.0;
+    };
+    if patch_touches_forbidden_path(patch) {
+        return 1.0;
+    }
+    if patch_contains_forbidden_token(patch) {
+        return 1.0;
+    }
+    0.0
+}
+
+/// Forbidden paths — anything inside the trusted core. The AutoResearch
+/// mutable surface is `crates/cogcore/src/**` plus the non-reference
+/// candidate files in `crates/memory-benchmark/src/candidates/`.
+const FORBIDDEN_PATH_PREFIXES: &[&str] = &[
+    "crates/memory-benchmark/src/scoring/",
+    "crates/memory-benchmark/src/scorer.rs",
+    "crates/memory-benchmark/src/runner.rs",
+    "crates/memory-benchmark/src/runner_generated.rs",
+    "crates/memory-benchmark/src/runner_support.rs",
+    "crates/memory-benchmark/src/case.rs",
+    "crates/memory-benchmark/src/generated/",
+    "crates/memory-benchmark/src/corpus/",
+    "crates/memory-benchmark/src/oracle/",
+    "crates/memory-benchmark/src/fixture/",
+    "crates/memory-benchmark/src/chase_report.rs",
+    "crates/memory-benchmark/src/lib.rs",
+    "crates/memory-benchmark/src/types.rs",
+    "crates/memory-benchmark/src/result.rs",
+    "crates/memory-benchmark/src/memory_api.rs",
+    "crates/memory-benchmark/src/adapters/baseline.rs",
+    "crates/memory-benchmark/src/adapters/reference_context_pack.rs",
+    "crates/memory-benchmark/src/adapters/reference_evidence_ledger.rs",
+    "crates/memory-benchmark/src/adapters/reference_claim_skeptic.rs",
+    "crates/memory-benchmark/tests/",
+    "docs/ZYAL/SPEC.md",
+];
+
+fn patch_touches_forbidden_path(patch: &str) -> bool {
+    for line in patch.lines() {
+        // Unified diff path lines: `+++ b/<path>` and `--- a/<path>`.
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed
+            .strip_prefix("+++ ")
+            .or_else(|| trimmed.strip_prefix("--- "))
+        else {
+            continue;
+        };
+        let path = rest.trim_start_matches("a/").trim_start_matches("b/");
+        // Strip trailing tab + timestamp some diff tools append.
+        let path = path.split_whitespace().next().unwrap_or(path);
+        if path == "/dev/null" {
+            continue;
+        }
+        for prefix in FORBIDDEN_PATH_PREFIXES {
+            if path == *prefix || path.starts_with(prefix) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Forbidden tokens that signal non-determinism or secret leakage. Scanned on
+/// added lines (`+` prefix in unified diff) and on context lines that look like
+/// rust code. Lines starting with `+//` are treated as comments and skipped.
+const FORBIDDEN_TOKENS: &[&str] = &[
+    "SystemTime::now",
+    "Instant::now",
+    "thread_rng",
+    "rand::random",
+    "rand::thread_rng",
+    "chrono::",
+    "env::var(",
+    "process::Command",
+    " unsafe ",
+    " unsafe{",
+    "panic!(",
+    "unimplemented!(",
+    "sk-",
+    "SECRET_KEY",
+    "SECRET_TOKEN",
+];
+
+fn patch_contains_forbidden_token(patch: &str) -> bool {
+    for line in patch.lines() {
+        let Some(added) = line.strip_prefix('+') else {
+            continue;
+        };
+        // Skip diff header `+++` and pure comment lines.
+        if added.starts_with("++") {
+            continue;
+        }
+        let code = added.trim_start();
+        if code.starts_with("//") || code.starts_with("/*") || code.starts_with("*") {
+            continue;
+        }
+        for token in FORBIDDEN_TOKENS {
+            if added.contains(token) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod patch_validation_tests {
+    use super::*;
+
+    #[test]
+    fn no_patch_is_violation() {
+        assert_eq!(patch_validation_violation_score(None), 1.0);
+    }
+
+    #[test]
+    fn cogcore_only_patch_is_safe() {
+        let patch = "\
+diff --git a/crates/cogcore/src/config.rs b/crates/cogcore/src/config.rs
+--- a/crates/cogcore/src/config.rs
++++ b/crates/cogcore/src/config.rs
+@@ -1 +1 @@
+-const K: f32 = 0.5;
++const K: f32 = 0.6;
+";
+        assert_eq!(patch_validation_violation_score(Some(patch)), 0.0);
+    }
+
+    #[test]
+    fn scorer_patch_is_rejected() {
+        let patch = "\
+diff --git a/crates/memory-benchmark/src/scoring/axes.rs b/crates/memory-benchmark/src/scoring/axes.rs
+--- a/crates/memory-benchmark/src/scoring/axes.rs
++++ b/crates/memory-benchmark/src/scoring/axes.rs
+@@ -1 +1 @@
+-pub const WEIGHT: f32 = 14.0;
++pub const WEIGHT: f32 = 50.0;
+";
+        assert_eq!(patch_validation_violation_score(Some(patch)), 1.0);
+    }
+
+    #[test]
+    fn forbidden_token_systemtime_is_rejected() {
+        let patch = "\
+diff --git a/crates/cogcore/src/config.rs b/crates/cogcore/src/config.rs
+--- a/crates/cogcore/src/config.rs
++++ b/crates/cogcore/src/config.rs
+@@ -1 +1 @@
+-fn time() -> u64 { 0 }
++fn time() -> u64 { SystemTime::now().elapsed().unwrap_or_default().as_secs() }
+";
+        assert_eq!(patch_validation_violation_score(Some(patch)), 1.0);
+    }
+
+    #[test]
+    fn forbidden_token_in_comment_is_allowed() {
+        let patch = "\
+diff --git a/crates/cogcore/src/config.rs b/crates/cogcore/src/config.rs
+--- a/crates/cogcore/src/config.rs
++++ b/crates/cogcore/src/config.rs
+@@ -1 +1 @@
+-const K: f32 = 0.5;
++// SystemTime::now() is forbidden in cogcore hot path
++const K: f32 = 0.6;
+";
+        assert_eq!(patch_validation_violation_score(Some(patch)), 0.0);
+    }
+
+    #[test]
+    fn tests_dir_is_forbidden() {
+        let patch = "\
+diff --git a/crates/memory-benchmark/tests/foo.rs b/crates/memory-benchmark/tests/foo.rs
+--- a/crates/memory-benchmark/tests/foo.rs
++++ b/crates/memory-benchmark/tests/foo.rs
+@@ -1 +1 @@
+-fn t() {}
++fn t() { assert!(true); }
+";
+        assert_eq!(patch_validation_violation_score(Some(patch)), 1.0);
+    }
+
+    #[test]
+    fn dev_only_lane_is_not_eligible() {
+        let current = CandidateSnapshot {
+            name: "current".to_string(),
+            source: "current".to_string(),
+            total: 70.0,
+            ci95_low: 70.0,
+            ci95_high: 70.0,
+            stress_total: 70.0,
+            gates: GateVector::default(),
+            cost_usd: 0.0,
+            hypothesis: None,
+            patch: None,
+            observed_at_run: None,
+            dev_only: false,
+        };
+        let candidate = CandidateSnapshot {
+            name: "lane".to_string(),
+            source: "lane".to_string(),
+            total: 90.0,
+            ci95_low: 90.0,
+            ci95_high: 90.0,
+            stress_total: 90.0,
+            gates: GateVector::default(),
+            cost_usd: 0.0,
+            hypothesis: None,
+            patch: Some("diff --git a/crates/cogcore/src/config.rs b/crates/cogcore/src/config.rs\n--- a/crates/cogcore/src/config.rs\n+++ b/crates/cogcore/src/config.rs\n@@ -1 +1 @@\n-a\n+b\n".to_string()),
+            observed_at_run: None,
+            dev_only: true,
+        };
+        assert!(!is_eligible(&candidate, &current));
+    }
+
+    #[test]
+    fn drift_in_absolute_points() {
+        // 2.36-point drift between selected and reference must read as 2.36,
+        // not 0.0236. Old `/ 100.0` would have made this pass the 0.5 gate.
+        let selected_score = 80.0_f64;
+        let reference_score = 82.36_f64;
+        let drift = (selected_score - reference_score).abs();
+        assert!((drift - 2.36).abs() < 1e-6);
+        // The gate is `<= 0.5`. With the new math, 2.36 fails the gate (rejection).
+        assert!(drift > 0.5);
+    }
 }

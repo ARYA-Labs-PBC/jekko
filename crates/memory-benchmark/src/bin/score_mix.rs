@@ -15,6 +15,8 @@ struct InputScore {
     total: f64,
     fixtures_run: i64,
     fixtures_passed: i64,
+    dev_only: bool,
+    qbank_trusted: Option<bool>,
 }
 
 fn main() {
@@ -58,25 +60,7 @@ fn run() -> Result<(), String> {
         .map(|input| input.fixtures_passed)
         .sum::<i64>();
 
-    let mut parts = Vec::new();
-    for input in &inputs {
-        parts.push(json::obj(&[
-            ("name", Json::Str(input.name.clone())),
-            ("weight", Json::Float(input.weight)),
-            ("path", Json::Str(input.path.clone())),
-            ("total", Json::Float(input.total)),
-            ("fixtures_run", Json::Int(input.fixtures_run)),
-            ("fixtures_passed", Json::Int(input.fixtures_passed)),
-        ]));
-    }
-    let mut top = BTreeMap::new();
-    top.insert("name".to_string(), Json::Str(name));
-    top.insert("suite".to_string(), Json::Str("mixed".to_string()));
-    top.insert("total".to_string(), Json::Float(total));
-    top.insert("fixtures_run".to_string(), Json::Int(fixtures_run));
-    top.insert("fixtures_passed".to_string(), Json::Int(fixtures_passed));
-    top.insert("inputs".to_string(), Json::Array(parts));
-    let payload = Json::Object(top).to_string();
+    let payload = build_payload(name, &inputs, total, fixtures_run, fixtures_passed).to_string();
     if let Some(path) = out {
         if let Some(parent) = Path::new(&path).parent() {
             fs::create_dir_all(parent)
@@ -87,6 +71,60 @@ fn run() -> Result<(), String> {
         println!("{payload}");
     }
     Ok(())
+}
+
+fn build_payload(
+    name: String,
+    inputs: &[InputScore],
+    total: f64,
+    fixtures_run: i64,
+    fixtures_passed: i64,
+) -> Json {
+    let mut parts = Vec::new();
+    let mut dev_only_inputs = Vec::new();
+    let mut qbank_seen = false;
+    let mut qbank_trusted = true;
+    for input in inputs {
+        let mut entry = match json::obj(&[
+            ("name", Json::Str(input.name.clone())),
+            ("weight", Json::Float(input.weight)),
+            ("path", Json::Str(input.path.clone())),
+            ("total", Json::Float(input.total)),
+            ("fixtures_run", Json::Int(input.fixtures_run)),
+            ("fixtures_passed", Json::Int(input.fixtures_passed)),
+            ("dev_only", Json::Bool(input.dev_only)),
+        ]) {
+            Json::Object(entry) => entry,
+            _ => unreachable!("json::obj returns an object"),
+        };
+        if input.dev_only {
+            dev_only_inputs.push(Json::Str(input.name.clone()));
+        }
+        if let Some(trusted) = input.qbank_trusted {
+            entry.insert("qbank_trusted".to_string(), Json::Bool(trusted));
+        }
+        if input.name == "qbank" || input.qbank_trusted.is_some() {
+            qbank_seen = true;
+            qbank_trusted &= input.qbank_trusted.unwrap_or(!input.dev_only);
+        }
+        parts.push(Json::Object(entry));
+    }
+    let mut top = BTreeMap::new();
+    top.insert("name".to_string(), Json::Str(name));
+    top.insert("suite".to_string(), Json::Str("mixed".to_string()));
+    top.insert("total".to_string(), Json::Float(total));
+    top.insert("fixtures_run".to_string(), Json::Int(fixtures_run));
+    top.insert("fixtures_passed".to_string(), Json::Int(fixtures_passed));
+    top.insert(
+        "dev_only".to_string(),
+        Json::Bool(inputs.iter().any(|input| input.dev_only)),
+    );
+    top.insert("dev_only_inputs".to_string(), Json::Array(dev_only_inputs));
+    if qbank_seen {
+        top.insert("qbank_trusted".to_string(), Json::Bool(qbank_trusted));
+    }
+    top.insert("inputs".to_string(), Json::Array(parts));
+    Json::Object(top)
 }
 
 fn read_input(spec: &str) -> Result<InputScore, String> {
@@ -111,6 +149,8 @@ fn read_input(spec: &str) -> Result<InputScore, String> {
         total: number(&obj, "total")?,
         fixtures_run: integer(&obj, "fixtures_run")?,
         fixtures_passed: integer(&obj, "fixtures_passed")?,
+        dev_only: bool_value(&obj, "dev_only").unwrap_or(false),
+        qbank_trusted: bool_value(&obj, "qbank_trusted"),
     })
 }
 
@@ -136,6 +176,13 @@ fn integer(obj: &BTreeMap<String, Json>, key: &str) -> Result<i64, String> {
     }
 }
 
+fn bool_value(obj: &BTreeMap<String, Json>, key: &str) -> Option<bool> {
+    match obj.get(key) {
+        Some(Json::Bool(value)) => Some(*value),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +201,44 @@ mod tests {
         assert_eq!(input.name, "generated");
         assert_eq!(input.weight, 0.60);
         assert_eq!(input.total, 50.0);
+        assert!(!input.dev_only);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mixed_report_propagates_dev_only_qbank_status() {
+        let inputs = vec![
+            InputScore {
+                name: "generated".to_string(),
+                weight: 0.60,
+                path: "generated.json".to_string(),
+                total: 90.0,
+                fixtures_run: 10,
+                fixtures_passed: 9,
+                dev_only: false,
+                qbank_trusted: None,
+            },
+            InputScore {
+                name: "qbank".to_string(),
+                weight: 0.40,
+                path: "qbank.json".to_string(),
+                total: 80.0,
+                fixtures_run: 50,
+                fixtures_passed: 40,
+                dev_only: true,
+                qbank_trusted: Some(false),
+            },
+        ];
+
+        let payload = build_payload("northstar".to_string(), &inputs, 86.0, 60, 49);
+        let Json::Object(obj) = payload else {
+            panic!("score_mix payload must be an object");
+        };
+        assert_eq!(obj.get("dev_only"), Some(&Json::Bool(true)));
+        assert_eq!(obj.get("qbank_trusted"), Some(&Json::Bool(false)));
+        assert_eq!(
+            obj.get("dev_only_inputs"),
+            Some(&Json::Array(vec![Json::Str("qbank".to_string())]))
+        );
     }
 }

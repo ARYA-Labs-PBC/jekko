@@ -60,6 +60,7 @@ const SUPPORTED_FEATURE_KEYS = new Set([
   "budgets",
   "triggers",
   "rollback",
+  "promotion_gates",
   "done",
   "repo_intelligence",
   "fleet",
@@ -2082,6 +2083,7 @@ function assertResearchNestedKeys(input: Record<string, unknown>) {
     "question_bank",
     "agent_trials",
     "audit",
+    "route_metadata",
   ])
   if (research.version !== "v1") {
     throw new ZyalParseError(`research.version must be v1`)
@@ -2161,6 +2163,10 @@ function assertResearchNestedKeys(input: Record<string, unknown>) {
   if (research.audit !== undefined) {
     const audit = expectRecord(research.audit, "research.audit")
     assertKeys("research.audit", audit, ["critics", "focused_auditors", "min_auditor_agreement", "min_answerability"])
+  }
+  if (research.route_metadata !== undefined) {
+    const routeMetadata = expectRecord(research.route_metadata, "research.route_metadata")
+    assertKeys("research.route_metadata", routeMetadata, ["required", "require_request_id", "require_provider", "require_model_profile"])
   }
 }
 

@@ -48,6 +48,9 @@ pub fn parse_args() -> (String, Option<String>, SuiteConfig) {
                         "generated" => Split::PublicGenerated,
                         "stress" => Split::Stress,
                         "real-papers" => Split::RealPapers,
+                        "compounding" => Split::PublicCompounding,
+                        "hardening" => Split::PublicHardening,
+                        "private-generated" => Split::PrivateGenerated,
                         _ => config.split,
                     };
                 }
@@ -61,6 +64,8 @@ pub fn parse_args() -> (String, Option<String>, SuiteConfig) {
                         "stress" => Split::Stress,
                         "public" => Split::PublicSmoke,
                         "real-papers" => Split::RealPapers,
+                        "compounding" => Split::PublicCompounding,
+                        "hardening" => Split::PublicHardening,
                         _ => config.split,
                     };
                 }
@@ -325,6 +330,16 @@ pub(crate) fn accumulate(totals: &mut AxisScores, counts: &mut AxisScores, a: &A
         &mut counts.determinism_rebuild,
         a.determinism_rebuild,
     );
+    add_if_active(
+        &mut totals.compounding,
+        &mut counts.compounding,
+        a.compounding,
+    );
+    add_if_active(
+        &mut totals.topic_hardening,
+        &mut counts.topic_hardening,
+        a.topic_hardening,
+    );
 }
 
 pub(crate) fn weighted_fraction(a: &AxisScores) -> f32 {
@@ -345,6 +360,8 @@ pub(crate) fn weighted_fraction(a: &AxisScores) -> f32 {
         (a.procedural_skill, w.procedural_skill),
         (a.feedback_adaptation, w.feedback_adaptation),
         (a.determinism_rebuild, w.determinism_rebuild),
+        (a.compounding, w.compounding),
+        (a.topic_hardening, w.topic_hardening),
     ];
     for (v, weight) in pairs {
         if !v.is_nan() {
@@ -375,5 +392,7 @@ pub(crate) fn average(t: &AxisScores, c: &AxisScores) -> AxisScores {
         procedural_skill: safe(t.procedural_skill, c.procedural_skill),
         feedback_adaptation: safe(t.feedback_adaptation, c.feedback_adaptation),
         determinism_rebuild: safe(t.determinism_rebuild, c.determinism_rebuild),
+        compounding: safe(t.compounding, c.compounding),
+        topic_hardening: safe(t.topic_hardening, c.topic_hardening),
     }
 }

@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "fs/promises"
 import path from "path"
 import { Cause, Effect } from "effect"
+import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceState } from "@/effect/instance-state"
 import { resolveInstanceRoot } from "@/project/instance-root"
 import type { ZyalScript } from "@/agent-script/schema"
@@ -10,7 +11,6 @@ import type { Session } from "./session"
 import type { SessionPrompt } from "./prompt"
 import type { DaemonChecks } from "./daemon-checks"
 import type { Worktree } from "@/worktree"
-import type { InstanceStore } from "@/project/instance-store"
 
 const JNOCCIO_PROVIDER_ID = "jnoccio"
 const JNOCCIO_MODEL_ID = "jnoccio-fusion"
@@ -158,6 +158,14 @@ export function runAutoResearch(input: {
     })
 
     if (spec.fan_out?.split?.shell) {
+      yield* input.store.appendEvent({
+        runID: input.run.id,
+        iteration: input.run.iteration,
+        eventType: "autoresearch.split.started",
+        payload: {
+          command: spec.fan_out.split.shell,
+        },
+      })
       const split = yield* input.checks.runShellCheck({
         cwd: rootDir,
         command: spec.fan_out.split.shell,
@@ -173,9 +181,43 @@ export function runAutoResearch(input: {
           matched: split.matched,
         },
       })
+      if ((split.exitCode !== 0 || !split.matched) && spec.fan_out.on_partial_failure !== "continue") {
+        const message = `fan_out split failed with exit code ${split.exitCode}`
+        yield* input.store.appendEvent({
+          runID: input.run.id,
+          iteration: input.run.iteration,
+          eventType: "autoresearch.split.failed",
+          payload: {
+            command: spec.fan_out.split.shell,
+            exitCode: split.exitCode,
+            matched: split.matched,
+            error: message,
+          },
+        })
+        yield* input.transitionRun(input.run.id, {
+          status: "failed",
+          phase: "terminal",
+          stopped_at: Date.now(),
+          last_error: message,
+          last_exit_result_json: {
+            autoresearch: true,
+            split_failed: true,
+            exitCode: split.exitCode,
+          },
+        })
+        return yield* Effect.fail(new Error(message))
+      }
     }
 
     if (spec.experiments?.scoring?.command) {
+      yield* input.store.appendEvent({
+        runID: input.run.id,
+        iteration: input.run.iteration,
+        eventType: "autoresearch.scoring.started",
+        payload: {
+          command: spec.experiments.scoring.command,
+        },
+      })
       const scoring = yield* input.checks.runShellCheck({
         cwd: rootDir,
         command: spec.experiments.scoring.command,
@@ -316,16 +358,70 @@ function runLane(input: {
     const workItem = workItems[input.laneIndex % Math.max(workItems.length, 1)]
     const laneRoot = path.join(input.artifactRoot, "reports", "lanes", laneID)
     const laneArtifactDir = laneRoot
+    yield* input.input.store.appendEvent({
+      runID: input.input.run.id,
+      iteration: input.input.run.iteration,
+      eventType: "autoresearch.lane.mkdir.started",
+      payload: {
+        lane_id: laneID,
+        path: laneArtifactDir,
+      },
+    })
     yield* Effect.promise(() => mkdir(laneArtifactDir, { recursive: true }))
+    yield* input.input.store.appendEvent({
+      runID: input.input.run.id,
+      iteration: input.input.run.iteration,
+      eventType: "autoresearch.lane.mkdir.completed",
+      payload: {
+        lane_id: laneID,
+        path: laneArtifactDir,
+      },
+    })
 
     const isolation = input.lane.isolation ?? input.spec.fleet?.isolation ?? "git_worktree"
+    yield* input.input.store.appendEvent({
+      runID: input.input.run.id,
+      iteration: input.input.run.iteration,
+      eventType: "autoresearch.lane.setup.started",
+      payload: {
+        lane_id: laneID,
+        isolation,
+      },
+    })
     const worktreeInfo =
       isolation === "git_worktree"
         ? yield* input.input.worktree.create({ name: laneID })
         : undefined
     const laneDirectory = worktreeInfo?.directory ?? input.rootDir
+    if (worktreeInfo) {
+      yield* input.input.store.appendEvent({
+        runID: input.input.run.id,
+        iteration: input.input.run.iteration,
+        eventType: "autoresearch.lane.worktree.created",
+        payload: {
+          lane_id: laneID,
+          worktree: worktreeInfo.directory,
+          branch: worktreeInfo.branch,
+        },
+      })
+    }
+    const laneContext = worktreeInfo
+      ? {
+          directory: laneDirectory,
+          worktree: input.rootDir,
+          project: input.project,
+        }
+      : undefined
 
     const laneEffect = Effect.gen(function* () {
+      yield* input.input.store.appendEvent({
+        runID: input.input.run.id,
+        iteration: input.input.run.iteration,
+        eventType: "autoresearch.lane.entered",
+        payload: {
+          lane_id: laneID,
+        },
+      })
       const sessions = input.input.sessions
       const prompt = input.input.prompt
       const session = yield* sessions.fork({
@@ -472,18 +568,7 @@ function runLane(input: {
       ),
     )
 
-    if (worktreeInfo) {
-      return yield* input.input.instanceStore.provide(
-        {
-          directory: worktreeInfo.directory,
-          worktree: input.rootDir,
-          project: input.project,
-        },
-        laneEffect,
-      )
-    }
-
-    return yield* laneEffect
+    return yield* (laneContext ? laneEffect.pipe(Effect.provideService(InstanceRef, laneContext)) : laneEffect)
   })
 }
 
@@ -507,7 +592,7 @@ function buildLanePrompt(
   ].filter(Boolean).join("\n")
 }
 
-function routeMetadataFromAssistant(
+export function routeMetadataFromAssistant(
   assistant: Record<string, any> | undefined,
   runID: string,
   laneID: string,
@@ -517,16 +602,30 @@ function routeMetadataFromAssistant(
   return {
     request_id: stringOrNull(jnoccio.request_id),
     route_mode: stringOrNull(jnoccio.route_mode),
+    route_confidence: numberOrNull(jnoccio.route_confidence ?? jnoccio.confidence),
     primary_model_id: stringOrNull(jnoccio.primary_model_id),
     backup_model_ids: Array.isArray(jnoccio.backup_model_ids) ? jnoccio.backup_model_ids.filter((value: unknown) => typeof value === "string") : [],
     fusion_model_id: stringOrNull(jnoccio.fusion_model_id),
     winner_model_id: stringOrNull(jnoccio.winner_model_id),
     confidence: numberOrNull(jnoccio.confidence),
-    provider: stringOrNull(assistant?.providerID),
-    model: stringOrNull(assistant?.modelID),
+    prompt_hash: stringOrNull(jnoccio.prompt_hash),
+    context_hash: stringOrNull(jnoccio.context_hash),
+    receipts_hash: stringOrNull(jnoccio.receipts_hash),
+    model_decisions_hash: stringOrNull(jnoccio.model_decisions_hash),
+    token_usage: jnoccio.token_usage && typeof jnoccio.token_usage === "object"
+      ? {
+          prompt_tokens: numberOrNull(jnoccio.token_usage.prompt_tokens),
+          completion_tokens: numberOrNull(jnoccio.token_usage.completion_tokens),
+          total_tokens: numberOrNull(jnoccio.token_usage.total_tokens),
+        }
+      : null,
+    model_decisions: Array.isArray(jnoccio.model_decisions) ? jnoccio.model_decisions : [],
+    provider: stringOrNull(assistant?.providerID ?? jnoccio.provider),
+    model: stringOrNull(assistant?.modelID ?? jnoccio.model),
     agent_role: agentRole,
     zyal_run_id: runID,
     zyal_lane_id: laneID,
+    jnoccio,
   }
 }
 

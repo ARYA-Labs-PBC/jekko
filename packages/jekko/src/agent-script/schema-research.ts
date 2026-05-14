@@ -117,9 +117,15 @@ export const ZyalResearchQuestionBankWorkItem = Schema.Struct({
   challenge_path: Schema.optional(Schema.String),
   role: Schema.optional(Schema.Union([
     Schema.Literal("question_generator"),
+    Schema.Literal("publication_extractor"),
     Schema.Literal("answerer"),
+    Schema.Literal("saturated_answerer"),
+    Schema.Literal("focused_auditor"),
     Schema.Literal("critic"),
     Schema.Literal("auditor"),
+    Schema.Literal("judge_reducer"),
+    Schema.Literal("reducer"),
+    Schema.Literal("scorer"),
   ])),
 })
 export type ZyalResearchQuestionBankWorkItem = Schema.Schema.Type<typeof ZyalResearchQuestionBankWorkItem>
@@ -149,6 +155,14 @@ export const ZyalResearchAudit = Schema.Struct({
 })
 export type ZyalResearchAudit = Schema.Schema.Type<typeof ZyalResearchAudit>
 
+export const ZyalResearchRouteMetadata = Schema.Struct({
+  required: Schema.optional(Schema.Boolean),
+  require_request_id: Schema.optional(Schema.Boolean),
+  require_provider: Schema.optional(Schema.String),
+  require_model_profile: Schema.optional(Schema.Boolean),
+})
+export type ZyalResearchRouteMetadata = Schema.Schema.Type<typeof ZyalResearchRouteMetadata>
+
 export const ZyalResearch = Schema.Struct({
   version: Schema.Literal(ZYAL_RESEARCH_BLOCK_VERSION),
   mode: Schema.optional(ZyalResearchMode),
@@ -167,5 +181,6 @@ export const ZyalResearch = Schema.Struct({
   question_bank: Schema.optional(ZyalResearchQuestionBank),
   agent_trials: Schema.optional(ZyalResearchAgentTrials),
   audit: Schema.optional(ZyalResearchAudit),
+  route_metadata: Schema.optional(ZyalResearchRouteMetadata),
 })
 export type ZyalResearch = Schema.Schema.Type<typeof ZyalResearch>

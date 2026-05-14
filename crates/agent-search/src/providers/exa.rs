@@ -10,7 +10,10 @@ pub struct ExaProvider {
 
 impl ExaProvider {
     pub fn new(api_key: String) -> Self {
-        Self { client: client(), api_key }
+        Self {
+            client: client(),
+            api_key,
+        }
     }
 
     pub fn parse_fixture(value: &Value) -> Result<ProviderSearchResponse> {
@@ -32,7 +35,9 @@ impl ExaProvider {
 
 #[async_trait]
 impl SearchProvider for ExaProvider {
-    fn id(&self) -> ProviderId { ProviderId::Exa }
+    fn id(&self) -> ProviderId {
+        ProviderId::Exa
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(true, true, false, false, true, true, true)
@@ -57,7 +62,9 @@ impl SearchProvider for ExaProvider {
             .json()
             .await?;
         let mut response = Self::parse_fixture(&json)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

@@ -15,7 +15,7 @@ use std::fs;
 use std::process;
 
 #[rustfmt::skip]
-use crate::adapters::{baseline, reference_claim_skeptic, reference_context_pack, reference_evidence_ledger};
+use crate::adapters::{baseline, cogcore_adapter, reference_claim_skeptic, reference_context_pack, reference_evidence_ledger};
 #[rustfmt::skip]
 use crate::candidates::{arena, compression_first, hybrid_index, ledger_first, skeptic_dataset, temporal_graph};
 use crate::json::{self, Json};
@@ -40,6 +40,7 @@ fn boxed_adapter(name: &str) -> Result<Box<dyn MemorySystem>, String> {
         "reference_context_pack" => Ok(Box::new(reference_context_pack::Adapter::default())),
         "reference_evidence_ledger" => Ok(Box::new(reference_evidence_ledger::Adapter::default())),
         "reference_claim_skeptic" => Ok(Box::new(reference_claim_skeptic::Adapter::default())),
+        "cogcore" => Ok(Box::new(cogcore_adapter::Adapter::default())),
         "exec" | "ledger_first" => Ok(Box::new(ledger_first::Adapter::default())),
         "hybrid_index" => Ok(Box::new(hybrid_index::Adapter::default())),
         "temporal_graph" => Ok(Box::new(temporal_graph::Adapter::default())),
@@ -152,6 +153,8 @@ pub fn run_candidate_with_config(
                 procedural_skill: f32::NAN,
                 feedback_adaptation: f32::NAN,
                 determinism_rebuild: f32::NAN,
+                compounding: f32::NAN,
+                topic_hardening: f32::NAN,
             }
         };
 
@@ -212,6 +215,12 @@ pub fn run_candidate_with_config(
             avg.determinism_rebuild,
             w.determinism_rebuild,
             axis_counts.determinism_rebuild,
+        ),
+        (avg.compounding, w.compounding, axis_counts.compounding),
+        (
+            avg.topic_hardening,
+            w.topic_hardening,
+            axis_counts.topic_hardening,
         ),
     ];
     let mut sum = 0.0_f32;

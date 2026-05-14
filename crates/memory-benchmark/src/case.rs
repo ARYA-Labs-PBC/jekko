@@ -7,6 +7,10 @@ pub enum Split {
     PrivateGenerated,
     Stress,
     RealPapers,
+    /// Multi-hop chain reasoning suite (v3 north-star).
+    PublicCompounding,
+    /// 5-timestep repeated-query convergence suite (v3 north-star).
+    PublicHardening,
 }
 
 impl Split {
@@ -17,6 +21,8 @@ impl Split {
             Split::PrivateGenerated => "private-generated",
             Split::Stress => "stress",
             Split::RealPapers => "real-papers",
+            Split::PublicCompounding => "public-compounding",
+            Split::PublicHardening => "public-hardening",
         }
     }
 }
@@ -71,6 +77,35 @@ pub struct BenchCase {
 }
 
 #[derive(Debug, Clone)]
+pub struct HardeningCase {
+    pub id: String,
+    pub subject: String,
+    pub base_events: Vec<Event>,
+    pub reinforcements: Vec<Event>,
+    pub query: Query,
+    pub oracle: CaseOracle,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompoundCase {
+    pub id: String,
+    pub block: FixtureBlock,
+    pub domain: Domain,
+    pub events: Vec<Event>,
+    pub queries: Vec<CompoundQuery>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompoundQuery {
+    pub label: String,
+    pub query: Query,
+    pub oracle: CaseOracle,
+    pub hop_depth: u8,
+    pub depth_weight: f32,
+    pub control: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum EpisodeStep {
     Teach,
     Distract,
@@ -105,6 +140,10 @@ pub enum OracleKind {
     Provenance,
     Workflow,
     Metamorphic,
+    /// Multi-hop chain — used by `Split::PublicCompounding`.
+    Compounding,
+    /// Repeated-query convergence — used by `Split::PublicHardening`.
+    Hardening,
 }
 
 impl From<&crate::fixture::Fixture> for BenchCase {

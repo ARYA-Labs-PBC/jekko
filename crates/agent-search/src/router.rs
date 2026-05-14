@@ -21,13 +21,27 @@ impl QueryRouter {
             text.push(' ');
             text.push_str(&objective.to_ascii_lowercase());
         }
-        if text.contains("arxiv") || text.contains("pubmed") || text.contains("doi") || text.contains("paper") || text.contains("citation") {
+        if text.contains("arxiv")
+            || text.contains("pubmed")
+            || text.contains("doi")
+            || text.contains("paper")
+            || text.contains("citation")
+        {
             return QueryClass::Academic;
         }
-        if text.contains("github") || text.contains("code") || text.contains("repository") || text.contains("rust") || text.contains("python") {
+        if text.contains("github")
+            || text.contains("code")
+            || text.contains("repository")
+            || text.contains("rust")
+            || text.contains("python")
+        {
             return QueryClass::Code;
         }
-        if text.contains("breaking") || text.contains("latest") || text.contains("today") || text.contains("news") {
+        if text.contains("breaking")
+            || text.contains("latest")
+            || text.contains("today")
+            || text.contains("news")
+        {
             return QueryClass::News;
         }
         if text.contains("web") || text.contains("search") {
@@ -44,7 +58,11 @@ pub fn plan_providers(
     query_class: QueryClass,
     policy: &ProviderPolicy,
 ) -> Vec<ProviderEntry> {
-    let allow: HashSet<String> = policy.allow.iter().map(|entry| entry.to_ascii_lowercase()).collect();
+    let allow: HashSet<String> = policy
+        .allow
+        .iter()
+        .map(|entry| entry.to_ascii_lowercase())
+        .collect();
     let mut ranked: Vec<_> = entries
         .iter()
         .filter(|entry| allow.contains(entry.provider.id().as_str()))
@@ -63,9 +81,15 @@ pub fn plan_providers(
         let prefer_rank = policy
             .prefer
             .iter()
-            .position(|p| p.eq_ignore_ascii_case("official_api") && !entry.capabilities.requires_key)
+            .position(|p| {
+                p.eq_ignore_ascii_case("official_api") && !entry.capabilities.requires_key
+            })
             .unwrap_or(usize::MAX);
-        let stability = if entry.capabilities.privacy_first { 0 } else { 1 };
+        let stability = if entry.capabilities.privacy_first {
+            0
+        } else {
+            1
+        };
         (prefer_rank, stability, id.to_string())
     });
     ranked

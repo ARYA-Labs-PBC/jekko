@@ -99,10 +99,13 @@ ZYAL_ARM RUN_FOREVER id=test`
     expect(files).toEqual([
       "autoresearch-basic.zyal",
       "autoresearch-chase.zyal",
+      "cogcore-stream-papers.zyal",
       "executable-benchmark.zyal",
       "generated-challenge.zyal",
       "prompt-scoring.zyal",
       "qbank-advanced.zyal",
+      "qbank-deep-stem-500.zyal",
+      "qbank-live-smoke-10.zyal",
       "qbank-simple.zyal",
       "qbank-ultra.zyal",
     ])
@@ -111,6 +114,17 @@ ZYAL_ARM RUN_FOREVER id=test`
       expect(parsed.spec.intent).toBe("daemon")
       expect(parsed.preview.id).toBe(parsed.spec.id)
     }
+  })
+
+  test("parses the production qbank deep STEM 500 headless script", async () => {
+    const file = path.resolve(
+      import.meta.dir,
+      "../../../../docs/ZYAL/examples/memory-benchmark/qbank-deep-stem-500.zyal",
+    )
+    const parsed = await Effect.runPromise(parseZyal(fs.readFileSync(file, "utf8")))
+    expect(parsed.spec.id).toBe("paper-qbank-deep-stem-500")
+    expect(parsed.preview.armed).toBe(true)
+    expect(parsed.spec.fan_out?.split?.shell).toContain("make-work")
   })
 
   test("accepts experiments scoring primary and rejects unknown scoring keys", async () => {
@@ -140,6 +154,20 @@ experiments:
     await expect(Effect.runPromise(parseZyal(bad))).rejects.toThrow(
       "Unknown ZYAL key: experiments.scoring.surprise",
     )
+  })
+
+  test("accepts opaque promotion gates", async () => {
+    const text = makeZyal(`
+promotion_gates:
+  threshold_score_delta: 0.75
+  references:
+    required_count: 3
+    reference_drift_max_score_points: 0.5
+  qbank:
+    reject_dev_only: true
+`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.promotion_gates?.qbank).toEqual({ reject_dev_only: true })
   })
 
   test("detects draft ZYAL blocks without arm", () => {
@@ -375,10 +403,13 @@ ZYAL_ARM RUN_FOREVER id=one`
       "26-semantic-feature-maker-insane.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
+      "memory-benchmark/cogcore-stream-papers.zyal",
       "memory-benchmark/executable-benchmark.zyal",
       "memory-benchmark/generated-challenge.zyal",
       "memory-benchmark/prompt-scoring.zyal",
       "memory-benchmark/qbank-advanced.zyal",
+      "memory-benchmark/qbank-deep-stem-500.zyal",
+      "memory-benchmark/qbank-live-smoke-10.zyal",
       "memory-benchmark/qbank-simple.zyal",
       "memory-benchmark/qbank-ultra.zyal",
     ])

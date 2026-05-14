@@ -11,7 +11,10 @@ pub struct JinaProvider {
 
 impl JinaProvider {
     pub fn new(api_key: String) -> Self {
-        Self { client: client(), api_key }
+        Self {
+            client: client(),
+            api_key,
+        }
     }
 
     pub fn parse_fixture(value: &Value) -> Result<ProviderSearchResponse> {
@@ -33,7 +36,9 @@ impl JinaProvider {
 
 #[async_trait]
 impl SearchProvider for JinaProvider {
-    fn id(&self) -> ProviderId { ProviderId::Jina }
+    fn id(&self) -> ProviderId {
+        ProviderId::Jina
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(true, true, false, true, true, true, true)
@@ -41,7 +46,9 @@ impl SearchProvider for JinaProvider {
 
     async fn search(&self, req: ProviderSearchRequest) -> Result<ProviderSearchResponse> {
         let mut url = Url::parse("https://api.jina.ai/search")?;
-        url.query_pairs_mut().append_pair("q", &req.query).append_pair("limit", &req.limit.to_string());
+        url.query_pairs_mut()
+            .append_pair("q", &req.query)
+            .append_pair("limit", &req.limit.to_string());
         let json: Value = self
             .client
             .get(url)
@@ -52,7 +59,9 @@ impl SearchProvider for JinaProvider {
             .json()
             .await?;
         let mut response = Self::parse_fixture(&json)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

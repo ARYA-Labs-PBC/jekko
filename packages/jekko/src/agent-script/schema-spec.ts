@@ -803,7 +803,18 @@ const researchNode = objectNode("Cited external evidence gathering.", {
         publication_hash: stringNode("Publication hash.", { required: true }),
         paper_path: stringNode("Paper path."),
         challenge_path: stringNode("Challenge path."),
-        role: enumNode("Work-item role.", ["question_generator", "answerer", "critic", "auditor"]),
+        role: enumNode("Work-item role.", [
+          "question_generator",
+          "publication_extractor",
+          "answerer",
+          "saturated_answerer",
+          "focused_auditor",
+          "critic",
+          "auditor",
+          "judge_reducer",
+          "reducer",
+          "scorer",
+        ]),
       }),
     ),
     acceptance: objectNode("Acceptance policy.", {
@@ -823,6 +834,12 @@ const researchNode = objectNode("Cited external evidence gathering.", {
     focused_auditors: numberNode("Focused auditors."),
     min_auditor_agreement: numberNode("Minimum auditor agreement."),
     min_answerability: numberNode("Minimum answerability."),
+  }),
+  route_metadata: objectNode("Route metadata policy.", {
+    required: booleanNode("Require route metadata."),
+    require_request_id: booleanNode("Require request ids."),
+    require_provider: stringNode("Required provider id."),
+    require_model_profile: booleanNode("Require model profile metadata."),
   }),
 })
 
@@ -1311,6 +1328,11 @@ const topLevelChildren = {
   budgets: budgetsNode,
   triggers: triggersNode,
   rollback: rollbackNode,
+  promotion_gates: recordNode(
+    "Promotion gate policy consumed by domain-specific reducers.",
+    scalar("Reducer-specific gate value."),
+    { status: "preview" },
+  ),
   done: doneNode,
   repo_intelligence: objectNode(repoIntelNode.description, repoIntelNode.kind === "object" ? repoIntelNode.children : {}, { status: "preview" }),
   fleet: fleetNode,

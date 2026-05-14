@@ -11,7 +11,10 @@ pub struct SearxngProvider {
 
 impl SearxngProvider {
     pub fn new(base_url: String) -> Self {
-        Self { client: client(), base_url }
+        Self {
+            client: client(),
+            base_url,
+        }
     }
 
     pub fn parse_fixture(value: &Value) -> Result<ProviderSearchResponse> {
@@ -33,7 +36,9 @@ impl SearxngProvider {
 
 #[async_trait]
 impl SearchProvider for SearxngProvider {
-    fn id(&self) -> ProviderId { ProviderId::Searxng }
+    fn id(&self) -> ProviderId {
+        ProviderId::Searxng
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(true, true, true, true, false, false, true)
@@ -45,9 +50,18 @@ impl SearchProvider for SearxngProvider {
             .append_pair("q", &req.query)
             .append_pair("format", "json")
             .append_pair("language", "en");
-        let json: Value = self.client.get(url).send().await?.error_for_status()?.json().await?;
+        let json: Value = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         let mut response = Self::parse_fixture(&json)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

@@ -34,6 +34,11 @@ fn inserts_deduplicates_and_prunes_rows() {
     assert!(store.insert_hit(&hit, "example query", 1).expect("insert"));
     assert!(!store.insert_hit(&hit, "example query", 1).expect("dedupe"));
     assert!(store.contains_hash("hash-1").expect("contains"));
-    assert_eq!(store.prune_expired(Utc::now() + chrono::Duration::days(2)).expect("prune"), 1);
+    assert_eq!(
+        store
+            .prune_expired(Utc::now() + chrono::Duration::days(2))
+            .expect("prune"),
+        1
+    );
     let _ = fs::remove_file(path);
 }

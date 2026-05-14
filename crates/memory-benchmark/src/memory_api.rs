@@ -251,6 +251,8 @@ pub fn axes_to_json(a: &AxisScores) -> Json {
             "determinism_rebuild",
             Json::Float(a.determinism_rebuild as f64),
         ),
+        ("compounding", Json::Float(a.compounding as f64)),
+        ("topic_hardening", Json::Float(a.topic_hardening as f64)),
     ])
 }
 

@@ -4,7 +4,9 @@ use agent_search::ExtractorId;
 
 #[test]
 fn strips_active_html() {
-    let text = strip_active_html("<html><head><script>alert(1)</script></head><body>Hello <b>world</b></body></html>");
+    let text = strip_active_html(
+        "<html><head><script>alert(1)</script></head><body>Hello <b>world</b></body></html>",
+    );
     assert_eq!(text, "Hello world");
 }
 

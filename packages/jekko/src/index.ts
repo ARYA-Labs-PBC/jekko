@@ -41,6 +41,7 @@ import { Heap } from "./cli/heap"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { ensureProcessMetadata } from "@jekko-ai/core/util/jekko-process"
 import { startJnoccioHeartbeat } from "@/util/jnoccio"
+import { runHeadlessCli } from "@/cli/headless"
 
 const processMetadata = ensureProcessMetadata("main")
 
@@ -68,6 +69,73 @@ function show(out: string) {
   process.stderr.write(out)
 }
 
+async function initializeCliRuntime(opts: { print: boolean; logLevel?: string; pure?: boolean }) {
+  if (opts.pure) {
+    process.env.JEKKO_PURE = "1"
+  }
+
+  await Log.init({
+    print: opts.print,
+    dev: Installation.isLocal(),
+    level: (() => {
+      if (opts.logLevel) return opts.logLevel as Log.Level
+      if (Installation.isLocal()) return "DEBUG"
+      return "INFO"
+    })(),
+  })
+
+  Heap.start()
+
+  process.env.AGENT = "1"
+  process.env.JEKKO = "1"
+  process.env.JEKKO_PID = String(process.pid)
+  startJnoccioHeartbeat(processMetadata)
+
+  Log.Default.info("jekko", {
+    version: InstallationVersion,
+    args: process.argv.slice(2),
+    process_role: processMetadata.processRole,
+    run_id: processMetadata.runID,
+  })
+
+  const marker = path.join(Global.Path.data, "jekko.db")
+  if (!(await Filesystem.exists(marker))) {
+    const tty = process.stderr.isTTY
+    process.stderr.write("Performing one time database migration, may take a few minutes..." + EOL)
+    const width = 36
+    const orange = "\x1b[38;5;214m"
+    const muted = "\x1b[0;2m"
+    const reset = "\x1b[0m"
+    let last = -1
+    if (tty) process.stderr.write("\x1b[?25l")
+    try {
+      await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
+        progress: (event) => {
+          const percent = Math.floor((event.current / event.total) * 100)
+          if (percent === last && event.current !== event.total) return
+          last = percent
+          if (tty) {
+            const fill = Math.round((percent / 100) * width)
+            const bar = `${"■".repeat(fill)}${"･".repeat(width - fill)}`
+            process.stderr.write(
+              `\r${orange}${bar} ${percent.toString().padStart(3)}%${reset} ${muted}${event.label.padEnd(12)} ${event.current}/${event.total}${reset}`,
+            )
+            if (event.current === event.total) process.stderr.write("\n")
+          } else {
+            process.stderr.write(`sqlite-migration:${percent}${EOL}`)
+          }
+        },
+      })
+    } finally {
+      if (tty) process.stderr.write("\x1b[?25h")
+      else {
+        process.stderr.write(`sqlite-migration:done${EOL}`)
+      }
+    }
+    process.stderr.write("Database migration complete." + EOL)
+  }
+}
+
 const cli = yargs(args)
   .parserConfiguration({ "populate--": true })
   .scriptName("jekko")
@@ -89,71 +157,20 @@ const cli = yargs(args)
     describe: "run without external plugins",
     type: "boolean",
   })
+  .option("headless", {
+    describe: "run a ZYAL file from the command line and exit",
+    type: "string",
+  })
+  .option("headless-cwd", {
+    describe: "workspace directory for --headless, primarily for source-tree development",
+    type: "string",
+  })
   .middleware(async (opts) => {
-    if (opts.pure) {
-      process.env.JEKKO_PURE = "1"
-    }
-
-    await Log.init({
+    await initializeCliRuntime({
       print: process.argv.includes("--print-logs"),
-      dev: Installation.isLocal(),
-      level: (() => {
-        if (opts.logLevel) return opts.logLevel as Log.Level
-        if (Installation.isLocal()) return "DEBUG"
-        return "INFO"
-      })(),
+      logLevel: opts.logLevel,
+      pure: opts.pure,
     })
-
-    Heap.start()
-
-    process.env.AGENT = "1"
-    process.env.JEKKO = "1"
-    process.env.JEKKO_PID = String(process.pid)
-    startJnoccioHeartbeat(processMetadata)
-
-    Log.Default.info("jekko", {
-      version: InstallationVersion,
-      args: process.argv.slice(2),
-      process_role: processMetadata.processRole,
-      run_id: processMetadata.runID,
-    })
-
-    const marker = path.join(Global.Path.data, "jekko.db")
-    if (!(await Filesystem.exists(marker))) {
-      const tty = process.stderr.isTTY
-      process.stderr.write("Performing one time database migration, may take a few minutes..." + EOL)
-      const width = 36
-      const orange = "\x1b[38;5;214m"
-      const muted = "\x1b[0;2m"
-      const reset = "\x1b[0m"
-      let last = -1
-      if (tty) process.stderr.write("\x1b[?25l")
-      try {
-        await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
-          progress: (event) => {
-            const percent = Math.floor((event.current / event.total) * 100)
-            if (percent === last && event.current !== event.total) return
-            last = percent
-            if (tty) {
-              const fill = Math.round((percent / 100) * width)
-              const bar = `${"■".repeat(fill)}${"･".repeat(width - fill)}`
-              process.stderr.write(
-                `\r${orange}${bar} ${percent.toString().padStart(3)}%${reset} ${muted}${event.label.padEnd(12)} ${event.current}/${event.total}${reset}`,
-              )
-              if (event.current === event.total) process.stderr.write("\n")
-            } else {
-              process.stderr.write(`sqlite-migration:${percent}${EOL}`)
-            }
-          },
-        })
-      } finally {
-        if (tty) process.stderr.write("\x1b[?25h")
-        else {
-          process.stderr.write(`sqlite-migration:done${EOL}`)
-        }
-      }
-      process.stderr.write("Database migration complete." + EOL)
-    }
   })
   .usage("")
   .completion("completion", "generate shell completion script")
@@ -202,6 +219,16 @@ try {
       if (!out) return
       show(out)
     })
+  } else if (args.includes("--headless") || args.some((arg) => arg.startsWith("--headless="))) {
+    await initializeCliRuntime({
+      print: process.argv.includes("--print-logs"),
+      logLevel: args.includes("--log-level") ? args[args.indexOf("--log-level") + 1] : undefined,
+      pure: args.includes("--pure"),
+    })
+    const headlessReceipt = await runHeadlessCli(args, { print: (line) => process.stderr.write(line + EOL) })
+    if (headlessReceipt !== null) {
+      process.exitCode = headlessReceipt.status === "passed" ? 0 : 1
+    }
   } else {
     await cli.parse()
   }

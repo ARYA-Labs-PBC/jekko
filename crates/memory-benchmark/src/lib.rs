@@ -30,7 +30,10 @@ pub mod scoring;
 pub mod triangulate;
 pub mod types;
 
-pub use case::{BenchCase, CaseOracle, EpisodeStep, OracleKind, Split, SuiteConfig};
+pub use case::{
+    BenchCase, CaseOracle, CompoundCase, CompoundQuery, EpisodeStep, HardeningCase, OracleKind,
+    Split, SuiteConfig,
+};
 pub use result::{
     Citation, ClaimRecord, ClaimStatus, ContextMetric, OmissionNote, RecallResult, Redaction,
     SkillCall,
@@ -64,7 +67,9 @@ mod tests {
             + w.privacy_redaction
             + w.procedural_skill
             + w.feedback_adaptation
-            + w.determinism_rebuild;
+            + w.determinism_rebuild
+            + w.compounding
+            + w.topic_hardening;
         assert!((s - 100.0).abs() < 0.001, "weights sum to {}", s);
     }
 

@@ -10,20 +10,27 @@ pub struct AxisScores {
     pub procedural_skill: f32,
     pub feedback_adaptation: f32,
     pub determinism_rebuild: f32,
+    /// New in v3: rewards multi-hop reasoning over an ingest stream.
+    pub compounding: f32,
+    /// New in v3: rewards convergent recall on repeated queries.
+    pub topic_hardening: f32,
 }
 
 impl AxisScores {
+    /// 12-axis north-star weights summing to exactly 100.
     pub const WEIGHTS: AxisScores = AxisScores {
-        correctness: 20.0,
-        provenance: 12.0,
+        correctness: 14.0,
+        provenance: 10.0,
         bitemporal_recall: 10.0,
-        contradiction: 10.0,
+        contradiction: 8.0,
         math_science: 12.0,
-        english_discourse_coreference: 8.0,
+        english_discourse_coreference: 6.0,
         privacy_redaction: 8.0,
-        procedural_skill: 8.0,
-        feedback_adaptation: 6.0,
+        procedural_skill: 4.0,
+        feedback_adaptation: 4.0,
         determinism_rebuild: 6.0,
+        compounding: 10.0,
+        topic_hardening: 8.0,
     };
 
     pub const ADVANCED_WEIGHTS: [(&'static str, f32); 12] = [
@@ -53,6 +60,8 @@ impl AxisScores {
             + self.procedural_skill * w.procedural_skill
             + self.feedback_adaptation * w.feedback_adaptation
             + self.determinism_rebuild * w.determinism_rebuild
+            + self.compounding * w.compounding
+            + self.topic_hardening * w.topic_hardening
     }
 
     pub fn from_single(axis: ScoringAxis, value: f32) -> Self {
@@ -68,6 +77,8 @@ impl AxisScores {
             ScoringAxis::ProceduralSkill => s.procedural_skill = value,
             ScoringAxis::FeedbackAdaptation => s.feedback_adaptation = value,
             ScoringAxis::DeterminismRebuild => s.determinism_rebuild = value,
+            ScoringAxis::Compounding => s.compounding = value,
+            ScoringAxis::TopicHardening => s.topic_hardening = value,
         }
         s
     }
@@ -85,6 +96,8 @@ impl AxisScores {
         self.procedural_skill = self.procedural_skill.max(other.procedural_skill);
         self.feedback_adaptation = self.feedback_adaptation.max(other.feedback_adaptation);
         self.determinism_rebuild = self.determinism_rebuild.max(other.determinism_rebuild);
+        self.compounding = self.compounding.max(other.compounding);
+        self.topic_hardening = self.topic_hardening.max(other.topic_hardening);
     }
 }
 
@@ -100,6 +113,8 @@ pub enum ScoringAxis {
     ProceduralSkill,
     FeedbackAdaptation,
     DeterminismRebuild,
+    Compounding,
+    TopicHardening,
 }
 
 impl ScoringAxis {
@@ -115,6 +130,8 @@ impl ScoringAxis {
             ScoringAxis::ProceduralSkill => "procedural_skill",
             ScoringAxis::FeedbackAdaptation => "feedback_adaptation",
             ScoringAxis::DeterminismRebuild => "determinism_rebuild",
+            ScoringAxis::Compounding => "compounding",
+            ScoringAxis::TopicHardening => "topic_hardening",
         }
     }
 }

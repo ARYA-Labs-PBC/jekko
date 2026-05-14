@@ -5,8 +5,14 @@ use url::Url;
 
 fn secret_patterns() -> &'static [(&'static str, &'static str)] {
     &[
-        (r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b", "[redacted-email]"),
-        (r"(?i)\b(?:api[_-]?key|bearer|token|secret)\s*[:=]\s*[^\s]{8,}\b", "[redacted-secret]"),
+        (
+            r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b",
+            "[redacted-email]",
+        ),
+        (
+            r"(?i)\b(?:api[_-]?key|bearer|token|secret)\s*[:=]\s*[^\s]{8,}\b",
+            "[redacted-secret]",
+        ),
     ]
 }
 
@@ -17,7 +23,9 @@ pub fn sanitize_query(input: &str) -> Result<String, SearchError> {
         output = re.replace_all(&output, *replacement).into_owned();
     }
     if output.is_empty() {
-        return Err(SearchError::Policy("query became empty after sanitization".to_string()));
+        return Err(SearchError::Policy(
+            "query became empty after sanitization".to_string(),
+        ));
     }
     Ok(output)
 }
@@ -36,7 +44,10 @@ pub fn quarantine_content(input: &str) -> (String, bool) {
         input
             .lines()
             .map(|line| {
-                if patterns.iter().any(|needle| line.to_ascii_lowercase().contains(needle)) {
+                if patterns
+                    .iter()
+                    .any(|needle| line.to_ascii_lowercase().contains(needle))
+                {
                     "[quarantined instruction]"
                 } else {
                     line
@@ -72,7 +83,9 @@ pub fn block_internal_url(url: &str) -> Result<(), SearchError> {
 
 fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4 == Ipv4Addr::UNSPECIFIED,
+        IpAddr::V4(v4) => {
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4 == Ipv4Addr::UNSPECIFIED
+        }
         IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unspecified(),
     }
 }

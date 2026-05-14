@@ -22,7 +22,8 @@ const TRACKING_PARAMS: &[&str] = &[
 pub fn normalize_url(input: &str) -> Option<String> {
     let mut url = Url::parse(input).ok()?;
     if let Some(host) = url.host_str() {
-        url.set_host(Some(&host.trim_end_matches('.').to_ascii_lowercase())).ok()?;
+        url.set_host(Some(&host.trim_end_matches('.').to_ascii_lowercase()))
+            .ok()?;
     }
     if url.path().is_empty() {
         url.set_path("/");
@@ -45,7 +46,12 @@ pub fn normalize_url(input: &str) -> Option<String> {
     Some(url.to_string().trim_end_matches('/').to_string())
 }
 
-pub fn hash_fingerprint(provider: &ProviderId, title: &str, normalized_url: &str, snippet: Option<&str>) -> String {
+pub fn hash_fingerprint(
+    provider: &ProviderId,
+    title: &str,
+    normalized_url: &str,
+    snippet: Option<&str>,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(provider.as_str().as_bytes());
     hasher.update(b"\0");
@@ -72,18 +78,25 @@ pub fn hash_search_batch(provider: ProviderId, query: &str, hits: &[SearchHit]) 
 pub fn dedupe_hits(mut hits: Vec<SearchHit>) -> Vec<SearchHit> {
     let mut seen = BTreeSet::new();
     hits.retain(|hit| seen.insert(dedupe_key(hit)));
-    hits.sort_by(|a, b| a.provider.as_str().cmp(b.provider.as_str()).then(a.title.cmp(&b.title)));
+    hits.sort_by(|a, b| {
+        a.provider
+            .as_str()
+            .cmp(b.provider.as_str())
+            .then(a.title.cmp(&b.title))
+    });
     hits
 }
 
 fn dedupe_key(hit: &SearchHit) -> String {
-    if let Some(id) = hit
-        .citation_ids
-        .iter()
-        .find(|value| value.starts_with("doi:") || value.starts_with("arxiv:") || value.starts_with("pmid:") || value.starts_with("pmcid:") || value.starts_with("openalex:") || value.starts_with("s2:"))
-    {
+    if let Some(id) = hit.citation_ids.iter().find(|value| {
+        value.starts_with("doi:")
+            || value.starts_with("arxiv:")
+            || value.starts_with("pmid:")
+            || value.starts_with("pmcid:")
+            || value.starts_with("openalex:")
+            || value.starts_with("s2:")
+    }) {
         return id.clone();
     }
     hit.normalized_url.clone()
 }
-

@@ -1,9 +1,11 @@
-# ZYAL v2.6 - AutoResearch Memory Benchmark Chase
+# ZYAL v2.7 - AutoResearch Memory Benchmark Chase
 #
 # Advanced sandbox-first AutoResearch loop for the memory benchmark: 20 lanes,
 # isolated worktrees, executable Rust scoring, append-only memory, and
 # promotion only when a lane beats the current best by at least 0.75 points
-# without new hard gate failures.
+# without new hard gate failures. Track-A hardening adds fresh reference
+# reports, absolute score-point drift gates, trusted-core patch validation,
+# shadow checks, and dev-only QBank rejection.
 
 <<<ZYAL v1:daemon id=memory-benchmark-autoresearch-chase>>>
 version: v1
@@ -18,10 +20,15 @@ job:
     real-paper suites with executable Rust oracles, mix the reports
     deterministically, preserve append-only progress memory, and promote only
     when the new best lane beats the current best by at least 0.75 points
-    without new hard-gate failures.
+    without new hard-gate failures, dev-only provenance, stale references,
+    trusted-core patch edits, or shadow/reference drift.
   risk:
     - Candidate work must stay in isolated git worktrees
     - Promotion must be blocked by any new privacy, citation, future-leak, or nondeterminism gate
+    - Promotion must be blocked when QBank is fixture/dev-only
+    - Promotion must be blocked unless exactly three fresh reference reports exist for the current cycle
+    - Promotion must be blocked when reference drift exceeds 0.5 absolute score points
+    - Promotion must be blocked when patch content touches trusted benchmark core or forbidden tokens
     - Persistent progress memory must remain append-only
 
 arming:
@@ -69,6 +76,18 @@ stop:
         assert: { exit_code: 0 }
     - shell:
         command: "test -f .jekko/daemon/memory-benchmark-chase/curriculum-proposals.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -f .jekko/daemon/memory-benchmark-chase/reports/shadow.json"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -d .jekko/daemon/memory-benchmark-chase/reports/references"
+        timeout: 10s
+        assert: { exit_code: 0 }
+    - shell:
+        command: "test -d .jekko/daemon/memory-benchmark-chase/receipts && test -n \"$(find .jekko/daemon/memory-benchmark-chase/receipts -maxdepth 1 -type f -name '*.json' 2>/dev/null | head -1)\""
         timeout: 10s
         assert: { exit_code: 0 }
 
@@ -120,11 +139,56 @@ done:
     - scoreboard_written
     - best_patch_written
     - curriculum_proposals_written
+    - shadow_report_written
+    - fresh_reference_reports_written
+    - cycle_receipt_written
     - determinism_verified
-    - population_ledger_persisted
+    - negative_memory_persisted
   forbid:
     - hard_gate_regression
+    - dev_only_promotion
+    - stale_reference_report
+    - missing_reference_report
+    - reference_drift_gt_0_5_score_points
+    - trusted_core_patch_violation
+    - dirty_source_promotion
     - model_only_claim
+
+promotion_gates:
+  threshold_score_delta: 0.75
+  qbank:
+    require_trusted: true
+    reject_dev_only: true
+    minimum_accepted_challenges: 50
+  references:
+    required_candidates:
+      - reference_context_pack
+      - reference_evidence_ledger
+      - reference_claim_skeptic
+    required_count: 3
+    freshness: current_cycle_only
+    reference_drift_max_score_points: 0.5
+  shadow:
+    required: true
+    public_shadow_divergence_max_score_points: 5.0
+    shadow_delta_min_score_points: 0.0
+  trusted_core:
+    mutable_surface:
+      - "crates/cogcore/src/config.rs"
+    forbidden_paths:
+      - "crates/memory-benchmark/src/scoring/**"
+      - "crates/memory-benchmark/src/scorer.rs"
+      - "crates/memory-benchmark/src/runner*.rs"
+      - "crates/memory-benchmark/src/generated/**"
+      - "crates/memory-benchmark/src/corpus/**"
+      - "crates/memory-benchmark/src/adapters/reference_*.rs"
+      - "crates/memory-benchmark/tests/**"
+      - "docs/ZYAL/SPEC.md"
+    reject_forbidden_tokens: true
+  dirty_source:
+    default: reject
+    dev_only_flag: "--use-dirty-source-dev-only"
+    dev_only_can_promote: false
 
 repo_intelligence:
   scale: large
@@ -152,7 +216,7 @@ fleet:
 fan_out:
   strategy: scatter_gather
   split:
-    shell: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin dump_tasks -- exec --population 20 --out .jekko/daemon/memory-benchmark-chase/reports/exec-tasks.jsonl"
+    shell: "test -f .jekko/daemon/memory-benchmark-chase/best-state.json || cargo run --manifest-path tools/autoresearch/Cargo.toml --locked --bin autoresearch -- seed --state-dir .jekko/daemon/memory-benchmark-chase"
   worker:
     agent: build
     isolation: git_worktree
@@ -160,7 +224,7 @@ fan_out:
     max_parallel: 20
   reduce:
     strategy: custom_shell
-    command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out .jekko/daemon/memory-benchmark-chase/reports/qbank-score.json || true; cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin score_mix -- --name exec-mixed --input generated:0.60:.jekko/daemon/memory-benchmark-chase/reports/exec-score.json --input qbank:0.40:.jekko/daemon/memory-benchmark-chase/reports/qbank-score.json --out .jekko/daemon/memory-benchmark-chase/reports/exec-mixed-score.json || cp .jekko/daemon/memory-benchmark-chase/reports/exec-score.json .jekko/daemon/memory-benchmark-chase/reports/exec-mixed-score.json; cargo run --manifest-path crates/memory-benchmark/Cargo.toml --bin population_report -- --lanes .jekko/daemon/memory-benchmark-chase/reports/lanes --population .jekko/daemon/memory-benchmark-chase/memory/population-ledger.jsonl --baseline .jekko/daemon/memory-benchmark-chase/reports/baseline-score.json --exec .jekko/daemon/memory-benchmark-chase/reports/exec-mixed-score.json --current-best-state .jekko/daemon/memory-benchmark-chase/best-state.json --best-state .jekko/daemon/memory-benchmark-chase/best-state.json --scoreboard .jekko/daemon/memory-benchmark-chase/scoreboard.tsv --promotion-decision .jekko/daemon/memory-benchmark-chase/promotion-decision.json --negative-memory .jekko/daemon/memory-benchmark-chase/negative-memory.jsonl --best-patch .jekko/daemon/memory-benchmark-chase/best.patch --out .jekko/daemon/memory-benchmark-chase/reports/final-score.json --markdown .jekko/daemon/memory-benchmark-chase/reports/final-score.md --comparison .jekko/daemon/memory-benchmark-chase/reports/comparison-matrix.json --triangulation .jekko/daemon/memory-benchmark-chase/reports/triangulation.json --curriculum .jekko/daemon/memory-benchmark-chase/curriculum-proposals.json --current-candidates .jekko/daemon/memory-benchmark-chase/preflight-candidates"
+    command: "cargo run --manifest-path tools/autoresearch/Cargo.toml --locked --bin autoresearch -- tick --workers 20 --candidate cogcore --state-dir .jekko/daemon/memory-benchmark-chase"
   on_partial_failure: continue
 
 experiments:
@@ -339,18 +403,12 @@ experiments:
   max_parallel: 20
   scoring:
     weights:
-      concept_learning: 12
-      transfer_reasoning: 12
-      formal_math: 10
-      scientific_reasoning: 10
-      bitemporal_correctness: 10
-      provenance_support: 10
-      dependency_maintenance: 8
-      contradiction_skepticism: 8
-      privacy_forgetting: 8
-      compression_fidelity: 5
-      procedural_tool_memory: 4
-      determinism_efficiency: 3
+      t0: 10
+      t1_generated: 30
+      compounding: 20
+      hardening: 15
+      qbank: 20
+      promotion_safety: 5
     goal_direction: maximize
     command: "rtk just memory-benchmark-chase-preflight"
     primary: executable_rust_oracles
@@ -477,7 +535,7 @@ sandbox:
     outbound: deny
   resources:
     max_file_size: 8MiB
-    max_total_disk: 1GiB
+    max_total_disk: 10GiB
     max_memory: 4GiB
     max_processes: 32
 
@@ -519,7 +577,16 @@ observability:
       source: .jekko/daemon/memory-benchmark-chase/reports/exec-score.json
     - name: promotion_decision
       type: counter
-      source: .jekko/daemon/memory-benchmark-chase/reports/promotion-decision.json
+      source: .jekko/daemon/memory-benchmark-chase/promotion-decision.json
+    - name: reference_drift
+      type: gauge
+      source: .jekko/daemon/memory-benchmark-chase/promotion-decision.json
+    - name: dev_only_selected
+      type: gauge
+      source: .jekko/daemon/memory-benchmark-chase/promotion-decision.json
+    - name: trusted_core_diff
+      type: gauge
+      source: .jekko/daemon/memory-benchmark-chase/promotion-decision.json
   cost:
     budget: 25.00
     currency: USD
@@ -541,6 +608,9 @@ observability:
       - curriculum-proposals.json
       - final-score.json
       - final-score.md
+      - reports/shadow.json
+      - reports/references
+      - receipts
 
 budgets:
   run:

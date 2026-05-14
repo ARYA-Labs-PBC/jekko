@@ -1,12 +1,4 @@
-# Real Paper QBank
+This directory is intentionally empty.
 
-Checked-in native QBank artifacts for the memory benchmark live here.
-
-- `papers/`: redistributable open-access paper records, keyed by `publication_hash`.
-- `challenges/`: accepted, validated question records, keyed by `challenge_hash`.
-- `rejected/`: rejected challenge records and publication receipts safe to commit.
-- `manifests/`: deterministic run manifests and top-N selections.
-
-Runtime discovery, extraction, worker attempts, and model receipts belong under
-`.jekko/daemon/<run-id>/...`, not in this directory. Do not commit private
-seeds, API keys, non-redistributable full text, or license-ambiguous content.
+Production QBank artifacts live here only after a live v3 publication run.
+The checked-in regression corpus was quarantined to `crates/memory-benchmark/data/fixture-paper-bank/`.

@@ -1,12 +1,15 @@
 // jankurai:allow HLT-001-DEAD-MARKER reason=functional-optional-returns-by-design expires=2027-01-01
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { Effect, Layer, Context, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Context, Schema } from "effect"
 import { CrossSpawnSpawner } from "@jekko-ai/core/cross-spawn-spawner"
 import { Config } from "@/config/config"
 import { Shell } from "@/shell/shell"
 import { Git } from "@/git"
 import { parseDuration } from "./daemon-retry"
 import { collectStreamOutput } from "@/util/process-output"
+import * as Log from "@jekko-ai/core/util/log"
+
+const log = Log.create({ service: "daemon-checks" })
 
 export const ShellCheckResult = Schema.Struct({
   exitCode: Schema.Number,
@@ -55,42 +58,79 @@ export const layer = Layer.effect(
         json?: Record<string, unknown>
       }
     }) {
-      const shell = Shell.preferred((yield* config.get()).shell)
-      const args = Shell.args(shell, input.command, input.cwd)
-      const proc = ChildProcess.make(shell, args, {
-        cwd: input.cwd,
-        extendEnv: true,
-        env: { TERM: "dumb" },
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      const handle = yield* spawner.spawn(proc)
-      const [stdout, stderr] = yield* Effect.all(
-        [collectStreamOutput(handle.stdout, 64_000), collectStreamOutput(handle.stderr, 64_000)],
-        { concurrency: 2 },
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const shell = Shell.preferred((yield* config.get()).shell)
+          const args = Shell.args(shell, input.command, input.cwd)
+          log.info("shell check started", {
+            cwd: input.cwd,
+            shell,
+            timeout: input.timeout ?? "30 seconds",
+          })
+          const proc = ChildProcess.make(shell, args, {
+            cwd: input.cwd,
+            extendEnv: true,
+            env: { TERM: "dumb" },
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+          })
+          const handle = yield* spawner.spawn(proc)
+          const stdoutFiber = yield* Effect.forkScoped(collectStreamOutput(handle.stdout, 64_000))
+          const stderrFiber = yield* Effect.forkScoped(collectStreamOutput(handle.stderr, 64_000))
+          const exit = yield* Effect.raceAll([
+            handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
+            Effect.sleep(parseDuration(input.timeout ?? "30 seconds")).pipe(
+              Effect.map(() => ({ kind: "timeout" as const, code: 124 })),
+            ),
+          ])
+          if (exit.kind === "timeout") {
+            log.warn("shell check timed out; killing child", {
+              cwd: input.cwd,
+              shell,
+              command: input.command,
+              timeout: input.timeout ?? "30 seconds",
+            })
+            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+          }
+          const stdout = yield* Fiber.await(stdoutFiber).pipe(
+            Effect.flatMap((result) =>
+              Exit.isSuccess(result)
+                ? Effect.succeed(result.value)
+                : Effect.failCause(result.cause),
+            ),
+          )
+          const stderr = yield* Fiber.await(stderrFiber).pipe(
+            Effect.flatMap((result) =>
+              Exit.isSuccess(result)
+                ? Effect.succeed(result.value)
+                : Effect.failCause(result.cause),
+            ),
+          )
+          const expectedExitCode = input.assert?.exit_code ?? 0
+          const jsonPath = input.assert?.json ? checkJsonAssertions(stdout.text, input.assert.json) : true
+          const matched =
+            expectedExitCode === exit.code &&
+            (input.assert?.stdout_contains?.every((needle) => stdout.text.includes(needle)) ?? true) &&
+            (input.assert?.stdout_regex?.every((pattern) => new RegExp(pattern, "m").test(stdout.text)) ?? true) &&
+            jsonPath
+          log.info("shell check completed", {
+            cwd: input.cwd,
+            command: input.command,
+            exitCode: exit.code,
+            matched,
+            truncated: stdout.truncated || stderr.truncated,
+          })
+          return {
+            exitCode: exit.code,
+            stdout: stdout.buffer.toString("utf8"),
+            stderr: stderr.buffer.toString("utf8"),
+            truncated: stdout.truncated || stderr.truncated,
+            matched,
+            error: matched ? undefined : "shell assertion failed",
+          }
+        }),
       )
-      const exit = yield* Effect.raceAll([
-        handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
-        Effect.sleep(parseDuration(input.timeout ?? "30 seconds")).pipe(
-          Effect.map(() => ({ kind: "timeout" as const, code: 124 })),
-        ),
-      ])
-      const expectedExitCode = input.assert?.exit_code ?? 0
-      const jsonPath = input.assert?.json ? checkJsonAssertions(stdout.text, input.assert.json) : true
-      const matched =
-        expectedExitCode === exit.code &&
-        (input.assert?.stdout_contains?.every((needle) => stdout.text.includes(needle)) ?? true) &&
-        (input.assert?.stdout_regex?.every((pattern) => new RegExp(pattern, "m").test(stdout.text)) ?? true) &&
-        jsonPath
-      return {
-        exitCode: exit.code,
-        stdout: stdout.buffer.toString("utf8"),
-        stderr: stderr.buffer.toString("utf8"),
-        truncated: stdout.truncated || stderr.truncated,
-        matched,
-        error: matched ? undefined : "shell assertion failed",
-      }
     })
 
     const gitClean = Effect.fn("DaemonChecks.gitClean")(function* (input: { cwd: string; allowUntracked?: boolean }) {
