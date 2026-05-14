@@ -134,8 +134,15 @@ export function createLocalModel({ sync, sdk, toast, agent, parseModel, isModelV
         const value = currentModel()
         if (value.kind === "missing") {
           return {
-            provider: "Connect a provider",
+            provider: "Connect keys",
             model: value.repairHint,
+            reasoning: false,
+          }
+        }
+        if (value.model.providerID === "auto" && value.model.modelID === "smart") {
+          return {
+            provider: "Auto",
+            model: "Auto",
             reasoning: false,
           }
         }

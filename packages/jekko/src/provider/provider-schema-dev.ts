@@ -29,6 +29,7 @@ export interface Interface {
 export interface State {
   models: Map<string, LanguageModelV3>
   providers: Record<ProviderID, Info>
+  secrets: Record<ProviderID, string>
   sdk: Map<string, BundledSDK>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>

@@ -69,6 +69,25 @@ pub fn prepare_workspace(
     Ok((parent, project, xdg_data, xdg_cache, xdg_config, xdg_state))
 }
 
+pub fn prepare_workspace_no_config(
+    subdir: &str,
+    readme_content: &str,
+) -> Result<(TempDir, PathBuf, PathBuf, PathBuf, PathBuf, PathBuf)> {
+    let parent = TempDir::new().context("tempdir")?;
+    let project = parent.path().join(subdir);
+    std::fs::create_dir_all(&project)?;
+    std::fs::write(project.join("README.md"), readme_content)?;
+    let xdg = parent.path().join("xdg");
+    let xdg_data = xdg.join("data");
+    let xdg_cache = xdg.join("cache");
+    let xdg_config = xdg.join("config");
+    let xdg_state = xdg.join("state");
+    for dir in [&xdg_data, &xdg_cache, &xdg_config, &xdg_state] {
+        std::fs::create_dir_all(dir)?;
+    }
+    Ok((parent, project, xdg_data, xdg_cache, xdg_config, xdg_state))
+}
+
 pub fn spawn_jekko(parent: &TempDir, jekko: &PathBuf) -> Result<Page> {
     spawn_jekko_with_size(parent, jekko, SCREEN_COLS, SCREEN_ROWS, "default")
 }
@@ -79,6 +98,17 @@ pub fn spawn_jekko_with_size(
     cols: u16,
     rows: u16,
     trace_name: &str,
+) -> Result<Page> {
+    spawn_jekko_with_size_env(parent, jekko, cols, rows, trace_name, &[])
+}
+
+pub fn spawn_jekko_with_size_env(
+    parent: &TempDir,
+    jekko: &PathBuf,
+    cols: u16,
+    rows: u16,
+    trace_name: &str,
+    extra_envs: &[(&str, &str)],
 ) -> Result<Page> {
     let project = parent.path().join("project");
     let xdg = parent.path().join("xdg");
@@ -116,6 +146,9 @@ pub fn spawn_jekko_with_size(
             xdg.join("state").to_string_lossy().as_ref(),
         )
         .timeout(Duration::from_secs(60));
+    for (k, v) in extra_envs {
+        cfg = cfg.env(*k, *v);
+    }
     for (k, v) in std::env::vars() {
         if matches!(
             k.as_str(),

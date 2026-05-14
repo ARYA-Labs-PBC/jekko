@@ -159,6 +159,10 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
   })
 
   const args = useArgs()
+  const providersWithAuth = () =>
+    sync.data.provider as Array<{
+      auth?: { active?: boolean; configured?: boolean }
+    }>
   onMount(() => {
     bootLog.info("app mount", {
       route: route.data.type,
@@ -233,9 +237,9 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
 
   createEffect(
     on(
-      () => sync.status === "complete" && sync.data.provider.length === 0,
+      () => sync.status === "complete" && providersWithAuth().every((provider) => !provider.auth?.active),
       (isEmpty, wasEmpty) => {
-        if (!isEmpty || wasEmpty) return
+        if (!isEmpty || wasEmpty || Flag.JEKKO_DISABLE_KEY_SETUP_TUI) return
         dialog.replace(() => <DialogProviderList />)
       },
     ),

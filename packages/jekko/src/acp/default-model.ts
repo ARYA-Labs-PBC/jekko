@@ -22,7 +22,7 @@ async function loadConfiguredModel(config: ACPConfig, directory: string): Promis
     } else {
       log.warn("no configured default model found in user config", {
         directory,
-        repair: "set config.model or let provider selection choose one",
+        repair: "set config.model or let auto routing choose one",
       })
     }
   } catch (error) {
@@ -36,37 +36,13 @@ function resolveProviderSelection(
   providers: ProviderEntry[],
   specified: ModelSelection | null,
 ): ModelSelection | null {
-  if (specified && providers.length) {
+  if (specified && !providers.length) return specified
+  if (specified) {
     const provider = providers.find((p) => p.id === specified.providerID)
     if (provider && provider.models[specified.modelID]) return specified
   }
 
-  if (specified && !providers.length) return specified
-
-  const jekkoProvider = providers.find((p) => p.id === "jekko")
-  if (jekkoProvider) {
-    if (jekkoProvider.models["big-pickle"]) {
-      return { providerID: ProviderID.jekko, modelID: ModelID.make("big-pickle") }
-    }
-    const [best] = Provider.sort(Object.values(jekkoProvider.models))
-    if (best) {
-      return {
-        providerID: ProviderID.make(best.providerID),
-        modelID: ModelID.make(best.id),
-      }
-    }
-  }
-
-  const models = providers.flatMap((p) => Object.values(p.models))
-  const [best] = Provider.sort(models)
-  if (best) {
-    return {
-      providerID: ProviderID.make(best.providerID),
-      modelID: ModelID.make(best.id),
-    }
-  }
-
-  return specified
+  return { providerID: ProviderID.make("auto"), modelID: ModelID.make("smart") }
 }
 
 export async function defaultModel(config: ACPConfig, cwd?: string): Promise<ModelSelection> {
@@ -81,7 +57,5 @@ export async function defaultModel(config: ACPConfig, cwd?: string): Promise<Mod
     .then((x) => x.data?.providers ?? [])
 
   const resolved = resolveProviderSelection(providers, specified)
-  if (resolved) return resolved
-
-  return { providerID: ProviderID.jekko, modelID: ModelID.make("big-pickle") }
+  return resolved
 }

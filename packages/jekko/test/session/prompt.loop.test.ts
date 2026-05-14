@@ -99,6 +99,48 @@ it.live("loop calls LLM and returns assistant message", () =>
   30_000,
 )
 
+it.live("auto model requests stay sticky-free and resolve to a concrete assistant model", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Auto routing",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+
+      const user = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+
+      expect(user.info.role).toBe("user")
+      expect(user.info.model).toEqual({
+        providerID: "auto",
+        modelID: "smart",
+        variant: undefined,
+      })
+
+      yield* llm.text("world")
+
+      const assistant = yield* prompt.loop({ sessionID: session.id })
+      expect(assistant.info.role).toBe("assistant")
+      expect(assistant.info.providerID).toBe("test")
+      expect(assistant.info.modelID).toBe("test-model")
+    }),
+    {
+      git: true,
+      config: (url) => {
+        const cfg = providerCfg(url)
+        cfg.provider.test.options.apiKey = "test-provider-key"
+        return cfg
+      },
+    },
+  ),
+)
+
 it.live("prompt emits v2 prompted and synthetic events", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* () {

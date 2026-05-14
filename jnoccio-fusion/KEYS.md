@@ -23,7 +23,11 @@ Use this file as the checklist for setting up upstream access.
 
 ## Env File
 
-Put the values in `/Users/bentaylor/Code/opencode/jnoccio-fusion/.env.jnoccio`.
+Put the values in `/Users/bentaylor/Code/jekko/.env.jnoccio` only for the
+developer-only protected Jnoccio workflow.
+
+Jekko model setup does not use this file. Public model keys belong in
+`~/.jekko/jekko.env`.
 
 From the Jekko TUI, select the locked `Jnoccio Fusion` model and enter the
 path to your local git-crypt key file. A successful unlock creates

@@ -238,7 +238,7 @@ const cfg = {
         },
       },
       options: {
-        apiKey: "",
+        apiKey: "test-provider-key",
         baseURL: "http://localhost:1/v1",
       },
     },

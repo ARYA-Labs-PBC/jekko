@@ -13,6 +13,7 @@ import {
 } from "@/util/jnoccio-unlock"
 import { ensureJnoccioFusionServer } from "@/util/jnoccio-server"
 import { Config } from "@/config/config"
+import { readModelKeyStatuses } from "@/model-setup/model-keys"
 import { mapValues, mergeDeep, omit, pickBy, sortBy } from "remeda"
 import { NoSuchModelError, type Provider as SDK } from "ai"
 import * as Log from "@jekko-ai/core/util/log"
@@ -916,10 +917,12 @@ const layer: Layer.Layer<
         using _ = log.time("state")
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
+        const keyState = yield* Effect.promise(() => readModelKeyStatuses())
         const modelsDev = yield* modelsDevSvc.get()
         const database = mapValues(modelsDev, fromModelsDevProvider)
 
         const providers: Record<ProviderID, Info> = {} as Record<ProviderID, Info>
+        const secrets: Record<ProviderID, string> = {} as Record<ProviderID, string>
         const languages = new Map<string, LanguageModelV3>()
         const modelLoaders: {
           [providerID: string]: CustomModelLoader
@@ -1089,17 +1092,26 @@ const layer: Layer.Layer<
           database[providerID] = parsed
         }
 
-        // load env
-        const envs = yield* env.all()
+        const statusByProvider = new Map(keyState.statuses.map((status) => [status.providerID, status]))
         for (const [id, provider] of Object.entries(database)) {
           const providerID = ProviderID.make(id)
           if (disabled.has(providerID)) continue
-          const apiKey = provider.env.map((item) => envs[item]).find(Boolean)
-          if (!apiKey) continue
+          const status = statusByProvider.get(id)
+          if (!status?.configured) continue
+          const source = status.source === "process-env" ? "process-env" : "jekko.env"
           mergeProvider(providerID, {
-            source: "env",
-            key: provider.env.length === 1 ? apiKey : undefined,
+            source: "keyfile",
+            auth: {
+              configured: true,
+              active: status.active,
+              source,
+              envName: status.envName,
+              inactiveReason: status.inactiveReason,
+            },
           })
+          if (status.envName && keyState.values[status.envName]?.value) {
+            secrets[providerID] = keyState.values[status.envName]!.value!
+          }
         }
 
         // load apikeys
@@ -1110,8 +1122,13 @@ const layer: Layer.Layer<
           if (provider.type === "api") {
             mergeProvider(providerID, {
               source: "api",
-              key: provider.key,
+              auth: {
+                configured: true,
+                active: true,
+                source: "legacy-config",
+              },
             })
+            secrets[providerID] = provider.key
           }
         }
 
@@ -1163,6 +1180,17 @@ const layer: Layer.Layer<
           if (provider.name) partial.name = provider.name
           if (provider.options) partial.options = provider.options
           mergeProvider(providerID, partial)
+          const apiKey = provider.options?.apiKey
+          if (typeof apiKey === "string" && apiKey.trim() !== "" && !secrets[providerID]) {
+            secrets[providerID] = apiKey
+            mergeProvider(providerID, {
+              auth: {
+                configured: true,
+                active: true,
+                source: "legacy-config",
+              },
+            })
+          }
         }
 
         const gitlab = ProviderID.make("gitlab")
@@ -1247,6 +1275,7 @@ const layer: Layer.Layer<
         return {
           models: languages,
           providers,
+          secrets,
           sdk,
           modelLoaders,
           varsLoaders,
@@ -1294,7 +1323,10 @@ const layer: Layer.Layer<
         })
 
         if (baseURL !== undefined) options["baseURL"] = baseURL
-        if (options["apiKey"] === undefined && provider.key) options["apiKey"] = provider.key
+        if (options["apiKey"] === undefined) {
+          const secret = secrets[model.providerID] ?? provider.options?.["apiKey"]
+          if (typeof secret === "string" && secret.trim() !== "") options["apiKey"] = secret
+        }
         if (model.headers)
           options["headers"] = {
             ...options["headers"],
@@ -1538,37 +1570,14 @@ const layer: Layer.Layer<
 
     const defaultModel = Effect.fn("Provider.defaultModel")(function* () {
       const cfg = yield* config.get()
-      if (cfg.model) return parseModel(cfg.model)
-
+      if (cfg.model && cfg.model !== "auto/smart") return parseModel(cfg.model)
       const s = yield* InstanceState.get(state)
-      const recent = yield* fs.readJson(path.join(Global.Path.state, "model.json")).pipe(
-        Effect.map((x): { providerID: ProviderID; modelID: ModelID }[] => {
-          if (!isRecord(x) || !Array.isArray(x.recent)) return []
-          return x.recent.flatMap((item) => {
-            if (!isRecord(item)) return []
-            if (typeof item.providerID !== "string") return []
-            if (typeof item.modelID !== "string") return []
-            return [{ providerID: ProviderID.make(item.providerID), modelID: ModelID.make(item.modelID) }]
-          })
-        }),
-        Effect.catch(() => Effect.succeed([] as { providerID: ProviderID; modelID: ModelID }[])),
-      )
-      for (const entry of recent) {
-        const provider = s.providers[entry.providerID]
-        if (!provider) continue
-        const model = provider.models[entry.modelID]
-        if (!model || isLockedModel(model)) continue
-        return { providerID: entry.providerID, modelID: entry.modelID }
-      }
-
       const provider = Object.values(s.providers).find(
-        (p) =>
-          (!cfg.provider || Object.keys(cfg.provider).includes(p.id)) &&
-          Object.values(p.models).some((model) => !isLockedModel(model)),
+        (p) => p.auth?.active && Object.values(p.models).some((model) => !isLockedModel(model)),
       )
-      if (!provider) throw new Error("no providers found")
+      if (!provider) return { providerID: ProviderID.make("auto"), modelID: ModelID.make("smart") }
       const [model] = sort(Object.values(provider.models).filter((model) => !isLockedModel(model)))
-      if (!model) throw new Error("no models found")
+      if (!model) return { providerID: ProviderID.make("auto"), modelID: ModelID.make("smart") }
       return {
         providerID: provider.id,
         modelID: model.id,

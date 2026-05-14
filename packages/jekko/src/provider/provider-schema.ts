@@ -123,9 +123,17 @@ export type Model = Types.DeepMutable<Schema.Schema.Type<typeof Model>>
 export const Info = Schema.Struct({
   id: ProviderID,
   name: Schema.String,
-  source: Schema.Literals(["env", "config", "custom", "api"]),
+  source: Schema.Literals(["env", "keyfile", "config", "custom", "api"]),
   env: Schema.Array(Schema.String),
-  key: optionalOmitUndefined(Schema.String),
+  auth: optionalOmitUndefined(
+    Schema.Struct({
+      configured: Schema.Boolean,
+      active: Schema.Boolean,
+      source: Schema.Literals(["jekko.env", "process-env", "oauth", "legacy-config", "public"]),
+      envName: optionalOmitUndefined(Schema.String),
+      inactiveReason: optionalOmitUndefined(Schema.String),
+    }),
+  ),
   options: Schema.Record(Schema.String, Schema.Any),
   models: Schema.Record(Schema.String, Model),
 })

@@ -114,4 +114,16 @@ export const Flag = {
   get JEKKO_CLIENT() {
     return process.env["JEKKO_CLIENT"] ?? "cli"
   },
+  get JEKKO_MODEL_KEYS_FILE() {
+    return process.env["JEKKO_MODEL_KEYS_FILE"]
+  },
+  get JEKKO_MODEL_KEYS_CONTENT() {
+    return process.env["JEKKO_MODEL_KEYS_CONTENT"]
+  },
+  get JEKKO_IGNORE_DEVELOPER_KEY() {
+    return truthy("JEKKO_IGNORE_DEVELOPER_KEY")
+  },
+  get JEKKO_DISABLE_KEY_SETUP_TUI() {
+    return truthy("JEKKO_DISABLE_KEY_SETUP_TUI")
+  },
 }

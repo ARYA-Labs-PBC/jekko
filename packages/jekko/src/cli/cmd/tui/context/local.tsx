@@ -31,11 +31,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const kv = useKV()
 
     function getModelInfo(model: { providerID: string; modelID: string }) {
+      if (model.providerID === "auto" && model.modelID === "smart") return undefined
       const provider = sync.data.provider.find((x) => x.id === model.providerID)
       return provider?.models[model.modelID]
     }
 
     function isModelValid(model: { providerID: string; modelID: string }) {
+      if (model.providerID === "auto" && model.modelID === "smart") return true
       const info = getModelInfo(model)
       return !!info && info.status !== "locked"
     }

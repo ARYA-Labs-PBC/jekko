@@ -14,10 +14,10 @@ import { useToast } from "../ui/toast"
 import type { ProviderAuthAuthorization } from "@jekko-ai/sdk/v2"
 import { createDialogProviderOptions } from "./dialog-provider-options"
 import { DialogModel } from "./dialog-model"
+import { DialogKeySetup } from "./dialog-key-setup"
 
 export function DialogProvider() {
-  const options = createDialogProviderOptions()
-  return <DialogSelect title="Connect a provider" options={options()} />
+  return <DialogKeySetup />
 }
 
 interface AutoMethodProps {
@@ -26,7 +26,7 @@ interface AutoMethodProps {
   title: string
   authorization: ProviderAuthAuthorization
 }
-function AutoMethod(props: AutoMethodProps) {
+export function AutoMethod(props: AutoMethodProps) {
   const { theme } = useTheme()
   const sdk = useSDK()
   const dialog = useDialog()
@@ -84,7 +84,7 @@ interface CodeMethodProps {
   providerID: string
   authorization: ProviderAuthAuthorization
 }
-function CodeMethod(props: CodeMethodProps) {
+export function CodeMethod(props: CodeMethodProps) {
   const { theme } = useTheme()
   const sdk = useSDK()
   const sync = useSync()
@@ -127,7 +127,7 @@ interface ApiMethodProps {
   title: string
   metadata?: Record<string, string>
 }
-function ApiMethod(props: ApiMethodProps) {
+export function ApiMethod(props: ApiMethodProps) {
   const dialog = useDialog()
   const sdk = useSDK()
   const sync = useSync()

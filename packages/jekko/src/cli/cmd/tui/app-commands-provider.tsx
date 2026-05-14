@@ -5,7 +5,7 @@ import type { TuiCommandInput } from "./app-commands-shared"
 export function buildProviderCommands(input: TuiCommandInput) {
   return [
     {
-      title: "Connect provider",
+      title: "Model keys",
       value: "provider.connect",
       suggested: !input.connected(),
       slash: {

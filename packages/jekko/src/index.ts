@@ -11,6 +11,7 @@ import { AgentCommand } from "./cli/cmd/agent"
 import { UpgradeCommand } from "./cli/cmd/upgrade"
 import { UninstallCommand } from "./cli/cmd/uninstall"
 import { ModelsCommand } from "./cli/cmd/models"
+import { KeysCommand } from "./cli/cmd/keys"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
 import { InstallationVersion } from "@jekko-ai/core/installation/version"
@@ -190,6 +191,7 @@ const cli = yargs(args)
   .command(UninstallCommand)
   .command(ServeCommand)
   .command(ModelsCommand)
+  .command(KeysCommand)
   .command(StatsCommand)
   .command(ExportCommand)
   .command(ImportCommand)

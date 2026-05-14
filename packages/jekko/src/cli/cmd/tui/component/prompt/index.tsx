@@ -260,7 +260,7 @@ export function Prompt(props: PromptProps) {
   const [workspaceCreating, setWorkspaceCreating] = createSignal(false)
   const [workspaceCreatingDots, setWorkspaceCreatingDots] = createSignal(3)
   const [warpNotice, setWarpNotice] = createSignal<string>()
-  const currentProviderLabel = createMemo(() => local.model.parsed().provider)
+  const currentModelLabel = createMemo(() => local.model.parsed())
   const hasRightContent = createMemo(() => Boolean(props.right))
   const defaultWorkspaceID = createMemo(() => props.workspaceID ?? project.workspace.current())
 
@@ -1721,9 +1721,11 @@ export function Prompt(props: PromptProps) {
                           flexShrink={0}
                           fg={fadeColor(keybind.leader ? theme.textMuted : theme.text, modelMetaAlpha())}
                         >
-                          {local.model.parsed().model}
+                          {currentModelLabel().provider === "Auto" ? "Auto" : currentModelLabel().model}
                         </text>
-                        <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{currentProviderLabel()}</text>
+                        <Show when={currentModelLabel().provider !== "Auto"}>
+                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{currentModelLabel().provider}</text>
+                        </Show>
                         <Show when={showVariant()}>
                           <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
                           <text>

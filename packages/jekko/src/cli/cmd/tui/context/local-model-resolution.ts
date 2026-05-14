@@ -2,6 +2,8 @@ export type ProviderModel = { providerID: string; modelID: string }
 
 export type ModelResolutionSource = "agent" | "agent-model" | "args" | "config" | "recent" | "provider"
 
+export const AUTO_MODEL: ProviderModel = { providerID: "auto", modelID: "smart" }
+
 export type ModelResolution =
   | {
       kind: "resolved"
@@ -50,6 +52,10 @@ export function resolveModelChoice(
     return missingModelResolution(options.source, "No model value was configured")
   }
 
+  if (value === `${AUTO_MODEL.providerID}/${AUTO_MODEL.modelID}`) {
+    return resolvedModelResolution(options.source, AUTO_MODEL)
+  }
+
   const choice = options.parseModel(value)
   if (!options.isModelValid(choice)) {
     return missingModelResolution(options.source, `Model ${choice.providerID}/${choice.modelID} is not valid`)
@@ -71,26 +77,7 @@ export function resolveRecentModel(
 export function resolveProviderModel(sync: {
   data: { provider: Array<{ id: string; models: Record<string, { id: string; status: string }> }>; config: { model?: string } }
 }) {
-  const provider = sync.data.provider.find((entry) =>
-    Object.values(entry.models).some((model) => model.status !== "locked"),
-  )
-  if (!provider) return missingModelResolution("provider", "No provider had an unlocked model")
-
-  const defaultModel = sync.data.config.model
-  const defaultInfo = defaultModel ? provider.models[defaultModel] : undefined
-  const fallbackInfo =
-    defaultInfo && defaultInfo.status !== "locked"
-      ? defaultInfo
-      : Object.values(provider.models).find((model) => model.status !== "locked")
-
-  if (!fallbackInfo?.id) {
-    return missingModelResolution("provider", `Provider ${provider.id} has no unlocked models`)
-  }
-
-  return resolvedModelResolution("provider", {
-    providerID: provider.id,
-    modelID: fallbackInfo.id,
-  })
+  return resolvedModelResolution("provider", AUTO_MODEL)
 }
 
 export function chooseModelResolution(candidates: ModelResolution[]) {

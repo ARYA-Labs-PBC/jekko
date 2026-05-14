@@ -81,6 +81,10 @@ const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested struc
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
 const RESERVED_TOOL_VISIBILITY_KEYS = new Set(["*", "builtin:*", "mcp:*", "daemon:*"])
+const AUTO_MODEL = {
+  providerID: ProviderID.make("auto"),
+  modelID: ModelID.make("smart"),
+}
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
@@ -925,7 +929,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const lastModel = Effect.fnUntraced(function* (sessionID: SessionID) {
       const match = yield* sessions.findMessage(sessionID, (m) => m.info.role === "user" && !!m.info.model)
       if (Option.isSome(match) && match.value.info.role === "user") return match.value.info.model
-      return yield* provider.defaultModel()
+      return AUTO_MODEL
     })
 
     const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
@@ -1456,16 +1460,36 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             break
           }
 
+          const requestedModel = lastUser.model ?? AUTO_MODEL
+          const selectedModel =
+            requestedModel.providerID === AUTO_MODEL.providerID && requestedModel.modelID === AUTO_MODEL.modelID
+              ? yield* provider.defaultModel()
+              : requestedModel
+          if (selectedModel.providerID === AUTO_MODEL.providerID && selectedModel.modelID === AUTO_MODEL.modelID) {
+            const error = new NamedError.Unknown({ message: "No model keys found. Run /connect." })
+            yield* bus.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+            throw error
+          }
+
           step++
+          const routingReceipt = ulid()
+          yield* slog.info("model route", {
+            receiptID: routingReceipt,
+            requested: requestedModel,
+            selected: selectedModel,
+            setupRequired: false,
+            developerUnlocked: false,
+            protectedRouterUsed: false,
+          })
           if (step === 1)
             yield* title({
               session,
-              modelID: lastUser.model.modelID,
-              providerID: lastUser.model.providerID,
+              modelID: selectedModel.modelID,
+              providerID: selectedModel.providerID,
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+          const model = yield* getModel(selectedModel.providerID, selectedModel.modelID, sessionID)
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
@@ -1490,7 +1514,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             lastFinished.summary !== true &&
             (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
           ) {
-            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+            yield* compaction.create({ sessionID, agent: lastUser.agent, model, auto: true })
             continue
           }
 
@@ -1518,6 +1542,18 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
             modelID: model.id,
             providerID: model.providerID,
+            jnoccio: {
+              routingReceipt,
+              requested: {
+                providerID: requestedModel.providerID,
+                modelID: requestedModel.modelID,
+              },
+              selected: {
+                providerID: selectedModel.providerID,
+                modelID: selectedModel.modelID,
+              },
+              protectedRouterUsed: false,
+            },
             time: { created: Date.now() },
             sessionID,
           }
@@ -1629,7 +1665,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               yield* compaction.create({
                 sessionID,
                 agent: lastUser.agent,
-                model: lastUser.model,
+                model,
                 auto: true,
                 overflow: !handle.message.finish,
               })

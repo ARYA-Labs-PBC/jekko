@@ -89,6 +89,16 @@ This is used internally and can be invoked using `@general` in messages.
 
 Learn more about [agents](https://jekko.ai/docs/agents).
 
+### Model Keys
+
+Put model keys in `~/.jekko/jekko.env`.
+
+- Start with one provider key.
+- Jekko picks the model automatically.
+- Paid OpenAI, Gemini, and Anthropic keys work without choosing a model name.
+- Multi-provider routing requires `JNOCCIO_DEVELOPER_KEY`.
+- Do not put model keys in project `.env` files for Jekko setup.
+
 ### Documentation
 
 For more info on how to configure Jekko, [**head over to our docs**](https://jekko.ai/docs).

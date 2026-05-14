@@ -11,6 +11,7 @@ export function buildAgentCommands(input: TuiCommandInput) {
       value: "model.list",
       keybind: "model_list",
       suggested: true,
+      hidden: true,
       category: "Agent",
       slash: {
         name: "models",
@@ -98,6 +99,7 @@ export function buildAgentCommands(input: TuiCommandInput) {
       value: "variant.cycle",
       keybind: "variant_cycle",
       category: "Agent",
+      hidden: true,
       onSelect: () => {
         input.local.model.variant.cycle()
       },
@@ -107,7 +109,7 @@ export function buildAgentCommands(input: TuiCommandInput) {
       value: "variant.list",
       keybind: "variant_list",
       category: "Agent",
-      hidden: input.local.model.variant.list().length === 0,
+      hidden: true,
       slash: {
         name: "variants",
       },
