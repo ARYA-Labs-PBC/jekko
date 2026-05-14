@@ -79,6 +79,7 @@ Canonical human-facing schema for the ZYAL `2.6.0` contract.
 | `budgets` | object | no | runtime | Nested budgets. |
 | `triggers` | object | no | runtime | Trigger list and anti-recursion guard. |
 | `rollback` | object | no | runtime | Rollback policy. |
+| `promotion_gates` | record | no | preview | Promotion gate policy consumed by domain-specific reducers. |
 | `done` | object | no | runtime | Completion policy. |
 | `repo_intelligence` | object | no | preview | Repository-intelligence policy. |
 | `fleet` | object | no | runtime | Fleet and Jnoccio coordination. |
@@ -872,6 +873,8 @@ Canonical human-facing schema for the ZYAL `2.6.0` contract.
   - `plan_required` - Require a rollback plan. (kind: scalar; status: runtime; optional)
   - `verify_command` - Rollback verification command. (kind: scalar; status: runtime; optional)
   - `on_failure_after_merge` - Post-merge failure action. (kind: enum; status: runtime; optional; values: `revert_commit`, `feature_flag_off`, `migration_down`, `manual`)
+- `promotion_gates` - Promotion gate policy consumed by domain-specific reducers. (kind: record; status: preview; optional)
+  - `<record value>` - Reducer-specific gate value. (kind: scalar; status: runtime; optional)
 - `done` - Completion policy. (kind: object; status: runtime; optional)
   - `require` - Required completion conditions. (kind: array; status: runtime; optional)
     - `<array item>` - Condition. (kind: scalar; status: runtime; optional)
@@ -974,7 +977,7 @@ Canonical human-facing schema for the ZYAL `2.6.0` contract.
         - `publication_hash` - Publication hash. (kind: scalar; status: runtime; required)
         - `paper_path` - Paper path. (kind: scalar; status: runtime; optional)
         - `challenge_path` - Challenge path. (kind: scalar; status: runtime; optional)
-        - `role` - Work-item role. (kind: enum; status: runtime; optional; values: `question_generator`, `answerer`, `critic`, `auditor`)
+        - `role` - Work-item role. (kind: enum; status: runtime; optional; values: `question_generator`, `publication_extractor`, `answerer`, `saturated_answerer`, `focused_auditor`, `critic`, `auditor`, `judge_reducer`, `reducer`, `scorer`)
     - `acceptance` - Acceptance policy. (kind: object; status: runtime; optional)
       - `min_auditor_agreement` - Minimum auditor agreement. (kind: scalar; status: runtime; optional)
       - `min_answerability` - Minimum answerability. (kind: scalar; status: runtime; optional)
@@ -989,6 +992,11 @@ Canonical human-facing schema for the ZYAL `2.6.0` contract.
     - `focused_auditors` - Focused auditors. (kind: scalar; status: runtime; optional)
     - `min_auditor_agreement` - Minimum auditor agreement. (kind: scalar; status: runtime; optional)
     - `min_answerability` - Minimum answerability. (kind: scalar; status: runtime; optional)
+  - `route_metadata` - Route metadata policy. (kind: object; status: runtime; optional)
+    - `required` - Require route metadata. (kind: scalar; status: runtime; optional)
+    - `require_request_id` - Require request ids. (kind: scalar; status: runtime; optional)
+    - `require_provider` - Required provider id. (kind: scalar; status: runtime; optional)
+    - `require_model_profile` - Require model profile metadata. (kind: scalar; status: runtime; optional)
 - `jankurai` - Host-enforced Jankurai orchestration. (kind: object; status: runtime; optional)
   - `enabled` - Enable Jankurai. (kind: scalar; status: runtime; optional)
   - `root` - Jankurai root. (kind: scalar; status: runtime; optional)
