@@ -37,6 +37,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { AppFileSystem } from "@jekko-ai/core/filesystem"
 import { isRecord } from "@/util/record"
+import { recommendedModelID } from "@/model-routing/recommendations"
 import { optionalOmitUndefined, withStatics } from "@/util/schema"
 import {
   ConfigProvidersResult,
@@ -1576,6 +1577,13 @@ const layer: Layer.Layer<
         (p) => p.auth?.active && Object.values(p.models).some((model) => !isLockedModel(model)),
       )
       if (!provider) return { providerID: ProviderID.make("auto"), modelID: ModelID.make("smart") }
+      const recommended = recommendedModelID(provider.id)
+      if (recommended && provider.models[recommended] && !isLockedModel(provider.models[recommended])) {
+        return {
+          providerID: provider.id,
+          modelID: provider.models[recommended].id,
+        }
+      }
       const [model] = sort(Object.values(provider.models).filter((model) => !isLockedModel(model)))
       if (!model) return { providerID: ProviderID.make("auto"), modelID: ModelID.make("smart") }
       return {

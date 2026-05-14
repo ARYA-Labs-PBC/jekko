@@ -253,38 +253,35 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
     return render({ params: route.data.data })
   })
 
+  if (!splashDismissed()) return <SplashScreen ready={ready} onDismiss={() => setSplashDismissed(true)} />
+
   return (
-    <Show
-      when={splashDismissed()}
-      fallback={<SplashScreen ready={ready} onDismiss={() => setSplashDismissed(true)} />}
+    <box
+      width={dimensions().width}
+      height={dimensions().height}
+      backgroundColor={theme.background}
+      flexDirection="column"
     >
-      <box
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor={theme.background}
-        flexDirection="column"
-      >
-        <Show when={Flag.JEKKO_SHOW_TTFD}>
-          <TimeToFirstDraw />
-        </Show>
-        <Show when={ready()}>
-          <NavigationHeader />
-          <box flexGrow={1} minHeight={0} flexDirection="column">
-            <Switch>
-              <Match when={route.data.type === "home"}>
-                <Home />
-              </Match>
-              <Match when={route.data.type === "shell"}>
-                <Shell />
-              </Match>
-              <Match when={route.data.type === "session"}>
-                <Session />
-              </Match>
-            </Switch>
-            {plugin()}
-          </box>
-        </Show>
-      </box>
-    </Show>
+      <Show when={Flag.JEKKO_SHOW_TTFD}>
+        <TimeToFirstDraw />
+      </Show>
+      <Show when={ready()}>
+        <NavigationHeader />
+        <box flexGrow={1} minHeight={0} flexDirection="column">
+          <Switch>
+            <Match when={route.data.type === "home"}>
+              <Home />
+            </Match>
+            <Match when={route.data.type === "shell"}>
+              <Shell />
+            </Match>
+            <Match when={route.data.type === "session"}>
+              <Session />
+            </Match>
+          </Switch>
+          {plugin()}
+        </box>
+      </Show>
+    </box>
   )
 }
