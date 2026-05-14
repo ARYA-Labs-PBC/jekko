@@ -4,7 +4,7 @@
  * Registers:
  *  - A plugin route "jnoccio" rendering the full dashboard
  *  - A Ctrl+J global keybind to toggle the dashboard
- *  - A home_footer slot showing the ^J shortcut hint
+ *  - A home_footer slot showing the Ctrl+J shortcut hint
  *
  * IMPORTANT: The shortcut, route, and footer hint are ONLY active
  * when the Jnoccio server is reachable (bootStatus === "ready").
@@ -34,7 +34,10 @@ function JnoccioFooterHint(props: { api: TuiPluginApi }) {
     <Show when={isReady()}>
       <box flexDirection="row" gap={1} flexShrink={0}>
         <text fg={theme().textMuted}>
-          <span style={{ fg: GOLD }}><b>^J</b></span> Jnoccio
+          <span style={{ bg: theme().backgroundElement, fg: GOLD }}>
+            {" Ctrl+J "}
+          </span>{" "}
+          Jnoccio
         </text>
       </box>
     </Show>
@@ -84,7 +87,7 @@ const tui: TuiPlugin = async (api) => {
     ]
   })
 
-  // Register home_footer slot with the ^J hint
+  // Register home_footer slot with the Ctrl+J hint
   api.slots.register({
     order: 90, // Just before the existing home footer
     slots: {

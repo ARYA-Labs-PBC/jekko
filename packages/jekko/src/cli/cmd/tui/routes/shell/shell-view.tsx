@@ -16,8 +16,11 @@ import { createMemo, Show } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "@tui/context/theme"
 import { useLocal } from "@tui/context/local"
+import { useKeybind } from "@tui/context/keybind"
+import { useSync } from "@tui/context/sync"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { Toast } from "@tui/ui/toast"
+import { FooterBand } from "@tui/component/footer-band"
 
 type LeftSize =
   | { kind: "shown"; width: number; overlay: boolean }
@@ -32,11 +35,32 @@ function resolveLeft(width: number, visible: boolean): LeftSize {
 }
 
 export function Shell() {
-  const { theme } = useTheme()
+  const themeState = useTheme()
+  const { theme } = themeState
   const local = useLocal()
+  const keybind = useKeybind()
+  const sync = useSync()
   const dimensions = useTerminalDimensions()
 
   const left = createMemo<LeftSize>(() => resolveLeft(dimensions().width, local.shellLeftVisible.get()))
+  const leftWidth = createMemo(() => {
+    const current = left()
+    return current.kind === "shown" ? current.width : 0
+  })
+  const leftContentWidth = createMemo(() => Math.max(0, leftWidth() - 4))
+  const centerWidth = createMemo(() => Math.max(0, dimensions().width - leftWidth()))
+  const centerContentWidth = createMemo(() => Math.max(0, centerWidth() - 4))
+
+  keybind.on("shell.left.toggle", () => {
+    local.shellLeftVisible.toggle()
+  })
+
+  const activeSessionID = createMemo<string | undefined>(() => {
+    const sessions = sync.data.session ?? []
+    return sessions
+      .toSorted((a, b) => b.time.updated - a.time.updated)
+      .find((s) => s.parentID === undefined)?.id
+  })
 
   return (
     <>
@@ -63,21 +87,50 @@ export function Shell() {
                   name="shell_left_tabs"
                   mode="single_winner"
                   active_pane={local.shellPane.get()}
+                  left_width={sized().width}
+                  left_content_width={Math.max(0, sized().width - 4)}
                 />
               </box>
-              <box flexGrow={1} minHeight={0} paddingTop={1}>
-                <TuiPluginRuntime.Slot
-                  name="shell_left_active_pane"
-                  mode="single_winner"
-                  active_pane={local.shellPane.get()}
-                />
-              </box>
+              <scrollbox
+                flexGrow={1}
+                verticalScrollbarOptions={{
+                  trackOptions: {
+                    backgroundColor: theme.background,
+                    foregroundColor: theme.borderActive,
+                  },
+                }}
+              >
+                <box gap={1} paddingTop={1} paddingRight={1}>
+                  <TuiPluginRuntime.Slot
+                    name="shell_left_active_pane"
+                    mode="single_winner"
+                    active_pane={local.shellPane.get()}
+                    left_width={sized().width}
+                    left_content_width={Math.max(0, sized().width - 4)}
+                  />
+                  <Show when={activeSessionID()}>
+                    {(sessionID) => (
+                      <>
+                        <TuiPluginRuntime.Slot name="sidebar_content" session_id={sessionID()} />
+                        <TuiPluginRuntime.Slot name="sidebar_footer" mode="single_winner" session_id={sessionID()} />
+                      </>
+                    )}
+                  </Show>
+                </box>
+              </scrollbox>
             </box>
           )}
         </Show>
 
         <box flexGrow={1} minWidth={0} flexDirection="column" paddingLeft={2} paddingRight={2}>
-          <TuiPluginRuntime.Slot name="shell_center_feed" mode="single_winner">
+          <TuiPluginRuntime.Slot
+            name="shell_center_feed"
+            mode="single_winner"
+            left_width={leftWidth()}
+            left_content_width={leftContentWidth()}
+            center_width={centerWidth()}
+            center_content_width={centerContentWidth()}
+          >
             <box flexGrow={1} alignItems="center" justifyContent="center">
               <text fg={theme.textMuted}>No active feed</text>
             </box>
@@ -86,17 +139,22 @@ export function Shell() {
         </box>
       </box>
 
-      <box width="100%" flexShrink={0} paddingLeft={2} paddingRight={2}>
-        <TuiPluginRuntime.Slot name="shell_footer" mode="single_winner">
-          <text fg={theme.textMuted}>
-            <span style={{ fg: theme.text }}>↵</span> send{"   "}
-            <span style={{ fg: theme.text }}>/</span> command palette{"   "}
-            <span style={{ fg: theme.text }}>Tab</span> switch pane{"   "}
-            <span style={{ fg: theme.text }}>?</span> help{"   "}
-            <span style={{ fg: theme.text }}>⌃c</span> quit
-          </text>
-        </TuiPluginRuntime.Slot>
-      </box>
+      <FooterBand backgroundColor={theme.backgroundPanel} borderColor={theme.borderSubtle}>
+        <box width="100%" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+          <TuiPluginRuntime.Slot name="shell_footer" mode="single_winner">
+            <text fg={theme.textMuted}>
+              <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Enter </span> send{"  "}
+              <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Ctrl+P </span> commands{"  "}
+              <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Tab </span> pane{"  "}
+              <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Ctrl+B </span> left{"  "}
+              <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Ctrl+Shift+T </span>{" "}
+              {themeState.mode() === "dark" ? "light" : "dark"}{"  "}
+              <span style={{ bg: theme.backgroundElement, fg: theme.text }}> ? </span> help{"  "}
+              <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Ctrl+C </span> quit
+            </text>
+          </TuiPluginRuntime.Slot>
+        </box>
+      </FooterBand>
     </>
   )
 }

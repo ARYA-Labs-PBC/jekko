@@ -88,6 +88,7 @@ export function buildAgentCommands(input: TuiCommandInput) {
       keybind: "agent_cycle",
       category: "Agent",
       hidden: true,
+      enabled: input.route.data.type !== "shell",
       onSelect: () => {
         input.local.agent.move(1)
       },
@@ -120,6 +121,7 @@ export function buildAgentCommands(input: TuiCommandInput) {
       keybind: "agent_cycle_reverse",
       category: "Agent",
       hidden: true,
+      enabled: input.route.data.type !== "shell",
       onSelect: () => {
         input.local.agent.move(-1)
       },

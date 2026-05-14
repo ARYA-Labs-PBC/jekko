@@ -131,7 +131,7 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
     return false
   })
   const showTimestamps = createMemo(() => timestamps() === "show")
-  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
+  const contentWidth = createMemo(() => dimensions().width - 4)
   const providers = createMemo(() => Model.index(sync.data.provider))
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
@@ -140,12 +140,30 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
   const editor = useEditorContext()
   const [daemonRun, setDaemonRun] = createSignal<any>()
   const scrollRef = { current: undefined as ScrollBoxRenderable | undefined }
-  let scroll: ScrollBoxRenderable
 
   const setScroll = (next: ScrollBoxRenderable | undefined) => {
-    scroll = next
     scrollRef.current = next
   }
+  const scrollProxy = {
+    get height() {
+      return scrollRef.current?.height ?? 0
+    },
+    get scrollHeight() {
+      return scrollRef.current?.scrollHeight ?? 0
+    },
+    get y() {
+      return scrollRef.current?.y ?? 0
+    },
+    scrollBy(amount: number) {
+      scrollRef.current?.scrollBy(amount)
+    },
+    scrollTo(offset: number) {
+      scrollRef.current?.scrollTo(offset)
+    },
+    getChildren() {
+      return scrollRef.current?.getChildren() ?? []
+    },
+  } as unknown as ScrollBoxRenderable
 
   createEffect(() => {
     const sessionID = route.sessionID
@@ -158,7 +176,7 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
           variant: "error",
           duration: 5000,
         })
-        navigate({ type: "home" })
+        navigate({ type: "shell" })
         return
       }
 
@@ -183,7 +201,7 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
         variant: "error",
         duration: 5000,
       })
-      navigate({ type: "home" })
+      navigate({ type: "shell" })
     })
   })
 
@@ -218,19 +236,15 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
-    const pad = (text: string) => text.padEnd(10, " ")
-    const weak = (text: string) => UI.Style.TEXT_DIM + pad(text) + UI.Style.TEXT_NORMAL
-    const logo = UI.logo("  ").split(/\\r?\\n/)
+    const dim = UI.Style.TEXT_DIM
+    const reset = UI.Style.TEXT_NORMAL
+    const bold = UI.Style.TEXT_NORMAL_BOLD
     return exit.message.set([
-      `${logo[0] ?? ""}`,
-      `${logo[1] ?? ""}`,
-      `${logo[2] ?? ""}`,
-      `${logo[3] ?? ""}`,
       ``,
-      `  ${weak("Session")}${UI.Style.TEXT_NORMAL_BOLD}${title}${UI.Style.TEXT_NORMAL}`,
-      `  ${weak("Continue")}${UI.Style.TEXT_NORMAL_BOLD}jekko -s ${session()?.id}${UI.Style.TEXT_NORMAL}`,
+      `  ${dim}Session${reset}  ${bold}${title}${reset}`,
+      `  ${dim}Resume${reset}   ${bold}jekko -s ${session()?.id}${reset}`,
       ``,
-    ].join("\\n"))
+    ].join("\n"))
   })
 
   const keybind = useKeybind()
@@ -250,7 +264,22 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
     }
   })
 
-  registerSessionCommands(command, { route, sdk, sync, session, messages, prompt, scroll, toast, sidebarVisible, setSidebar, setSidebarOpen, conceal, setConceal, showTimestamps, setTimestamps, showThinking, setShowThinking, showDetails, setShowDetails, setShowScrollbar, showGenericToolOutput, setShowGenericToolOutput, toBottom, emptyPromptParts, navigate, showAssistantMetadata, renderer, scrollToMessage })
+  keybind.on("feed.scroll.pageUp", () => {
+    if (!scrollRef.current) return
+    scrollRef.current.scrollBy(-scrollRef.current.height)
+  })
+  keybind.on("feed.scroll.pageDown", () => {
+    if (!scrollRef.current) return
+    scrollRef.current.scrollBy(scrollRef.current.height)
+  })
+  keybind.on("feed.scroll.top", () => {
+    scrollRef.current?.scrollTo(0)
+  })
+  keybind.on("feed.scroll.bottom", () => {
+    scrollRef.current?.scrollTo(scrollRef.current.scrollHeight)
+  })
+
+  registerSessionCommands(command, { route, sdk, sync, session, messages, prompt, scroll: scrollProxy, toast, sidebarVisible, setSidebar, setSidebarOpen, conceal, setConceal, showTimestamps, setTimestamps, showThinking, setShowThinking, showDetails, setShowDetails, setShowScrollbar, showGenericToolOutput, setShowGenericToolOutput, toBottom, emptyPromptParts, navigate, showAssistantMetadata, renderer, scrollToMessage })
 
   event.on("session.status", (evt: any) => {
     if (evt.properties.sessionID !== route.sessionID) return

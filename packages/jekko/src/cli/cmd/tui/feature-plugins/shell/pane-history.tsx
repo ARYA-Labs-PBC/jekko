@@ -39,6 +39,7 @@ import { DialogSessionList } from "@tui/component/dialog-session-list"
 const id = "internal:shell-pane-history"
 
 const MAX_ROWS = 8
+const DEFAULT_PANE_WIDTH = 24
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 type SessionEntry = NonNullable<ReturnType<typeof useSync>["data"]["session"]>[number]
@@ -79,7 +80,13 @@ function relativeTime(now: number, updated: number, group: Group): string {
   return `${MONTHS[d.getMonth()]} ${d.getDate()}`
 }
 
-function PaneHistory() {
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text
+  if (max <= 1) return text.slice(0, max)
+  return text.slice(0, max - 1) + "…"
+}
+
+function PaneHistory(props: { contentWidth: number }) {
   const { theme } = useTheme()
   const sync = useSync()
   const route = useRoute()
@@ -171,6 +178,7 @@ function PaneHistory() {
 
   const visibleRows = createMemo<Row[]>(() => rows().slice(0, MAX_ROWS))
   const overflowCount = createMemo(() => Math.max(0, rows().length - MAX_ROWS))
+  const paneWidth = createMemo(() => Math.max(16, props.contentWidth || DEFAULT_PANE_WIDTH))
 
   const todayRows = createMemo(() => visibleRows().filter((r) => r.group === "today"))
   const yesterdayRows = createMemo(() => visibleRows().filter((r) => r.group === "yesterday"))
@@ -183,6 +191,7 @@ function PaneHistory() {
   function GroupRow(props: { row: Row }) {
     const now = Date.now()
     const time = relativeTime(now, props.row.session.time.updated, props.row.group)
+    const titleWidth = Math.max(4, paneWidth() - time.length - (props.row.isFork ? 9 : 5))
     return (
       <box flexDirection="row" justifyContent="space-between" flexShrink={0} paddingLeft={props.row.isFork ? 4 : 2}>
         <box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
@@ -192,7 +201,7 @@ function PaneHistory() {
             </text>
           </Show>
           <text fg={theme.text} wrapMode="none">
-            {props.row.session.title}
+            {truncate(props.row.session.title, titleWidth)}
           </text>
         </box>
         <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>
@@ -211,7 +220,7 @@ function PaneHistory() {
       </text>
       {/* 2. Divider — `width="100%"` lets the underlying text fill the parent. */}
       <text fg={theme.borderSubtle} wrapMode="none">
-        ────────────────────────────────────────────
+        {"─".repeat(paneWidth())}
       </text>
 
       {/* 3. Active session row */}
@@ -223,7 +232,7 @@ function PaneHistory() {
                 ●
               </text>
               <text fg={theme.text} wrapMode="none">
-                <b>{s().title}</b>
+                <b>{truncate(s().title, Math.max(4, paneWidth() - 7))}</b>
               </text>
             </box>
             <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>
@@ -264,7 +273,7 @@ function PaneHistory() {
       <Show when={overflowCount() > 0}>
         <box flexShrink={0} paddingTop={1} onMouseDown={openSessionList}>
           <text fg={theme.textMuted} wrapMode="none">
-            … show {overflowCount()} more  ⏎
+            {truncate(`… show ${overflowCount()} more  ⏎`, paneWidth())}
           </text>
         </box>
       </Show>
@@ -278,7 +287,7 @@ const tui: TuiPlugin = async (api) => {
     slots: {
       shell_left_active_pane(_ctx, props) {
         if (props.active_pane !== "history") return null
-        return <PaneHistory />
+        return <PaneHistory contentWidth={props.left_content_width ?? DEFAULT_PANE_WIDTH} />
       },
     },
   })

@@ -1,10 +1,10 @@
 /**
  * Thin persistent navigation header for the Jekko TUI shell.
  *
- * Shows pane shortcuts (^H Back, ^J Jnoccio) with active-state
- * highlighting.  ^H returns to the previous route (session or home)
- * rather than always going home.  The Jnoccio tab only appears when
- * the Jnoccio server is reachable (boot ready or WS connected).
+ * Shows pane shortcuts with active-state highlighting. The header keeps the
+ * visible grammar human-readable (`Ctrl+H`, `Ctrl+J`) instead of raw control
+ * glyphs. The Jnoccio tab only appears when the Jnoccio server is reachable
+ * (boot ready or WS connected).
  */
 import { createMemo, Show } from "solid-js"
 import { RGBA } from "@opentui/core"
@@ -15,7 +15,6 @@ import { useTheme } from "@tui/context/theme"
 import { useRoute } from "@tui/context/route"
 
 const GOLD = RGBA.fromHex("#F5A623")
-const DIM = RGBA.fromInts(90, 90, 90)
 
 export function NavigationHeader() {
   const { theme } = useTheme()
@@ -66,19 +65,33 @@ export function NavigationHeader() {
     >
       {/* Home tab */}
       <box flexDirection="row" gap={0}>
-        <text fg={isHome() ? GOLD : DIM}>
-          <b>^H</b>
+        <text fg={isHome() ? GOLD : theme.textMuted}>
+          <span
+            style={{
+              bg: isHome() ? theme.backgroundMenu : theme.backgroundElement,
+              fg: isHome() ? GOLD : theme.textMuted,
+            }}
+          >
+            {" Ctrl+H "}
+          </span>
         </text>
         <text fg={isHome() ? GOLD : theme.textMuted}> Back</text>
       </box>
 
       <Show when={jnoccioAvailable()}>
-        <text fg={DIM}>│</text>
+        <text fg={theme.borderSubtle}>│</text>
 
         {/* Jnoccio tab */}
         <box flexDirection="row" gap={0}>
-          <text fg={isJnoccio() ? GOLD : DIM}>
-            <b>^J</b>
+          <text fg={isJnoccio() ? GOLD : theme.textMuted}>
+            <span
+              style={{
+                bg: isJnoccio() ? theme.backgroundMenu : theme.backgroundElement,
+                fg: isJnoccio() ? GOLD : theme.textMuted,
+              }}
+            >
+              {" Ctrl+J "}
+            </span>
           </text>
           <text fg={isJnoccio() ? GOLD : theme.textMuted}> Jnoccio</text>
         </box>

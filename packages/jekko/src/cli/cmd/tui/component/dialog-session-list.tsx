@@ -121,7 +121,7 @@ export function DialogSessionList() {
           await sync.session.refresh()
           if (search()) await refetch()
           if (info?.workspaceID === session.workspaceID) {
-            route.navigate({ type: "home" })
+            route.navigate({ type: "shell" })
           }
           return true
         }}

@@ -176,6 +176,35 @@ describe("splitMigrationStatements", () => {
 })
 
 describe("Database.migrationRepair", () => {
+  test("repairs additive create-table migrations on existing databases", () => {
+    const sqlite = new BunSqliteDatabase(":memory:")
+    const db = drizzle({ client: sqlite })
+    const createProjectsTable = ["CREATE TABLE", "projects (id TEXT NOT NULL)"].join(" ")
+    const migrationSql = [
+      "CREATE TABLE `daemon_finding` (`id` text PRIMARY KEY NOT NULL, `run_id` text NOT NULL)",
+      "--> statement-breakpoint",
+      "CREATE INDEX `daemon_finding_run_idx` ON `daemon_finding` (`run_id`)",
+    ].join("\n")
+
+    sqlite.prepare(createProjectsTable).run()
+
+    const report = repairSqliteMigrations(db, {
+      dbPath: ":memory:",
+      migrations: [
+        {
+          name: "20260512200000_daemon_forever",
+          timestamp: Date.UTC(2026, 4, 12, 20, 0, 0),
+          sql: migrationSql,
+          hash: migrationHash({ sql: migrationSql }),
+        },
+      ],
+    })
+
+    expect(report.repaired).toEqual(["20260512200000_daemon_forever"])
+    expect(sqlite.prepare("select name from sqlite_master where type='table' and name='daemon_finding'").get()).toBeTruthy()
+    expect(sqlite.prepare("select name from sqlite_master where type='index' and name='daemon_finding_run_idx'").get()).toBeTruthy()
+  })
+
   test("rejects unsafe add-column migrations on populated tables", () => {
     const sqlite = new BunSqliteDatabase(":memory:")
     const db = drizzle({ client: sqlite })

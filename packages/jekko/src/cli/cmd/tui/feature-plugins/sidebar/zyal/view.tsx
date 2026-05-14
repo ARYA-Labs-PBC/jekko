@@ -154,7 +154,6 @@ export function ZyalSidebarView(props: { api: TuiPluginApi }) {
           <span style={{ fg: statusLine() === "active" ? theme().success : theme().warning }}>●</span>{" "}
           {statusLine()}
         </text>
-        <text fg={NEON.separator}>{"─".repeat(38)}</text>
         <text fg={theme().textMuted}>
           Loops    <span style={{ fg: NEON.loops, bold: true }}>{loopsLine()}</span>
         </text>

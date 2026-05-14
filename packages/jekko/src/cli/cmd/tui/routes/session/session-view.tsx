@@ -1,5 +1,4 @@
 import { createSignal, For, Match, Show, Switch } from "solid-js"
-import { RGBA } from "@opentui/core"
 import { SplitBorder } from "@tui/component/border"
 import { Prompt } from "@tui/component/prompt"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
@@ -8,7 +7,6 @@ import { PermissionPrompt } from "./permission"
 import { QuestionPrompt } from "./question"
 import { DaemonBanner } from "./daemon-banner"
 import { SubagentFooter } from "./subagent-footer.tsx"
-import { Sidebar } from "./sidebar"
 import { DialogMessage } from "./dialog-message"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { AssistantMessage as AssistantMessageView, UserMessage as UserMessageView } from "./session-renderers"
@@ -195,26 +193,6 @@ export function SessionView(props: Props) {
           </Show>
           <Toast />
         </box>
-        <Show when={props.sidebarVisible()}>
-          <Switch>
-            <Match when={props.wide()}>
-              <Sidebar sessionID={props.route.sessionID} />
-            </Match>
-            <Match when={!props.wide()}>
-              <box
-                position="absolute"
-                top={0}
-                left={0}
-                right={0}
-                bottom={0}
-                alignItems="flex-end"
-                backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
-              >
-                <Sidebar sessionID={props.route.sessionID} />
-              </box>
-            </Match>
-          </Switch>
-        </Show>
       </box>
     </props.context.Provider>
   )

@@ -486,3 +486,47 @@ packages/ui/         (empty stub)
 packages/storybook/  (empty stub)
 apps/web/            (stub)
 ```
+
+---
+
+## Phase 10 — Premium UX hardening
+
+**Date:** 2026-05-13
+
+**Changed areas:**
+- Restored shell task creation by letting `Prompt` report newly created sessions without forcing navigation to the legacy session route.
+- Shell activity feed now owns its active session, renders a real prompt when empty, and auto-submits `--prompt` once sync/model readiness is available.
+- Default `jekko` theme is now adaptive dark/light; `jekko-light` remains as a compatibility alias, and bundled preset registry is restricted to branded Jekko themes.
+- Splash boot log now reports observed local state: renderer, terminal size, theme, plugin init, sync, Jnoccio, and Jankurai score presence.
+- LEFT pane slots receive measured pane widths; tabs and Jnoccio/Repo-Intel/History panes truncate against content width instead of fixed 40-column assumptions.
+- Feed page/top/bottom shortcuts are wired to the session scrollbox; unwired yank/reasoning shortcuts were removed from help and dispatcher exposure.
+- Edit/apply-patch diffs share a `JekkoDiff` renderer with file headers, +/- counts, syntax, backgrounds, and line numbers.
+- Terminal title prefix changed from `OC |` to `Jekko |`.
+
+**Validation:**
+- `rtk bun --cwd packages/jekko test test/cli/tui/ test/cli/cmd/tui/` — PASS, 202 tests.
+- `rtk just tui-startup-smoke` — PASS, including loading-screen clear smoke.
+- `rtk just tui-ci` — PASS, binary smoke + TUI tests + TUIwright no-run/paint/startup checks.
+- `rtk rg -n "OpenCode|opencode|OC \\|" packages/jekko packages/plugin TUI_UPGRADE.md` — remaining hits are documented compatibility/source-history/auth-package references; no live `OC |` title prefix remains.
+- `rtk bun --cwd packages/jekko typecheck` — FAILS on existing broad baseline. A filtered rerun found no errors in Phase 10 changed files.
+
+**Remaining risks:**
+- Manual visual smoke at 80/100/120/160 columns was not performed interactively in this pass; width-sensitive code is covered by measured truncation and TUI CI startup/paint checks.
+- `feed.yank` and focused reasoning toggle remain intentionally unadvertised until a real focused-block model exists.
+
+**Launch repair follow-up:**
+- `bun run --cwd packages/jekko dev` now passes `../..` as the TUI project path so package-local Bun resolution still works while the workspace remains `/Users/bentaylor/Code/jekko`.
+- SQLite repair now handles additive `CREATE TABLE` migrations, which fixes existing local databases missing `20260512200000_daemon_forever`.
+- `models.dev` provider normalization now fills missing model status as `active`, preventing `/provider` response validation from aborting TUI startup.
+- Validation: `rtk bun --cwd packages/jekko test test/provider/provider.part-09.test.ts test/storage/db.test.ts` — PASS, 30 tests.
+- Validation: `rtk timeout 8s bun run --cwd packages/jekko dev` — reached the Jekko home TUI and was terminated by timeout, with no startup crash.
+- Validation: `rtk just tui-startup-smoke` — PASS.
+
+**Shell-first follow-up:**
+- Splash timing is 3x longer: 2.4s minimum display, 15s hard cap.
+- Default startup route is now the shell chat; the old home route remains addressable only when explicitly requested.
+- New-session and missing/deleted-session fallbacks now return to shell chat instead of the old landing page.
+- LEFT pane switching now has real command palette entries: next/previous shell pane plus direct Jnoccio, Repo-Intel, and History pane commands.
+- Tab/Shift+Tab now switch shell panes even while the prompt is focused; agent cycling no longer steals Tab while on the shell route.
+- Validation: `rtk bun --cwd packages/jekko test test/cli/cmd/tui/navigation-header.test.ts test/cli/cmd/tui/navigation-shortcut.test.ts test/provider/provider.part-09.test.ts test/storage/db.test.ts` — PASS, 42 tests.
+- Validation: interactive `rtk bun run --cwd packages/jekko dev` smoke reached shell directly; sending Tab changed active pane from Repo-Intel to History.

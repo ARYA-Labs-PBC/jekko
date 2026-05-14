@@ -3,10 +3,16 @@ import { TextAttributes, type RGBA } from "@opentui/core"
 import { useTheme, tint } from "@tui/context/theme"
 import { Spinner } from "@tui/component/spinner"
 import { InstallationVersion } from "@jekko-ai/core/installation/version"
+import { useTerminalDimensions } from "@opentui/solid"
+import { useSync } from "@tui/context/sync"
+import { useProject } from "@tui/context/project"
+import { useJnoccioBootStatus } from "@tui/context/jnoccio-boot"
+import fs from "fs"
+import path from "path"
 
-const MIN_SHOW_MS = 800
-const HARD_CAP_MS = 5000
-const STEP_MS = 275
+const SPLASH_DURATION_MULTIPLIER = 3
+const MIN_SHOW_MS = 800 * SPLASH_DURATION_MULTIPLIER
+const HARD_CAP_MS = 5000 * SPLASH_DURATION_MULTIPLIER
 const PULSE_PERIOD_MS = 4600
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -22,18 +28,8 @@ type BootEntry = {
 type BootLine = {
   phase: string
   message: string
+  status: BootStatus
 }
-
-const BOOT_SCRIPT: BootLine[] = [
-  { phase: "runtime", message: "initialized" },
-  { phase: "plugins", message: "hydrated" },
-  { phase: "workspace", message: "indexed" },
-  { phase: "daemon", message: "connected" },
-  { phase: "sync", message: "ready" },
-  { phase: "jnoccio", message: "detected" },
-  { phase: "jankurai", message: "watching score" },
-  { phase: "All systems", message: "Ready" },
-]
 
 const NEVER_HUMAN = "N · E · V · E · R · H · U · M · A · N"
 
@@ -53,11 +49,17 @@ function formatTimestamp(elapsedMs: number): string {
 }
 
 export function SplashScreen(props: SplashScreenProps) {
-  const { theme } = useTheme()
+  const themeState = useTheme()
+  const { theme } = themeState
+  const dimensions = useTerminalDimensions()
+  const sync = useSync()
+  const project = useProject()
+  const jnoccio = useJnoccioBootStatus()
   const mountedAt = performance.now()
   const [entries, setEntries] = createSignal<BootEntry[]>([])
   const [now, setNow] = createSignal(performance.now())
   const [dismissed, setDismissed] = createSignal(false)
+  const [revealed, setRevealed] = createSignal(1)
 
   const cursor = () => entries().length
   const elapsed = () => now() - mountedAt
@@ -67,64 +69,82 @@ export function SplashScreen(props: SplashScreenProps) {
   const tick = setInterval(() => setNow(performance.now()), 90)
   onCleanup(() => clearInterval(tick))
 
-  // Advance the canonical boot script on a fixed cadence so the splash
-  // always reads as activity even when plugin init is instant.
-  const stepper = setInterval(() => {
-    setEntries((current) => {
-      if (current.length >= BOOT_SCRIPT.length - 1) return current
-      const next = [...current]
-      // Flip the previous running line to done.
-      if (next.length > 0) {
-        const last = next[next.length - 1]
-        if (last && last.status === "running") {
-          next[next.length - 1] = { ...last, status: "done" }
-        }
-      }
-      // Push the next line as running.
-      const line = BOOT_SCRIPT[next.length]
-      if (line) {
-        next.push({
-          ts: performance.now() - mountedAt,
-          msg: line.message,
-          status: "running",
-        })
-      }
-      return next
-    })
-  }, STEP_MS)
-  onCleanup(() => clearInterval(stepper))
+  const bootLines = createMemo<BootLine[]>(() => {
+    const size = dimensions()
+    const dir = project.instance.directory() || process.cwd()
+    const scorePresent = fs.existsSync(path.join(dir, "agent", "repo-score.json"))
+    const jnoccioStatus = jnoccio()
+    const syncStatus = sync.status
 
-  // When ready() flips true (and the min-show has elapsed), append the final
-  // "All systems Ready" line and mark all earlier lines done.
+    return [
+      {
+        phase: "renderer",
+        message: "ready",
+        status: "done",
+      },
+      {
+        phase: "terminal",
+        message: size.width && size.height ? `${size.width}x${size.height}` : "detecting size",
+        status: size.width && size.height ? "done" : "running",
+      },
+      {
+        phase: "theme",
+        message: themeState.ready ? `${themeState.selected} ${themeState.mode()}` : "loading",
+        status: themeState.ready ? "done" : "running",
+      },
+      {
+        phase: "plugins",
+        message: props.ready() ? "initialized" : "initializing",
+        status: props.ready() ? "done" : "running",
+      },
+      {
+        phase: "sync",
+        message: syncStatus === "complete" ? "ready" : syncStatus,
+        status: syncStatus === "complete" ? "done" : syncStatus === "partial" ? "warn" : "running",
+      },
+      {
+        phase: "jnoccio",
+        message:
+          jnoccioStatus === "ready"
+            ? "ready"
+            : jnoccioStatus === "unavailable"
+              ? "not installed"
+              : jnoccioStatus,
+        status:
+          jnoccioStatus === "ready"
+            ? "done"
+            : jnoccioStatus === "failed" || jnoccioStatus === "unavailable"
+              ? "warn"
+              : "running",
+      },
+      {
+        phase: "jankurai",
+        message: scorePresent ? "score present" : "score missing",
+        status: scorePresent ? "done" : "warn",
+      },
+      {
+        phase: "Jekko",
+        message: props.ready() ? "ready" : "waiting",
+        status: props.ready() ? "done" : "running",
+      },
+    ]
+  })
+
+  const revealer = setInterval(() => {
+    setRevealed((count) => Math.min(bootLines().length, count + 1))
+  }, 180)
+  onCleanup(() => clearInterval(revealer))
+
   createEffect(() => {
-    if (!readyAllowed()) return
-    setEntries((current) => {
-      const next = current.map<BootEntry>((entry) =>
-        entry.status === "running" ? { ...entry, status: "done" } : entry,
-      )
-      if (next.length < BOOT_SCRIPT.length) {
-        // Backfill any earlier lines we haven't reached yet so the log
-        // doesn't look truncated when boot beats the stepper.
-        while (next.length < BOOT_SCRIPT.length - 1) {
-          const line = BOOT_SCRIPT[next.length]
-          if (!line) break
-          next.push({
-            ts: performance.now() - mountedAt,
-            msg: line.message,
-            status: "done",
-          })
-        }
-        const finalLine = BOOT_SCRIPT[BOOT_SCRIPT.length - 1]
-        if (finalLine && (next.length === 0 || next[next.length - 1]?.msg !== finalLine.message)) {
-          next.push({
-            ts: performance.now() - mountedAt,
-            msg: finalLine.message,
-            status: "done",
-          })
-        }
-      }
-      return next
-    })
+    const lines = bootLines().slice(0, revealed())
+    setEntries(
+      lines.map((line, index) => ({
+        ts: Math.min(performance.now() - mountedAt, index * 180),
+        msg: line.message,
+        status: line.status,
+      })),
+    )
+    if (readyAllowed()) setRevealed(bootLines().length)
   })
 
   // Dismiss logic: either ready + min-show, or hard cap.
@@ -156,7 +176,7 @@ export function SplashScreen(props: SplashScreenProps) {
         }
         next.push({
           ts: performance.now() - mountedAt,
-          msg: "splash hit 5s cap with plugins not ready",
+          msg: "splash hit 15s cap with plugins not ready",
           status: "warn",
         })
         return next
@@ -214,8 +234,8 @@ export function SplashScreen(props: SplashScreenProps) {
       >
         <For each={visibleEntries()}>
           {(entry, index) => {
-            const isFinal = () => index() === visibleEntries().length - 1 && entry.msg === "Ready"
-            const line = BOOT_SCRIPT[index()]
+            const isFinal = () => index() === visibleEntries().length - 1 && entry.msg === "ready"
+            const line = bootLines()[index()]
             const phaseLabel = line?.phase ?? ""
             const glyph = createMemo(() => statusGlyph(entry, isFinal()))
             return (

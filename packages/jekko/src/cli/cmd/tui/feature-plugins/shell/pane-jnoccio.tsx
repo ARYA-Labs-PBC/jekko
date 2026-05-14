@@ -17,8 +17,9 @@ import { FeedPanel } from "../jnoccio/panel-feed"
 import { createDashboardState } from "../jnoccio/state"
 
 const id = "internal:shell-pane-jnoccio"
+const DEFAULT_PANE_WIDTH = 24
 
-function PaneJnoccio(props: { api: TuiPluginApi }) {
+function PaneJnoccio(props: { api: TuiPluginApi; contentWidth: number }) {
   const theme = () => props.api.theme.current
   const bootStatus = useJnoccioBootStatus()
   const snapshot = useJnoccioSnapshot()
@@ -35,6 +36,8 @@ function PaneJnoccio(props: { api: TuiPluginApi }) {
     ...snapshot,
     recent_events: snapshot.recent_events.slice(0, 10),
   }))
+  const paneWidth = createMemo(() => Math.max(16, props.contentWidth || DEFAULT_PANE_WIDTH))
+  const divider = createMemo(() => "─".repeat(paneWidth()))
 
   return (
     <Switch>
@@ -53,7 +56,7 @@ function PaneJnoccio(props: { api: TuiPluginApi }) {
             <b>Jnoccio agents · {activeCount()} active</b>
           </text>
           <box flexShrink={0} paddingTop={1} paddingBottom={1}>
-            <text fg={theme().borderSubtle}>{"─".repeat(40)}</text>
+            <text fg={theme().borderSubtle}>{divider()}</text>
           </box>
           <scrollbox
             viewportOptions={{ paddingRight: 0 }}
@@ -62,7 +65,7 @@ function PaneJnoccio(props: { api: TuiPluginApi }) {
           >
             <AgentsPanel api={props.api} snapshot={snapshot} state={state} />
             <box flexShrink={0} paddingTop={1} paddingBottom={1}>
-              <text fg={theme().borderSubtle}>{"─".repeat(40)}</text>
+              <text fg={theme().borderSubtle}>{divider()}</text>
             </box>
             <FeedPanel api={props.api} snapshot={feedSnapshot()} state={state} />
           </scrollbox>
@@ -78,7 +81,7 @@ const tui: TuiPlugin = async (api) => {
     slots: {
       shell_left_active_pane(_ctx, props) {
         if (props.active_pane !== "jnoccio") return null
-        return <PaneJnoccio api={api} />
+        return <PaneJnoccio api={api} contentWidth={props.left_content_width ?? DEFAULT_PANE_WIDTH} />
       },
     },
   })

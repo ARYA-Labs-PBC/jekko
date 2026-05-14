@@ -33,8 +33,8 @@ export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
       props.initialRoute ??
         (process.env["JEKKO_ROUTE"]
           ? JSON.parse(process.env["JEKKO_ROUTE"])
-          : {
-              type: "home",
+            : {
+              type: "shell",
             }),
     )
 
@@ -61,7 +61,7 @@ export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
           setStore(reconcile(prev))
         } else {
           setPreviousRoute(null)
-          setStore(reconcile({ type: "home" }))
+          setStore(reconcile({ type: "shell" }))
         }
       },
     }

@@ -245,7 +245,7 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
     if (!ready()) return
     if (route.data.type !== "plugin") return
     const render = routeView(route.data.id)
-    if (!render) return <PluginRouteMissing id={route.data.id} onHome={() => route.navigate({ type: "home" })} />
+    if (!render) return <PluginRouteMissing id={route.data.id} onHome={() => route.navigate({ type: "shell" })} />
     return render({ params: route.data.data })
   })
 

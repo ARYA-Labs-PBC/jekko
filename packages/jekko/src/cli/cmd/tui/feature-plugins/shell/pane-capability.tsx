@@ -31,11 +31,7 @@ import {
 
 const id = "internal:shell-pane-capability"
 
-// LEFT panel widths: 28 / 38 / 44 (from routes/shell/shell-view.tsx). All
-// horizontal repeats and truncation use this constant so they degrade nicely
-// at the narrowest breakpoint without measuring at runtime.
-const PANE_WIDTH = 40
-const SPARKLINE_CELLS = 17
+const DEFAULT_PANE_WIDTH = 24
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -72,18 +68,19 @@ function gapsFor(state: CapabilityState, limit: number): string[] {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function Sparkline(props: { api: TuiPluginApi; score: number }) {
+function Sparkline(props: { api: TuiPluginApi; score: number; width: number }) {
   const theme = () => props.api.theme.current
+  const cells = createMemo(() => Math.max(8, Math.min(17, props.width - 9)))
   const filled = createMemo(() => {
-    const raw = Math.round((props.score / 100) * SPARKLINE_CELLS)
-    return Math.max(0, Math.min(SPARKLINE_CELLS, raw))
+    const raw = Math.round((props.score / 100) * cells())
+    return Math.max(0, Math.min(cells(), raw))
   })
 
   return (
     <box flexDirection="row" gap={1}>
       <text>
         <span style={{ fg: theme().accent }}>{"▰".repeat(filled())}</span>
-        <span style={{ fg: theme().borderSubtle }}>{"▱".repeat(SPARKLINE_CELLS - filled())}</span>
+        <span style={{ fg: theme().borderSubtle }}>{"▱".repeat(cells() - filled())}</span>
       </text>
       <text fg={theme().text}>
         {props.score}
@@ -158,13 +155,13 @@ function StandardRow(props: { api: TuiPluginApi; state: CapabilityState }) {
   )
 }
 
-function SectionHeader(props: { api: TuiPluginApi; label: string }) {
+function SectionHeader(props: { api: TuiPluginApi; label: string; width: number }) {
   const theme = () => props.api.theme.current
   // "─ <label> ─" padded to pane width with a trailing rule so the section
   // visually separates from the row above without burning a whole line.
   const line = createMemo(() => {
     const label = ` ${props.label} `
-    const remaining = Math.max(0, PANE_WIDTH - label.length - 2)
+    const remaining = Math.max(0, props.width - label.length - 2)
     const left = "─"
     const right = "─".repeat(remaining + 1)
     return `${left}${label}${right}`
@@ -172,20 +169,20 @@ function SectionHeader(props: { api: TuiPluginApi; label: string }) {
   return <text fg={theme().textMuted}>{line()}</text>
 }
 
-function MissionGaps(props: { api: TuiPluginApi; state: CapabilityState }) {
+function MissionGaps(props: { api: TuiPluginApi; state: CapabilityState; width: number }) {
   const theme = () => props.api.theme.current
   const gaps = createMemo(() => gapsFor(props.state, 3))
 
   return (
     <Show
       when={gaps().length > 0}
-      fallback={<text fg={theme().textMuted}>{truncate("No outstanding gaps.", PANE_WIDTH)}</text>}
+      fallback={<text fg={theme().textMuted}>{truncate("No outstanding gaps.", props.width)}</text>}
     >
       <For each={gaps()}>
         {(gap) => (
           <text>
             <span style={{ fg: theme().accent }}>▸ </span>
-            <span style={{ fg: theme().text }}>{truncate(gap, PANE_WIDTH - 2)}</span>
+            <span style={{ fg: theme().text }}>{truncate(gap, props.width - 2)}</span>
           </text>
         )}
       </For>
@@ -193,12 +190,12 @@ function MissionGaps(props: { api: TuiPluginApi; state: CapabilityState }) {
   )
 }
 
-function EmptyState(props: { api: TuiPluginApi }) {
+function EmptyState(props: { api: TuiPluginApi; width: number }) {
   const theme = () => props.api.theme.current
   return (
     <box flexDirection="column" gap={1}>
       <text fg={theme().textMuted}>
-        {truncate("Jankurai not installed · run `jankurai init`", PANE_WIDTH)}
+        {truncate("Jankurai not installed · run `jankurai init`", props.width)}
       </text>
     </box>
   )
@@ -208,7 +205,7 @@ function EmptyState(props: { api: TuiPluginApi }) {
 // Root
 // ---------------------------------------------------------------------------
 
-function PaneCapability(props: { api: TuiPluginApi }) {
+function PaneCapability(props: { api: TuiPluginApi; contentWidth: number }) {
   const theme = () => props.api.theme.current
   const state = useCapability()
 
@@ -230,7 +227,8 @@ function PaneCapability(props: { api: TuiPluginApi }) {
 
   const ageText = createMemo(() => formatCapabilityAge(state().generatedAt, tick()))
   const hasError = createMemo(() => Boolean(state().error) || !state().loaded)
-  const divider = createMemo(() => "─".repeat(PANE_WIDTH))
+  const paneWidth = createMemo(() => Math.max(16, props.contentWidth || DEFAULT_PANE_WIDTH))
+  const divider = createMemo(() => "─".repeat(paneWidth()))
 
   return (
     <scrollbox
@@ -240,12 +238,12 @@ function PaneCapability(props: { api: TuiPluginApi }) {
     >
       <box flexDirection="column" width="100%">
         <text fg={theme().text}>
-          <b>{truncate(`Repo-Intel · updated ${ageText()}`, PANE_WIDTH)}</b>
+          <b>{truncate(`Repo-Intel · updated ${ageText()}`, paneWidth())}</b>
         </text>
         <text fg={theme().borderSubtle}>{divider()}</text>
-        <Show when={!hasError()} fallback={<EmptyState api={props.api} />}>
+        <Show when={!hasError()} fallback={<EmptyState api={props.api} width={paneWidth()} />}>
           <box flexDirection="column" paddingTop={1}>
-            <Sparkline api={props.api} score={state().score} />
+            <Sparkline api={props.api} score={state().score} width={paneWidth()} />
           </box>
           <box flexDirection="column" paddingTop={1}>
             <FindingsTable api={props.api} state={state()} />
@@ -256,8 +254,8 @@ function PaneCapability(props: { api: TuiPluginApi }) {
             <StandardRow api={props.api} state={state()} />
           </box>
           <box flexDirection="column" paddingTop={1}>
-            <SectionHeader api={props.api} label="Mission gaps" />
-            <MissionGaps api={props.api} state={state()} />
+            <SectionHeader api={props.api} label="Mission gaps" width={paneWidth()} />
+            <MissionGaps api={props.api} state={state()} width={paneWidth()} />
           </box>
         </Show>
       </box>
@@ -275,7 +273,7 @@ const tui: TuiPlugin = async (api) => {
     slots: {
       shell_left_active_pane(_ctx, props) {
         if (props.active_pane !== "capability") return null
-        return <PaneCapability api={api} />
+        return <PaneCapability api={api} contentWidth={props.left_content_width ?? DEFAULT_PANE_WIDTH} />
       },
     },
   })

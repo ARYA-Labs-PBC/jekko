@@ -2,50 +2,41 @@ import { TextAttributes } from "@opentui/core"
 import { useTheme } from "@tui/context/theme"
 import { useDialog } from "./dialog"
 import { useKeyboard } from "@opentui/solid"
-import { useKeybind } from "@tui/context/keybind"
 import { For } from "solid-js"
 
 // Shortcut entries grouped by the surface that subscribes to them.
-// Each row's `binding` is the schema-registered keybind name; the
-// dialog prints the active chord via `keybind.print(binding)`. Where
-// a row covers multiple chords (e.g. shell.tab.set binds 1/2/3),
-// `display` overrides the printed chord with a human label.
-type HelpRow = { binding: string; label: string; display?: string }
+// Each row's `binding` is the schema-registered keybind name; `display`
+// is the human-facing keyboard grammar rendered in the overlay.
+type HelpRow = { binding: string; label: string; display: string }
 
 const GROUPS: Array<{ title: string; rows: HelpRow[] }> = [
   {
     title: "Global",
     rows: [
-      { binding: "command_list", label: "Open command palette" },
-      { binding: "theme.mode.toggle", label: "Toggle dark / light theme" },
-      { binding: "session.new", label: "New session" },
-      { binding: "session.resume", label: "Resume most recent session" },
-      { binding: "app_exit", label: "Quit (Ctrl+C twice in prompt)" },
-      { binding: "help.show", label: "This help overlay" },
+      { binding: "command_list", label: "Open command palette", display: "Ctrl+P" },
+      { binding: "theme.mode.toggle", label: "Toggle dark / light theme", display: "Ctrl+Shift+T" },
+      { binding: "session.new", label: "New session", display: "Ctrl+N" },
+      { binding: "session.resume", label: "Resume most recent session", display: "Ctrl+R" },
+      { binding: "app_exit", label: "Quit (Ctrl+C twice in prompt)", display: "Ctrl+C" },
+      { binding: "help.show", label: "This help overlay", display: "?" },
     ],
-  },
-  {
-    title: "Home",
-    rows: [{ binding: "engage", label: "Engage → shell route" }],
   },
   {
     title: "Shell",
     rows: [
-      { binding: "shell.tab.cycle", label: "Cycle left-tab forward" },
-      { binding: "shell.tab.cycleBack", label: "Cycle left-tab backward" },
+      { binding: "shell.tab.cycle", label: "Next left pane", display: "Tab" },
+      { binding: "shell.tab.cycleBack", label: "Previous left pane", display: "Shift+Tab" },
       { binding: "shell.tab.set", label: "Jump directly to tab", display: "1 / 2 / 3" },
-      { binding: "shell.left.toggle", label: "Toggle LEFT panel" },
+      { binding: "shell.left.toggle", label: "Toggle LEFT panel", display: "Ctrl+B" },
     ],
   },
   {
     title: "Feed",
     rows: [
-      { binding: "feed.scroll.pageUp", label: "Page up" },
-      { binding: "feed.scroll.pageDown", label: "Page down" },
+      { binding: "feed.scroll.pageUp", label: "Page up", display: "Page Up" },
+      { binding: "feed.scroll.pageDown", label: "Page down", display: "Page Down" },
       { binding: "feed.scroll.top", label: "Jump to top", display: "g g" },
-      { binding: "feed.scroll.bottom", label: "Jump to bottom", display: "G" },
-      { binding: "feed.yank", label: "Yank current diff / code block" },
-      { binding: "feed.reasoning.toggle", label: "Expand / collapse reasoning" },
+      { binding: "feed.scroll.bottom", label: "Jump to bottom", display: "Shift+G" },
     ],
   },
 ]
@@ -53,7 +44,6 @@ const GROUPS: Array<{ title: string; rows: HelpRow[] }> = [
 export function DialogHelp() {
   const dialog = useDialog()
   const { theme } = useTheme()
-  const keybind = useKeybind()
 
   useKeyboard((evt) => {
     if (evt.name === "return" || evt.name === "escape") {
@@ -70,7 +60,7 @@ export function DialogHelp() {
           Jekko shortcuts
         </text>
         <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
-          esc / enter
+          [Esc] / [Enter]
         </text>
       </box>
 
@@ -84,7 +74,7 @@ export function DialogHelp() {
               {(row) => (
                 <box flexDirection="row" justifyContent="space-between">
                   <text fg={theme.text}>{row.label}</text>
-                  <text fg={theme.textMuted}>{row.display ?? keybind.print(row.binding)}</text>
+                  <text fg={theme.textMuted}>{row.display}</text>
                 </box>
               )}
             </For>
@@ -94,7 +84,7 @@ export function DialogHelp() {
 
       <box paddingTop={1}>
         <text fg={theme.textMuted}>
-          Press {keybind.print("command_list")} for the full command palette.
+          Press Ctrl+P for the full command palette.
         </text>
       </box>
 

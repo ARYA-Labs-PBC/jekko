@@ -527,18 +527,24 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
       <box
         id={"text-" + props.part.id}
         paddingLeft={2}
+        paddingTop={1}
+        paddingBottom={1}
         marginTop={1}
         flexDirection="column"
         border={["left"]}
         customBorderChars={SplitBorder.customBorderChars}
-        borderColor={theme.backgroundElement}
+        borderColor={theme.accent}
+        backgroundColor={theme.backgroundPanel}
       >
+        <text fg={theme.textMuted} paddingLeft={1}>
+          reasoning
+        </text>
         <code
           filetype="markdown"
           drawUnstyledText={false}
           streaming={true}
           syntaxStyle={subtleSyntax()}
-          content={"_Thinking:_ " + content()}
+          content={content()}
           conceal={ctx.conceal()}
           fg={theme.textMuted}
         />
@@ -1094,46 +1100,69 @@ function Task(props: ToolProps<typeof TaskTool>) {
   )
 }
 
-function Edit(props: ToolProps<typeof EditTool>) {
+function diffStats(diff: string): { additions: number; deletions: number } {
+  let additions = 0
+  let deletions = 0
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue
+    if (line.startsWith("+")) additions++
+    else if (line.startsWith("-")) deletions++
+  }
+  return { additions, deletions }
+}
+
+function JekkoDiff(props: { diff: string | undefined; filePath: string }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
-
   const view = createMemo(() => {
     const diffStyle = ctx.tui.diff_style
     if (diffStyle === "stacked") return "unified"
-    // Default to "auto" behavior
     return ctx.width > 120 ? "split" : "unified"
   })
+  const stats = createMemo(() => diffStats(props.diff ?? ""))
 
-  const ft = createMemo(() => filetype(props.input.filePath))
+  return (
+    <box paddingLeft={1} gap={1}>
+      <text fg={theme.textMuted}>
+        {normalizePath(props.filePath)}
+        <Show when={stats().additions > 0}>
+          <span style={{ fg: theme.diffAdded }}> +{stats().additions}</span>
+        </Show>
+        <Show when={stats().deletions > 0}>
+          <span style={{ fg: theme.diffRemoved }}> -{stats().deletions}</span>
+        </Show>
+      </text>
+      <diff
+        diff={props.diff ?? ""}
+        view={view()}
+        filetype={filetype(props.filePath)}
+        syntaxStyle={syntax()}
+        showLineNumbers={true}
+        width="100%"
+        wrapMode={ctx.diffWrapMode()}
+        fg={theme.text}
+        addedBg={theme.diffAddedBg}
+        removedBg={theme.diffRemovedBg}
+        contextBg={theme.diffContextBg}
+        addedSignColor={theme.diffHighlightAdded}
+        removedSignColor={theme.diffHighlightRemoved}
+        lineNumberFg={theme.diffLineNumber}
+        lineNumberBg={theme.diffContextBg}
+        addedLineNumberBg={theme.diffAddedLineNumberBg}
+        removedLineNumberBg={theme.diffRemovedLineNumberBg}
+      />
+    </box>
+  )
+}
 
+function Edit(props: ToolProps<typeof EditTool>) {
   const diffContent = createMemo(() => props.metadata.diff)
 
   return (
     <Switch>
       <Match when={props.metadata.diff !== undefined}>
         <BlockTool title={"← Edit " + normalizePath(props.input.filePath!)} part={props.part}>
-          <box paddingLeft={1}>
-            <diff
-              diff={diffContent()}
-              view={view()}
-              filetype={ft()}
-              syntaxStyle={syntax()}
-              showLineNumbers={true}
-              width="100%"
-              wrapMode={ctx.diffWrapMode()}
-              fg={theme.text}
-              addedBg={theme.diffAddedBg}
-              removedBg={theme.diffRemovedBg}
-              contextBg={theme.diffContextBg}
-              addedSignColor={theme.diffHighlightAdded}
-              removedSignColor={theme.diffHighlightRemoved}
-              lineNumberFg={theme.diffLineNumber}
-              lineNumberBg={theme.diffContextBg}
-              addedLineNumberBg={theme.diffAddedLineNumberBg}
-              removedLineNumberBg={theme.diffRemovedLineNumberBg}
-            />
-          </box>
+          <JekkoDiff diff={diffContent()} filePath={props.input.filePath!} />
           <Diagnostics diagnostics={props.metadata.diagnostics} filePath={props.input.filePath ?? ""} />
         </BlockTool>
       </Match>
@@ -1147,42 +1176,9 @@ function Edit(props: ToolProps<typeof EditTool>) {
 }
 
 function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
-  const ctx = use()
-  const { theme, syntax } = useTheme()
+  const { theme } = useTheme()
 
   const files = createMemo(() => props.metadata.files ?? [])
-
-  const view = createMemo(() => {
-    const diffStyle = ctx.tui.diff_style
-    if (diffStyle === "stacked") return "unified"
-    return ctx.width > 120 ? "split" : "unified"
-  })
-
-  function Diff(p: { diff: string; filePath: string }) {
-    return (
-      <box paddingLeft={1}>
-        <diff
-          diff={p.diff}
-          view={view()}
-          filetype={filetype(p.filePath)}
-          syntaxStyle={syntax()}
-          showLineNumbers={true}
-          width="100%"
-          wrapMode={ctx.diffWrapMode()}
-          fg={theme.text}
-          addedBg={theme.diffAddedBg}
-          removedBg={theme.diffRemovedBg}
-          contextBg={theme.diffContextBg}
-          addedSignColor={theme.diffHighlightAdded}
-          removedSignColor={theme.diffHighlightRemoved}
-          lineNumberFg={theme.diffLineNumber}
-          lineNumberBg={theme.diffContextBg}
-          addedLineNumberBg={theme.diffAddedLineNumberBg}
-          removedLineNumberBg={theme.diffRemovedLineNumberBg}
-        />
-      </box>
-    )
-  }
 
   function title(file: { type: string; relativePath: string; filePath: string; deletions: number }) {
     if (file.type === "delete") return "# Deleted " + file.relativePath
@@ -1199,7 +1195,7 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
             <BlockTool title={title(file)} part={props.part}>
               {file.type !== "delete" ? (
                 <>
-                  <Diff diff={file.patch} filePath={file.filePath} />
+                  <JekkoDiff diff={file.patch} filePath={file.filePath} />
                   <Diagnostics diagnostics={props.metadata.diagnostics} filePath={file.movePath ?? file.filePath} />
                 </>
               ) : (

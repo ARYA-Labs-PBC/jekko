@@ -98,9 +98,6 @@ function View(props: { api: TuiPluginApi }) {
           <span style={{ fg: theme().textMuted }}> v{score()?.standardVersion ?? "?"}</span>
         </text>
 
-        {/* Separator */}
-        <text fg={NEON.separator}>{"─".repeat(38)}</text>
-
         {/* Score */}
         <text fg={theme().textMuted}>
           Score{"    "}
@@ -155,8 +152,7 @@ function View(props: { api: TuiPluginApi }) {
           </span>
         </text>
 
-        {/* Bottom separator */}
-        <text fg={NEON.separator}>{"─".repeat(38)}</text>
+
       </box>
     </Show>
   )

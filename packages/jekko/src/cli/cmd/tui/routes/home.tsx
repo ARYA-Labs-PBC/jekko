@@ -9,6 +9,7 @@ import { useKeybind } from "@tui/context/keybind"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { useEditorContext } from "@tui/context/editor"
 import { useTheme } from "@tui/context/theme"
+import { FooterBand } from "@tui/component/footer-band"
 
 export function Home() {
   const sync = useSync()
@@ -53,7 +54,11 @@ export function Home() {
         <box height={2} minHeight={0} flexShrink={0} />
         <Show when={sync.ready}>
           <text fg={theme.textMuted} selectable={false}>
-            ↵ to engage  ·  ? for help  ·  ⌃P command palette
+            <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Enter </span> engage
+            {"  "}
+            <span style={{ bg: theme.backgroundElement, fg: theme.text }}> ? </span> help
+            {"  "}
+            <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Ctrl+P </span> commands
           </text>
         </Show>
         <Show when={!sync.ready}>
@@ -65,9 +70,9 @@ export function Home() {
         <box flexGrow={1} minHeight={0} />
         <Toast />
       </box>
-      <box width="100%" flexShrink={0}>
+      <FooterBand backgroundColor={theme.backgroundPanel} borderColor={theme.borderSubtle}>
         <TuiPluginRuntime.Slot name="home_footer" mode="single_winner" />
-      </box>
+      </FooterBand>
     </>
   )
 }

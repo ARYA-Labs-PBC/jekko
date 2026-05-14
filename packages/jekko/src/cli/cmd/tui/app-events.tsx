@@ -63,7 +63,7 @@ export function registerTuiEvents(input: Input) {
 
   input.event.on("session.deleted", (evt) => {
     if (input.route.data.type === "session" && input.route.data.sessionID === evt.properties.info.id) {
-      input.route.navigate({ type: "home" })
+      input.route.navigate({ type: "shell" })
       input.toast.show({
         variant: "info",
         message: "The current session was deleted",

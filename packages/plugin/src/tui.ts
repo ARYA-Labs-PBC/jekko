@@ -170,6 +170,8 @@ export type TuiPromptProps = {
   visible?: boolean
   disabled?: boolean
   onSubmit?: () => void
+  onSessionCreated?: (sessionID: string) => void
+  navigateOnNewSession?: boolean
   ref?: (ref: TuiPromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -355,11 +357,20 @@ export type TuiHostSlotMap = {
   }
   shell_left_tabs: {
     active_pane?: string
+    left_width?: number
+    left_content_width?: number
   }
   shell_left_active_pane: {
     active_pane?: string
+    left_width?: number
+    left_content_width?: number
   }
-  shell_center_feed: {}
+  shell_center_feed: {
+    left_width?: number
+    left_content_width?: number
+    center_width?: number
+    center_content_width?: number
+  }
   shell_footer: {}
 }
 
@@ -466,7 +477,7 @@ export type TuiPluginApi = {
   route: {
     register: (routes: TuiRouteDefinition[]) => () => void
     navigate: (name: string, params?: Record<string, unknown>) => void
-    /** Navigate back to the previous route. Falls back to Home. */
+    /** Navigate back to the previous route. Falls back to the shell chat. */
     navigateBack: () => void
     readonly current: TuiRouteCurrent
   }

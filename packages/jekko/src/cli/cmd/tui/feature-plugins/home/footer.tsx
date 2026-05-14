@@ -116,6 +116,22 @@ function Version(props: { api: TuiPluginApi }) {
   )
 }
 
+function ThemeMode(props: { api: TuiPluginApi }) {
+  const theme = () => props.api.theme.current
+  const nextMode = createMemo(() => (props.api.theme.mode() === "dark" ? "light" : "dark"))
+
+  return (
+    <box flexDirection="row" gap={1} flexShrink={0}>
+      <text fg={theme().textMuted}>
+        <span style={{ bg: theme().backgroundElement, fg: theme().text }}>
+          {" Ctrl+Shift+T "}
+        </span>{" "}
+        {nextMode()}
+      </text>
+    </box>
+  )
+}
+
 function View(props: { api: TuiPluginApi }) {
   return (
     <box
@@ -131,6 +147,7 @@ function View(props: { api: TuiPluginApi }) {
       <Directory api={props.api} />
       <Jnoccio api={props.api} />
       <Mcp api={props.api} />
+      <ThemeMode api={props.api} />
       <box flexGrow={1} />
       <Version api={props.api} />
     </box>

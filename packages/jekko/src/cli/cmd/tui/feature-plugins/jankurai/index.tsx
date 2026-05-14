@@ -66,7 +66,7 @@ const tui: TuiPlugin = async (api) => {
   })
 
   api.slots.register({
-    order: 91, // Just after the jnoccio (^J) hint
+    order: 91, // Just after the Jnoccio Ctrl+J hint
     slots: {
       home_footer() {
         return <JankuraiFooterHint api={api} />

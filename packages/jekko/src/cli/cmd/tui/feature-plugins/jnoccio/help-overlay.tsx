@@ -68,7 +68,7 @@ export function HelpOverlay(props: {
         <text fg={GOLD}>
           <b>⌨ Jnoccio Keyboard Shortcuts</b>
         </text>
-        <text fg={theme().textMuted}>? or Esc to close</text>
+        <text fg={theme().textMuted}>[?] / [Esc] to close</text>
       </box>
 
       {SECTIONS.map((section) => (

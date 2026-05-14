@@ -220,6 +220,25 @@ function parseCreateIndex(statement: string) {
   }
 }
 
+function parseCreateTable(statement: string) {
+  const parts = statement.trim().split(/\s+/)
+  // jankurai:allow HLT-001-DEAD-MARKER reason=functional-optional-returns-by-design expires=2027-01-01
+  if (parts.length < 3) return undefined
+  // jankurai:allow HLT-001-DEAD-MARKER reason=functional-optional-returns-by-design expires=2027-01-01
+  if (parts[0]?.toUpperCase() !== "CREATE") return undefined
+  let tableIndex = 2
+  if (parts[1]?.toUpperCase() === "TEMP" || parts[1]?.toUpperCase() === "TEMPORARY") tableIndex = 3
+  // jankurai:allow HLT-001-DEAD-MARKER reason=functional-optional-returns-by-design expires=2027-01-01
+  if (parts[tableIndex - 1]?.toUpperCase() !== "TABLE") return undefined
+  if (parts[tableIndex]?.toUpperCase() === "IF") tableIndex += 3
+  const raw = parts[tableIndex]
+  // jankurai:allow HLT-001-DEAD-MARKER reason=functional-optional-returns-by-design expires=2027-01-01
+  if (!raw) return undefined
+  return {
+    table: stripIdentifier(raw.replace(/\(.+$/, "")),
+  }
+}
+
 function parseRenameTable(statement: string) {
   const parts = statement.trim().split(/\s+/)
   // jankurai:allow HLT-001-DEAD-MARKER reason=functional-optional-returns-by-design expires=2027-01-01
@@ -337,6 +356,13 @@ export function repairSqliteMigrations(
       const createIndex = parseCreateIndex(statement)
       if (createIndex) {
         if (indexExists(master, createIndex.index)) continue
+        missingStatements.push(statement)
+        continue
+      }
+
+      const createTable = parseCreateTable(statement)
+      if (createTable) {
+        if (tableExists(master, createTable.table)) continue
         missingStatements.push(statement)
         continue
       }

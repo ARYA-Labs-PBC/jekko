@@ -1,12 +1,10 @@
 import { mergeDeep, mapValues } from "remeda"
 import { Context, Effect } from "effect"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
-import type { Model, Info } from "./provider-schema"
+import { normalizeModelStatus, type Model, type Info } from "./provider-schema"
 import { ModelID, ProviderID } from "./schema"
 import * as ModelsDev from "./models"
 import { ProviderTransform } from "./transform"
-
-const historicalInactiveStatus = ["de", "precated"].join("")
 
 type BundledSDK = {
   languageModel(modelId: string): LanguageModelV3
@@ -71,7 +69,7 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
       url: model.provider?.api ?? provider.api ?? "",
       npm: model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible",
     },
-    status: model.status === historicalInactiveStatus ? "inactive" : (model.status as Model["status"]),
+    status: normalizeModelStatus(model.status),
     headers: {},
     options: {},
     cost: cost(model.cost),

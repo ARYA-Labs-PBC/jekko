@@ -20,7 +20,6 @@
  * (J / R / H) so the tab bar still fits inside the 28-col left panel.
  */
 import { createMemo, For, Show } from "solid-js"
-import { useTerminalDimensions } from "@opentui/solid"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@jekko-ai/plugin/tui"
 import { useKeybind, type KeybindEvent } from "@tui/context/keybind"
 import { useLocal, type ShellPane } from "@tui/context/local"
@@ -41,13 +40,25 @@ const TABS: readonly TabDef[] = [
   { key: "history", label: "History", short: "H" },
 ] as const
 
-function TabsView(props: { api: TuiPluginApi; activePane: string }) {
+function setShellPane(api: TuiPluginApi, pane: ShellPane) {
+  api.kv.set("shell_pane", pane)
+  api.route.navigate("shell")
+}
+
+function cycleShellPane(api: TuiPluginApi, direction: 1 | -1) {
+  const current = api.kv.get("shell_pane", "capability")
+  const index = TABS.findIndex((tab) => tab.key === current)
+  const safeIndex = index >= 0 ? index : 1
+  const nextIndex = (safeIndex + direction + TABS.length) % TABS.length
+  setShellPane(api, TABS[nextIndex]?.key ?? TABS[0].key)
+}
+
+function TabsView(props: { api: TuiPluginApi; activePane: string; contentWidth: number }) {
   const theme = () => props.api.theme.current
   const local = useLocal()
   const keybind = useKeybind()
-  const dimensions = useTerminalDimensions()
 
-  const narrow = createMemo(() => dimensions().width < 30)
+  const compact = createMemo(() => props.contentWidth < 32)
 
   const activeKey = createMemo<ShellPane>(() => {
     const pane = props.activePane as ShellPane
@@ -87,7 +98,7 @@ function TabsView(props: { api: TuiPluginApi; activePane: string }) {
         <For each={TABS}>
           {(tab, index) => {
             const isActive = () => tab.key === activeKey()
-            const text = () => (narrow() ? tab.short : tab.label)
+            const text = () => (compact() ? tab.short : tab.label)
             return (
               <>
                 <Show when={index() > 0}>
@@ -105,7 +116,7 @@ function TabsView(props: { api: TuiPluginApi; activePane: string }) {
         </For>
       </box>
       {/* Active-tab underline row */}
-      <Show when={!narrow()}>
+      <Show when={!compact()}>
         <box flexDirection="row" flexShrink={0}>
           <For each={TABS}>
             {(tab, index) => {
@@ -130,11 +141,42 @@ function TabsView(props: { api: TuiPluginApi; activePane: string }) {
 }
 
 const tui: TuiPlugin = async (api) => {
+  api.command.register(() => [
+    {
+      title: "Next shell pane",
+      value: "shell.pane.next",
+      category: "Shell",
+      keybind: "shell.tab.cycle",
+      enabled: api.route.current.name === "shell",
+      onSelect: () => cycleShellPane(api, 1),
+    },
+    {
+      title: "Previous shell pane",
+      value: "shell.pane.previous",
+      category: "Shell",
+      keybind: "shell.tab.cycleBack",
+      enabled: api.route.current.name === "shell",
+      onSelect: () => cycleShellPane(api, -1),
+    },
+    ...TABS.map((tab) => ({
+      title: `Show ${tab.label} pane`,
+      value: `shell.pane.${tab.key}`,
+      category: "Shell",
+      onSelect: () => setShellPane(api, tab.key),
+    })),
+  ])
+
   api.slots.register({
     order: 50,
     slots: {
       shell_left_tabs(_ctx, props) {
-        return <TabsView api={api} activePane={props.active_pane ?? "jnoccio"} />
+        return (
+          <TabsView
+            api={api}
+            activePane={props.active_pane ?? "jnoccio"}
+            contentWidth={props.left_content_width ?? 40}
+          />
+        )
       },
     },
   })

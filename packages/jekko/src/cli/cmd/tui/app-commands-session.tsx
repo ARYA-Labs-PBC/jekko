@@ -29,7 +29,7 @@ export function buildSessionCommands(input: TuiCommandInput) {
       },
       onSelect: () => {
         input.route.navigate({
-          type: "home",
+          type: "shell",
         })
         input.dialog.clear()
       },

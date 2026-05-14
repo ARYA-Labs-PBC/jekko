@@ -28,8 +28,6 @@ const PHASE7_BINDINGS = [
   "feed.scroll.pageDown",
   "feed.scroll.top",
   "feed.scroll.bottom",
-  "feed.yank",
-  "feed.reasoning.toggle",
   "session.new",
   "session.resume",
   "help.show",
@@ -105,11 +103,7 @@ export function setupAppBindings(input: Input) {
     "help.show",
     "feed.scroll.top",
     "feed.scroll.bottom",
-    "feed.yank",
-    "feed.reasoning.toggle",
     "shell.tab.set",
-    "shell.tab.cycle",
-    "shell.tab.cycleBack",
     "engage",
   ])
 
@@ -148,9 +142,9 @@ export function setupAppBindings(input: Input) {
       if (name === "session.new") {
         evt.preventDefault()
         // Mirror the existing `session.new` command from
-        // app-commands-session.tsx: drop to home and clear any open
-        // dialog. The prompt component remounts there and starts fresh.
-        input.route.navigate({ type: "home" })
+        // app-commands-session.tsx: drop to the shell chat and clear any
+        // open dialog. The prompt component remounts there and starts fresh.
+        input.route.navigate({ type: "shell" })
         input.dialog.clear()
         return
       }
@@ -231,7 +225,7 @@ export function setupAppBindings(input: Input) {
   createEffect(() => {
     if (!input.terminalTitleEnabled() || Flag.JEKKO_DISABLE_TERMINAL_TITLE) return
 
-    if (input.route.data.type === "home") {
+    if (input.route.data.type === "home" || input.route.data.type === "shell") {
       input.renderer.setTerminalTitle("Jekko")
       return
     }
@@ -244,12 +238,12 @@ export function setupAppBindings(input: Input) {
       }
 
       const title = session.title.length > 40 ? session.title.slice(0, 37) + "..." : session.title
-      input.renderer.setTerminalTitle(`OC | ${title}`)
+      input.renderer.setTerminalTitle(`Jekko | ${title}`)
       return
     }
 
     if (input.route.data.type === "plugin") {
-      input.renderer.setTerminalTitle(`OC | ${input.route.data.id}`)
+      input.renderer.setTerminalTitle(`Jekko | ${input.route.data.id}`)
     }
   })
 

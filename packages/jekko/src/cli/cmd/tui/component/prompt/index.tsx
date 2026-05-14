@@ -62,6 +62,8 @@ export type PromptProps = {
   visible?: boolean
   disabled?: boolean
   onSubmit?: () => void
+  onSessionCreated?: (sessionID: string) => void
+  navigateOnNewSession?: boolean
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -1099,6 +1101,7 @@ export function Prompt(props: PromptProps) {
       }
 
       sessionID = res.data.id
+      props.onSessionCreated?.(sessionID)
     }
 
     const messageID = MessageID.ascending()
@@ -1240,7 +1243,7 @@ export function Prompt(props: PromptProps) {
     props.onSubmit?.()
 
     // transient shortcut to make sure the message is sent
-    if (!props.sessionID) {
+    if (!props.sessionID && props.navigateOnNewSession !== false) {
       if (editorParts.length > 0) editor.preserveSelectionFromNewSession()
       setTimeout(() => {
         route.navigate({
@@ -1253,6 +1256,8 @@ export function Prompt(props: PromptProps) {
     return true
   }
   const exit = useExit()
+  let exitPrimed = false
+  let exitPrimedAt = 0
 
   function pasteText(text: string, virtualText: string) {
     const currentOffset = input.visualCursor.offset
@@ -1482,7 +1487,7 @@ export function Prompt(props: PromptProps) {
             paddingRight={2}
             paddingTop={1}
             flexShrink={0}
-            backgroundColor={theme.backgroundElement}
+            backgroundColor={theme.backgroundPanel}
             flexGrow={1}
           >
             <textarea
@@ -1531,8 +1536,20 @@ export function Prompt(props: PromptProps) {
                 }
                 if (keybind.match("app_exit", e)) {
                   if (store.prompt.input === "") {
-                    await exit()
-                    // Don't preventDefault - let textarea potentially handle the event
+                    const now = Date.now()
+                    if (exitPrimed && now - exitPrimedAt < 2000) {
+                      await exit()
+                      e.preventDefault()
+                      return
+                    }
+                    exitPrimed = true
+                    exitPrimedAt = now
+                    toast.show({
+                      title: "Press Ctrl+C again to quit",
+                      message: `Resume: jekko -s ${props.sessionID ?? ""}`,
+                      variant: "warning",
+                      duration: 2000,
+                    })
                     e.preventDefault()
                     return
                   }
@@ -1686,7 +1703,7 @@ export function Prompt(props: PromptProps) {
                 }, 0)
               }}
               onMouseDown={(r: MouseEvent) => r.target?.focus()}
-              focusedBackgroundColor={theme.backgroundElement}
+              focusedBackgroundColor={theme.backgroundMenu}
               cursorColor={props.disabled ? theme.backgroundElement : theme.text}
               syntaxStyle={isZyalInput() ? yamlSyntax() : syntax()}
             />
@@ -1904,12 +1921,14 @@ export function Prompt(props: PromptProps) {
                 <Match when={store.mode === "normal"}>
                   {usageLine()}
                   <text fg={theme.text}>
-                    {keybind.print("command_list")} <span style={{ fg: theme.textMuted }}>commands</span>
+                    <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Ctrl+P </span>
+                    <span style={{ fg: theme.textMuted }}> commands</span>
                   </text>
                 </Match>
                 <Match when={store.mode === "shell"}>
                   <text fg={theme.text}>
-                    esc <span style={{ fg: theme.textMuted }}>exit shell mode</span>
+                    <span style={{ bg: theme.backgroundElement, fg: theme.text }}> Esc </span>
+                    <span style={{ fg: theme.textMuted }}> exit shell mode</span>
                   </text>
                 </Match>
               </Switch>
