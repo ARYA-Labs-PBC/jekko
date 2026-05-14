@@ -43,7 +43,12 @@ pub async fn search_parallel(
     let mut warnings = Vec::new();
 
     let mut outputs = join_all(tasks).await;
-    outputs.sort_by_key(|item| item.as_ref().ok().and_then(|value| value.as_ref().map(|(index, _, _)| *index)).unwrap_or(usize::MAX));
+    outputs.sort_by_key(|item| {
+        item.as_ref()
+            .ok()
+            .and_then(|value| value.as_ref().map(|(index, _, _)| *index))
+            .unwrap_or(usize::MAX)
+    });
 
     for task in outputs {
         let Ok(Some((_index, provider_id, result))) = task else {
@@ -57,11 +62,19 @@ pub async fn search_parallel(
                 warnings.extend(response.warnings);
             }
             Ok(Err(err)) => {
-                receipts.push(ProviderReceipt::failed(provider_id, &request.query, err.to_string()));
+                receipts.push(ProviderReceipt::failed(
+                    provider_id,
+                    &request.query,
+                    err.to_string(),
+                ));
                 warnings.push(format!("{provider_id}: {err}"));
             }
             Err(_) => {
-                receipts.push(ProviderReceipt::failed(provider_id, &request.query, "provider timeout"));
+                receipts.push(ProviderReceipt::failed(
+                    provider_id,
+                    &request.query,
+                    "provider timeout",
+                ));
                 warnings.push(format!("{provider_id}: provider timeout"));
             }
         }

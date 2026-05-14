@@ -1,0 +1,336 @@
+# ZYAL v2.6 - Paper QBank Deep STEM 500
+
+<<<ZYAL v1:daemon id=paper-qbank-deep-stem-500>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Paper QBank deep STEM 500"
+  objective: |
+    Run the production deep-STEM QBank pipeline end to end against
+    redistributable full publications, targeting 650-750 candidate
+    publications and 500 accepted v3 recall challenges with strict route
+    metadata, diversity gates, and validated benchmark receipts.
+  risk:
+    - Reject ambiguous or non-redistributable publications
+    - Reject production challenges without route model decisions or hashes
+    - Capture live Jnoccio status, metrics, context windows, and output budgets before generation
+    - Keep all receipts and live artifacts under target/qbank-live-run-500/reports
+
+loop:
+  policy: once
+  continue_on: [compaction, max_steps]
+  pause_on: [checkpoint_failed, no_progress]
+
+stop:
+  all:
+    - shell:
+        command: "mkdir -p target/qbank-live-bank-500 && test -d target/qbank-live-bank-500"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+permissions:
+  research: allow
+  websearch: allow
+  webfetch: allow
+  edit: ask
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-workspace
+      tool: read
+      decision: allow
+    - id: shell-qbank
+      tool: shell
+      command_regex: "^(rtk )?(cargo|just|bun|curl|mkdir|test|find) "
+      decision: allow
+    - id: worker-fanout
+      tool: workers
+      decision: allow
+  command_floor:
+    always_block:
+      - "git push"
+      - "git push --force"
+      - 'curl .* \| sh'
+      - 'wget .* \| sh'
+      - "sudo "
+
+research:
+  version: v1
+  mode: academic
+  autonomy: require_plan
+  max_parallel: 20
+  timeout_seconds: 90
+  provider_policy:
+    prefer: [official_api, primary_source, privacy_first]
+    allow: [openalex, crossref, arxiv, pubmed, semantic_scholar, unpaywall, jina, firecrawl]
+    missing_provider: skip_with_receipt
+  extraction:
+    enabled: true
+    max_pages: 80
+    allowed_extractors: [built_in, jina, firecrawl]
+  evidence:
+    require_citations: true
+    claim_level: true
+    store: sqlite
+  safety:
+    redact_secrets: true
+    block_internal_urls: true
+    prompt_injection: quarantine
+    taint_label: web_content
+  budgets:
+    max_queries: 120
+    max_pages: 180
+    max_cost_usd: 35.00
+  paper_scan:
+    enabled: true
+    domains: [mathematics, physics, biology, computer_science, medicine]
+    queries:
+      - "open access deep STEM paper hard answerable result"
+      - "open access scientific paper exact numeric method result"
+      - "open access benchmark paper ablation table surprising result"
+    open_access: required
+    max_papers: 750
+    output_root: target/qbank-live-bank-500/papers
+    raw_receipts: target/qbank-live-run-500/discovery
+  full_text:
+    enabled: true
+    store: checked_in_json
+    raw_receipts: target/qbank-live-run-500/full-text
+    extraction_receipts: target/qbank-live-run-500/reports/extraction
+    license_policy: public_license_only
+  dedupe:
+    enabled: true
+    state_root: target/qbank-live-bank-500/papers
+    duplicate_policy: skip_existing
+    hash_keys: [doi, arxiv, pmid, pmcid, openalex, url, content_hash]
+  context_packing:
+    strategy: hard
+    target_fill_ratio: 0.82
+    output_reserve_tokens: 8192
+    safe_window_tokens: 128000
+  question_bank:
+    output_root: target/qbank-live-bank-500
+    papers_root: target/qbank-live-bank-500/papers
+    challenges_root: target/qbank-live-bank-500/challenges
+    rejected_root: target/qbank-live-bank-500/rejected
+    work_items:
+      - id: bank_audit
+        publication_hash: pending
+        role: auditor
+      - id: publication_discovery
+        publication_hash: pending
+        role: publication_extractor
+      - id: extraction_canonicalization
+        publication_hash: pending
+        role: publication_extractor
+      - id: context_packing
+        publication_hash: pending
+        role: auditor
+      - id: candidate_tournament
+        publication_hash: pending
+        role: question_generator
+      - id: focused_support_audit
+        publication_hash: pending
+        role: focused_auditor
+      - id: saturated_blind_answering
+        publication_hash: pending
+        role: saturated_answerer
+      - id: judge_reduce
+        publication_hash: pending
+        role: judge_reducer
+      - id: publish_bank
+        publication_hash: pending
+        role: reducer
+      - id: validate_bank
+        publication_hash: pending
+        role: auditor
+      - id: benchmark_bank
+        publication_hash: pending
+        role: scorer
+    acceptance:
+      min_auditor_agreement: 0.75
+      min_answerability: 0.90
+      max_blind_correct_rate_for_hard: 0.50
+      reject_if_ambiguous: true
+  agent_trials:
+    question_generators: 20
+    answerers: 20
+    model_profile: builder
+  audit:
+    critics: 6
+    focused_auditors: 10
+    min_auditor_agreement: 0.75
+    min_answerability: 0.90
+  route_metadata:
+    required: true
+    require_request_id: true
+    require_provider: jnoccio
+    require_model_profile: true
+
+fleet:
+  max_workers: 20
+  isolation: same_session
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    metrics_ws: "/v1/jnoccio/metrics/ws"
+    spawn_on_demand: false
+    register_workers: false
+    heartbeat_path: "/v1/jnoccio/agents/heartbeat"
+    heartbeat_interval: 15s
+    max_instances: 20
+
+fan_out:
+  strategy: scatter_gather
+  split:
+      shell: >
+        mkdir -p target/qbank-live-run-500/reports target/qbank-live-bank-500 &&
+        curl -fsS http://127.0.0.1:4317/v1/jnoccio/status > target/qbank-live-run-500/reports/jnoccio-status-before.json &&
+        curl -fsS http://127.0.0.1:4317/v1/jnoccio/metrics > target/qbank-live-run-500/reports/jnoccio-metrics-before.json &&
+        cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover-full-text --provider europe-pmc --limit 650 --min-written 500 --max-search-pages 120 --query 'OPEN_ACCESS:y HAS_FT:y SRC:PMC' --run-root target/qbank-live-run-500 --bank target/qbank-live-bank-500 &&
+        cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- make-work --mode production-deep-stem-hard-recall --bank target/qbank-live-bank-500 --out target/qbank-live-run-500/work.jsonl &&
+        cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- build-paper-tournament --bank target/qbank-live-bank-500 --run-root target/qbank-live-run-500 --target-accepted 500 --candidate-papers 650 --candidate-manifest target/qbank-live-run-500/reports/candidate-manifest.json --progress-jsonl target/qbank-live-run-500/reports/live-progress.jsonl --jnoccio-request-timeout-seconds 600 --paper-timeout-seconds 1800 --resume --generators 3 --verifiers 3 --testers 3 --graders 3 --distractor-papers 8 --agent-runner jnoccio --jnoccio-base-url http://127.0.0.1:4317 --jnoccio-model jnoccio/jnoccio-fusion --jnoccio-max-output-tokens 4096 --phase-retries 2 --strict-production &&
+        curl -fsS http://127.0.0.1:4317/v1/jnoccio/status > target/qbank-live-run-500/reports/jnoccio-status-after.json &&
+        curl -fsS http://127.0.0.1:4317/v1/jnoccio/metrics > target/qbank-live-run-500/reports/jnoccio-metrics-after.json
+  worker:
+    agent: build
+    isolation: git_worktree
+    timeout: 90m
+    max_parallel: 20
+  reduce:
+    strategy: custom_shell
+    command: >
+      mkdir -p target/qbank-live-run-500/reports &&
+      test -s target/qbank-live-run-500/reports/jnoccio-preflight.json &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- publish --strict-production --min-accepted 500 --bank target/qbank-live-bank-500 &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- audit-paper-tournament --bank target/qbank-live-bank-500 --run-root target/qbank-live-run-500 > target/qbank-live-run-500/reports/paper-tournament-audit.stdout.json &&
+      cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank target/qbank-live-bank-500 --min-accepted 500 --top-n 500 > target/qbank-live-run-500/reports/qbank-validate.json &&
+      test -d target/qbank-live-run-500/trials &&
+      test -s target/qbank-live-run-500/reports/qbank-reduce.json &&
+      test -s target/qbank-live-run-500/reports/live-progress.jsonl &&
+      test -n "$(find target/qbank-live-bank-500/challenges -name '*.json' -print -quit)" &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- emit-cogcore --bank target/qbank-live-bank-500 --out target/qbank-live-run-500/reports/cogcore-events.jsonl &&
+      cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin cogcore_bench -- --events target/qbank-live-run-500/reports/cogcore-events.jsonl --out target/qbank-live-run-500/reports/cogcore-smoke.json &&
+      cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank target/qbank-live-bank-500 --qbank-top-n 500 --out target/qbank-live-run-500/reports/real-paper-top500.json
+
+experiments:
+  strategy: disjoint_tournament
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.50
+    axes: [publication, question, blind_hardness, focused_support, audit, scoring]
+  lanes:
+    - id: bank_audit
+      hypothesis: "Strict bank auditing fails fast on missing provenance and diversity."
+      prompt_strategy: qbank_bank_audit
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 4, max_diff_lines: 500, max_cost_usd: 2.00 }
+    - id: publication_discovery
+      hypothesis: "OA discovery from public sources yields 650-750 candidate publications."
+      prompt_strategy: qbank_publication_discovery
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 4, max_diff_lines: 800, max_cost_usd: 3.00 }
+    - id: extraction_canonicalization
+      hypothesis: "Full-text extraction and canonicalization preserve redistributable evidence."
+      prompt_strategy: qbank_extraction_canonicalization
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 4, max_diff_lines: 800, max_cost_usd: 3.00 }
+    - id: context_packing
+      hypothesis: "Hard context packing maintains fill ratio while avoiding answer leakage."
+      prompt_strategy: qbank_context_packing
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 4, max_diff_lines: 800, max_cost_usd: 3.00 }
+    - id: candidate_tournament
+      hypothesis: "Tournament generation finds hard recall prompts from real publications."
+      prompt_strategy: qbank_candidate_tournament
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 8, max_diff_lines: 1600, max_cost_usd: 6.00 }
+    - id: focused_support_audit
+      hypothesis: "Focused auditors can reject unsupported candidates while preserving source support."
+      prompt_strategy: qbank_focused_support_audit
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 8, max_diff_lines: 1600, max_cost_usd: 6.00 }
+    - id: saturated_blind_answering
+      hypothesis: "Saturated blind answering exposes leakage and weak recall boundaries."
+      prompt_strategy: qbank_saturated_blind_answering
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 8, max_diff_lines: 1600, max_cost_usd: 6.00 }
+    - id: judge_reduce
+      hypothesis: "Judge reduction keeps only source-supported, hard, non-leaking v3 challenges."
+      prompt_strategy: qbank_judge_reduce
+      agent: build
+      model: critic
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 8, max_diff_lines: 1600, max_cost_usd: 6.00 }
+    - id: publish_bank
+      hypothesis: "Publishing the bank emits a v3 manifest only when strict production gates pass."
+      prompt_strategy: qbank_publish_bank
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 4, max_diff_lines: 500, max_cost_usd: 2.00 }
+    - id: validate_bank
+      hypothesis: "Validator receipts prove accepted count, source diversity, and strict production trust."
+      prompt_strategy: qbank_validate_bank
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 4, max_diff_lines: 500, max_cost_usd: 2.00 }
+    - id: benchmark_bank
+      hypothesis: "The real-papers benchmark reads only publication sections and no answer keys."
+      prompt_strategy: qbank_benchmark_bank
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 90m
+      budget: { max_iterations: 4, max_diff_lines: 500, max_cost_usd: 2.00 }
+  max_parallel: 20
+  scoring:
+    primary: executable_rust_oracles
+    goal_direction: maximize
+    judge:
+      agent: critic
+      blind: true
+      must_use_different_provider: false
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+  preserve_failed_lanes_as_negative_memory: true
+
+models:
+  profiles:
+    builder:
+      provider: jnoccio
+      model: jnoccio-fusion
+    critic:
+      provider: jnoccio
+      model: jnoccio-fusion
+<<<END_ZYAL id=paper-qbank-deep-stem-500>>>
+ZYAL_ARM RUN_FOREVER id=paper-qbank-deep-stem-500

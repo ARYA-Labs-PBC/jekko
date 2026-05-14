@@ -1,0 +1,230 @@
+# ZYAL v2.6 - Paper QBank Live Smoke 10
+
+<<<ZYAL v1:daemon id=paper-qbank-live-smoke-10>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Paper QBank live smoke 10"
+  objective: |
+    Run the production paper QBank path against Europe PMC open-access full
+    text, targeting 10 accepted v3 hard-recall challenges with live Jnoccio
+    route metadata, exact support quotes, audit receipts, and benchmark
+    validation.
+  risk:
+    - Reject mock, fixture, abstract-only, ambiguous-license, or non-redistributable papers
+    - Fail closed when Jnoccio route metadata or structured JSON is missing
+    - Keep smoke receipts under target/qbank-live-run-10 and .jekko/daemon/paper-qbank-live-smoke-10
+
+loop:
+  policy: once
+  continue_on: [compaction, max_steps]
+  pause_on: [checkpoint_failed, no_progress]
+
+stop:
+  all:
+    - shell:
+        command: "mkdir -p target/qbank-live-bank-10 && test -d target/qbank-live-bank-10"
+        timeout: 10s
+        assert: { exit_code: 0 }
+
+permissions:
+  research: allow
+  websearch: allow
+  webfetch: allow
+  edit: ask
+
+capabilities:
+  default: deny
+  rules:
+    - id: read-workspace
+      tool: read
+      decision: allow
+    - id: shell-qbank-live-smoke
+      tool: shell
+      command_regex: "^(rtk )?(cargo|bun|curl|mkdir|test|find) "
+      decision: allow
+
+research:
+  version: v1
+  mode: academic
+  autonomy: require_plan
+  max_parallel: 4
+  timeout_seconds: 60
+  provider_policy:
+    prefer: [official_api, primary_source, privacy_first]
+    allow: [pubmed, unpaywall]
+    missing_provider: skip_with_receipt
+  extraction:
+    enabled: true
+    max_pages: 20
+    allowed_extractors: [built_in]
+  evidence:
+    require_citations: true
+    claim_level: true
+    store: sqlite
+  safety:
+    redact_secrets: true
+    block_internal_urls: true
+    prompt_injection: quarantine
+    taint_label: web_content
+  budgets:
+    max_queries: 10
+    max_pages: 30
+    max_cost_usd: 3.00
+  paper_scan:
+    enabled: true
+    domains: [biology, medicine]
+    queries: ["OPEN_ACCESS:y HAS_FT:y SRC:PMC"]
+    open_access: required
+    max_papers: 25
+    output_root: target/qbank-live-bank-10/papers
+    raw_receipts: target/qbank-live-run-10/discovery
+  full_text:
+    enabled: true
+    store: checked_in_json
+    raw_receipts: target/qbank-live-run-10/full-text
+    extraction_receipts: target/qbank-live-run-10/reports/extraction
+    license_policy: public_license_only
+  dedupe:
+    enabled: true
+    state_root: target/qbank-live-bank-10/papers
+    duplicate_policy: skip_existing
+    hash_keys: [doi, pmid, pmcid, url, content_hash]
+  context_packing:
+    strategy: hard
+    target_fill_ratio: 0.82
+    output_reserve_tokens: 8192
+    safe_window_tokens: 128000
+  question_bank:
+    output_root: target/qbank-live-bank-10
+    papers_root: target/qbank-live-bank-10/papers
+    challenges_root: target/qbank-live-bank-10/challenges
+    rejected_root: target/qbank-live-bank-10/rejected
+    acceptance:
+      min_auditor_agreement: 0.75
+      min_answerability: 0.90
+      max_blind_correct_rate_for_hard: 0.50
+      reject_if_ambiguous: true
+  agent_trials:
+    question_generators: 3
+    answerers: 3
+    model_profile: builder
+  audit:
+    critics: 2
+    focused_auditors: 3
+    min_auditor_agreement: 0.75
+    min_answerability: 0.90
+
+promotion_gates:
+  qbank:
+    reject_dev_only: true
+    min_accepted: 10
+    require_provider: jnoccio
+    require_route_metadata: true
+    require_full_text: true
+
+fleet:
+  max_workers: 4
+  isolation: same_session
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    metrics_ws: "/v1/jnoccio/metrics/ws"
+    spawn_on_demand: false
+    register_workers: false
+    heartbeat_path: "/v1/jnoccio/agents/heartbeat"
+    heartbeat_interval: 15s
+    max_instances: 4
+
+fan_out:
+  strategy: scatter_gather
+  split:
+    shell: >
+      mkdir -p target/qbank-live-run-10/reports target/qbank-live-bank-10 &&
+      curl -fsS http://127.0.0.1:4317/v1/jnoccio/status > target/qbank-live-run-10/reports/jnoccio-status-before.json &&
+      curl -fsS http://127.0.0.1:4317/v1/jnoccio/metrics > target/qbank-live-run-10/reports/jnoccio-metrics-before.json &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover-full-text --provider europe-pmc --limit 25 --min-written 10 --max-search-pages 20 --query 'OPEN_ACCESS:y HAS_FT:y SRC:PMC' --run-root target/qbank-live-run-10 --bank target/qbank-live-bank-10 &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- build-paper-tournament --bank target/qbank-live-bank-10 --run-root target/qbank-live-run-10 --target-accepted 10 --candidate-papers 25 --candidate-manifest target/qbank-live-run-10/reports/candidate-manifest.json --progress-jsonl target/qbank-live-run-10/reports/live-progress.jsonl --jnoccio-request-timeout-seconds 600 --paper-timeout-seconds 1800 --resume --generators 3 --verifiers 3 --testers 3 --graders 3 --distractor-papers 4 --agent-runner jnoccio --jnoccio-base-url http://127.0.0.1:4317 --jnoccio-model jnoccio/jnoccio-fusion --jnoccio-max-output-tokens 4096 --phase-retries 2 --strict-production &&
+      curl -fsS http://127.0.0.1:4317/v1/jnoccio/status > target/qbank-live-run-10/reports/jnoccio-status-after.json &&
+      curl -fsS http://127.0.0.1:4317/v1/jnoccio/metrics > target/qbank-live-run-10/reports/jnoccio-metrics-after.json
+  worker:
+    agent: build
+    isolation: same_session
+    timeout: 45m
+    max_parallel: 4
+  reduce:
+    strategy: custom_shell
+    command: >
+      mkdir -p target/qbank-live-run-10/reports &&
+      test -s target/qbank-live-run-10/reports/jnoccio-preflight.json &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- audit-paper-tournament --bank target/qbank-live-bank-10 --run-root target/qbank-live-run-10 > target/qbank-live-run-10/reports/paper-tournament-audit.stdout.json &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- publish --strict-production --min-accepted 10 --bank target/qbank-live-bank-10 &&
+      cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank target/qbank-live-bank-10 --min-accepted 10 --top-n 10 > target/qbank-live-run-10/reports/qbank-validate.json &&
+      cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin verify_determinism -- --suite real-papers --paper-bank target/qbank-live-bank-10 --qbank-top-n 10 --out target/qbank-live-run-10/reports/determinism.json &&
+      cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank target/qbank-live-bank-10 --qbank-top-n 10 --out target/qbank-live-run-10/reports/real-paper-top10.json
+
+experiments:
+  strategy: disjoint_tournament
+  lanes:
+    - id: qbank_live_smoke_10
+      hypothesis: "Ten live full-text QBank challenges validate before the 500 gate."
+      prompt_strategy: qbank_candidate_tournament
+      agent: build
+      model: builder
+      isolation: same_session
+      timeout: 45m
+      budget: { max_iterations: 3, max_diff_lines: 500, max_cost_usd: 10.00 }
+  max_parallel: 1
+  scoring:
+    primary: executable_rust_oracles
+    goal_direction: maximize
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+
+models:
+  profiles:
+    builder:
+      provider: jnoccio
+      model: jnoccio-fusion
+      reasoning: true
+    critic:
+      provider: jnoccio
+      model: jnoccio-fusion
+      reasoning: true
+  routes:
+    build: builder
+    judge: critic
+
+sandbox:
+  paths:
+    - path: target/qbank-live-bank-10
+      access: write
+    - path: target/qbank-live-run-10
+      access: write
+  network:
+    outbound: allow
+
+done:
+  require:
+    - qbank_live_smoke_10_accepted
+    - qbank_validate_passed
+    - route_metadata_complete
+  forbid:
+    - mock_provenance
+    - fixture_url
+    - abstract_only_paper
+    - answer_key_observed
+
+checkpoint:
+  verify:
+    - command: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- audit-paper-tournament --bank target/qbank-live-bank-10 --run-root target/qbank-live-run-10"
+      timeout: 5m
+      assert: { exit_code: 0 }
+    - command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank target/qbank-live-bank-10 --min-accepted 10 --top-n 10"
+      timeout: 5m
+      assert: { exit_code: 0 }
+<<<END_ZYAL id=paper-qbank-live-smoke-10>>>
+ZYAL_ARM RUN_FOREVER id=paper-qbank-live-smoke-10

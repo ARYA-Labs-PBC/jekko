@@ -11,7 +11,10 @@ pub struct SemanticScholarProvider {
 
 impl SemanticScholarProvider {
     pub fn new(api_key: String) -> Self {
-        Self { client: client(), api_key }
+        Self {
+            client: client(),
+            api_key,
+        }
     }
 
     pub fn parse_fixture(value: &Value) -> Result<ProviderSearchResponse> {
@@ -33,7 +36,9 @@ impl SemanticScholarProvider {
 
 #[async_trait]
 impl SearchProvider for SemanticScholarProvider {
-    fn id(&self) -> ProviderId { ProviderId::SemanticScholar }
+    fn id(&self) -> ProviderId {
+        ProviderId::SemanticScholar
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(false, true, false, false, false, true, true)
@@ -55,7 +60,9 @@ impl SearchProvider for SemanticScholarProvider {
             .json()
             .await?;
         let mut response = Self::parse_fixture(&json)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

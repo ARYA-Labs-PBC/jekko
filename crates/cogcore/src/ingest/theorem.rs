@@ -40,8 +40,7 @@ pub fn extract_theorems(text: &str) -> Vec<TheoremRef> {
                 while k > 0 && (bytes[k - 1] as char).is_whitespace() {
                     k -= 1;
                 }
-                k == 0
-                    || matches!(bytes[k - 1] as char, '.' | '\n' | ':')
+                k == 0 || matches!(bytes[k - 1] as char, '.' | '\n' | ':')
             };
             if !is_header_position {
                 i = abs_pos + keyword.len();

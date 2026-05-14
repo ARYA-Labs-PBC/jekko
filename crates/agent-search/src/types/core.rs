@@ -74,7 +74,9 @@ impl FromStr for ProviderId {
             "tavily" => Ok(Self::Tavily),
             "exa" => Ok(Self::Exa),
             "searxng" => Ok(Self::Searxng),
-            "semantic_scholar" | "semanticscholar" | "semantic-scholar" => Ok(Self::SemanticScholar),
+            "semantic_scholar" | "semanticscholar" | "semantic-scholar" => {
+                Ok(Self::SemanticScholar)
+            }
             "unpaywall" => Ok(Self::Unpaywall),
             "github" => Ok(Self::Github),
             "firecrawl" => Ok(Self::Firecrawl),

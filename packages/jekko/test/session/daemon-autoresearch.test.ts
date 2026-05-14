@@ -7,6 +7,7 @@ import { resolveInstanceRoot } from "../../src/project/instance-root"
 import {
   normalizeDaemonSpec,
   resolveDaemonModel,
+  routeMetadataFromAssistant,
   runAutoResearch,
 } from "../../src/session/daemon-autoresearch"
 import { tmpdir } from "../fixture/fixture"
@@ -97,6 +98,64 @@ describe("daemon autoresearch", () => {
     expect(normalized.spec.fleet.jnoccio.base_url).toBe("http://127.0.0.1:4317")
   })
 
+  test("preserves jnoccio request metadata in lane summaries", () => {
+    const routeMetadata = routeMetadataFromAssistant(
+      {
+        providerID: "jnoccio",
+        modelID: "jnoccio-fusion",
+        jnoccio: {
+          request_id: "request-123",
+          route_mode: "daemon",
+          route_confidence: 0.91,
+          primary_model_id: "primary-1",
+          backup_model_ids: ["backup-1", "backup-2"],
+          fusion_model_id: "fusion-1",
+          winner_model_id: "winner-1",
+          confidence: 0.875,
+          prompt_hash: "prompt-hash",
+          context_hash: "context-hash",
+          receipts_hash: "receipts-hash",
+          model_decisions_hash: "decisions-hash",
+          token_usage: { prompt_tokens: 12, completion_tokens: 34, total_tokens: 46 },
+          model_decisions: [{ model_id: "primary-1", selected: true }],
+        },
+      },
+      "run-123",
+      "lane-123",
+      "builder",
+    )
+
+    expect(routeMetadata).toMatchObject({
+      request_id: "request-123",
+      route_mode: "daemon",
+      primary_model_id: "primary-1",
+      backup_model_ids: ["backup-1", "backup-2"],
+      fusion_model_id: "fusion-1",
+      winner_model_id: "winner-1",
+      route_confidence: 0.91,
+      confidence: 0.875,
+      prompt_hash: "prompt-hash",
+      context_hash: "context-hash",
+      receipts_hash: "receipts-hash",
+      model_decisions_hash: "decisions-hash",
+      token_usage: {
+        prompt_tokens: 12,
+        completion_tokens: 34,
+        total_tokens: 46,
+      },
+      model_decisions: [{ model_id: "primary-1", selected: true }],
+      provider: "jnoccio",
+      model: "jnoccio-fusion",
+      agent_role: "builder",
+      zyal_run_id: "run-123",
+      zyal_lane_id: "lane-123",
+    })
+    expect(routeMetadata.jnoccio).toMatchObject({
+      request_id: "request-123",
+      model_decisions_hash: "decisions-hash",
+    })
+  })
+
   test("runs the lane executor, writes artifacts, and routes prompts through Jnoccio", async () => {
     await using tmp = await tmpdir()
     const directory = tmp.path
@@ -124,6 +183,7 @@ describe("daemon autoresearch", () => {
     const events: Array<{ eventType: string; payload: Record<string, unknown> }> = []
     const iterations: Array<Record<string, unknown>> = []
     const promptCalls: Array<Record<string, unknown>> = []
+    const promptContexts: Array<{ directory: string; worktree: string }> = []
     const shellCalls: string[] = []
     const laneDir = path.join(directory, "lane-worktree")
 
@@ -148,8 +208,11 @@ describe("daemon autoresearch", () => {
         } as any,
         prompt: {
           prompt: (input: any) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
               promptCalls.push(input)
+              const ctx = yield* InstanceRef
+              if (!ctx) throw new Error("expected instance context for lane prompt")
+              promptContexts.push({ directory: ctx.directory, worktree: ctx.worktree })
             }),
           loopResult: () =>
             Effect.succeed({
@@ -187,14 +250,7 @@ describe("daemon autoresearch", () => {
             })),
         } as any,
         instanceStore: {
-          provide: (input: any, effect: Effect.Effect<unknown>) =>
-            effect.pipe(
-              Effect.provideService(InstanceRef, {
-                directory: input.directory,
-                worktree: input.worktree,
-                project: input.project,
-              } as any),
-            ),
+          provide: () => Effect.die("unexpected instanceStore.provide"),
         } as any,
         transitionRun: (_runID: string, patch: any) =>
           Effect.sync(() => ({
@@ -205,6 +261,7 @@ describe("daemon autoresearch", () => {
     )
 
     expect(promptCalls).toHaveLength(1)
+    expect(promptContexts).toEqual([{ directory: laneDir, worktree: directory }])
     expect(promptCalls[0].model).toEqual({
       providerID: "jnoccio",
       modelID: "jnoccio-fusion",
@@ -225,7 +282,14 @@ describe("daemon autoresearch", () => {
     expect(await fs.readFile(path.join(artifactRoot, "curriculum-proposals.json"), "utf8")).toContain("lane-a")
     expect(await fs.readFile(path.join(artifactRoot, "reports", "final-score.json"), "utf8")).toContain("lane-a")
     expect(events.map((event) => event.eventType)).toContain("autoresearch.started")
+    expect(events.map((event) => event.eventType)).toContain("autoresearch.lane.mkdir.started")
+    expect(events.map((event) => event.eventType)).toContain("autoresearch.lane.mkdir.completed")
+    expect(events.map((event) => event.eventType)).toContain("autoresearch.lane.entered")
+    expect(events.map((event) => event.eventType)).toContain("autoresearch.lane.setup.started")
+    expect(events.map((event) => event.eventType)).toContain("autoresearch.lane.worktree.created")
     expect(events.map((event) => event.eventType)).toContain("autoresearch.lane.finished")
+    expect(events.map((event) => event.eventType)).toContain("autoresearch.split.started")
+    expect(events.map((event) => event.eventType)).toContain("autoresearch.scoring.started")
     expect(events.map((event) => event.eventType)).toContain("autoresearch.reduce.finished")
     expect(iterations[0]).toMatchObject({
       runID: run.id,

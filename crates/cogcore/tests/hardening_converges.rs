@@ -69,9 +69,7 @@ fn cell_strength_rises_under_reinforce_between_queries() {
         core.observe(ev(
             &rid,
             "neutrino mass",
-            &format!(
-                "Reinforcement {k}: neutrino mass m_v is consistent with bound 1.1 eV.",
-            ),
+            &format!("Reinforcement {k}: neutrino mass m_v is consistent with bound 1.1 eV.",),
             &format!("2026-08-0{}T00:00:00Z", k + 2),
         ));
         let r = core.recall(&query);
@@ -99,9 +97,7 @@ fn cell_strength_rises_under_reinforce_between_queries() {
         fresh.observe(ev(
             &rid,
             "neutrino mass",
-            &format!(
-                "Reinforcement {k}: neutrino mass m_v is consistent with bound 1.1 eV.",
-            ),
+            &format!("Reinforcement {k}: neutrino mass m_v is consistent with bound 1.1 eV.",),
             &format!("2026-08-0{}T00:00:00Z", k + 2),
         ));
     }

@@ -1,5 +1,7 @@
 use super::model::{
-    AnswerKey, ContextPack, NumericTolerance, PaperChallenge, PaperRecord, PaperSection, SupportRef,
+    AcceptanceMetrics, AnswerKey, ArtifactProvenance, ContextPack, ContextPackProvenance,
+    JudgeTrial, ModelDecision, ModelTrial, NumericTolerance, PaperChallenge, PaperRecord,
+    PaperSection, RouteMetadata, SourcePublication, SupportRef, TokenUsage,
 };
 #[path = "json_helpers.rs"]
 mod helpers;
@@ -120,6 +122,10 @@ fn paper_from_json(value: &Json) -> Result<PaperRecord, String> {
         title,
         license_spdx,
         redistributable,
+        dedupe_keys: optional_string_array(obj, "dedupe_keys"),
+        source_ids: optional_string_array(obj, "source_ids"),
+        source_url: license_obj.and_then(|license| optional_string(license, "source_url")),
+        retrieval_kinds: retrieval_kinds(obj),
         sections,
     })
 }
@@ -145,6 +151,8 @@ fn section_from_json(value: &Json) -> Result<PaperSection, String> {
 
 fn challenge_from_json(value: &Json) -> Result<PaperChallenge, String> {
     let obj = as_object(value)?;
+    let schema_version = optional_string(obj, "schema_version")
+        .unwrap_or_else(|| "opencode-qbank-challenge-v1".to_string());
     let acceptance = as_object(required(obj, "acceptance")?)?;
     let accepted = matches!(acceptance.get("accepted").and_then(as_bool), Some(true));
     if !accepted {
@@ -206,6 +214,7 @@ fn challenge_from_json(value: &Json) -> Result<PaperChallenge, String> {
         None => ContextPack::default(),
     };
     Ok(PaperChallenge {
+        schema_version,
         challenge_hash: required_string(obj, "challenge_hash")?,
         publication_hash: required_string(obj, "publication_hash")?,
         domain,
@@ -218,7 +227,180 @@ fn challenge_from_json(value: &Json) -> Result<PaperChallenge, String> {
         answer_key,
         support,
         context_pack,
+        source_publication: obj
+            .get("source_publication")
+            .map(source_publication_from_json)
+            .transpose()?,
+        focused_support_trials: parse_array(obj, "focused_support_trials", model_trial_from_json)?,
+        saturated_blind_trials: parse_array(obj, "saturated_blind_trials", model_trial_from_json)?,
+        judge_trials: parse_array(obj, "judge_trials", judge_trial_from_json)?,
+        context_packs: parse_array(obj, "context_packs", context_pack_provenance_from_json)?,
+        route_metadata: parse_route_metadata_list(obj.get("route_metadata"))?,
+        acceptance_metrics: obj
+            .get("acceptance_metrics")
+            .map(acceptance_metrics_from_json)
+            .transpose()?,
+        artifact_provenance: obj
+            .get("artifact_provenance")
+            .map(artifact_provenance_from_json)
+            .transpose()?,
     })
+}
+
+fn source_publication_from_json(value: &Json) -> Result<SourcePublication, String> {
+    let obj = as_object(value)?;
+    Ok(SourcePublication {
+        publication_hash: required_string(obj, "publication_hash")?,
+        content_hash: required_string(obj, "content_hash")?,
+        license_spdx: required_string(obj, "license_spdx")?,
+        redistributable: optional_bool(obj, "redistributable").unwrap_or(false),
+        source_url: optional_string(obj, "source_url"),
+        section_hashes: optional_string_array(obj, "section_hashes"),
+    })
+}
+
+fn model_trial_from_json(value: &Json) -> Result<ModelTrial, String> {
+    let obj = as_object(value)?;
+    Ok(ModelTrial {
+        agent_id: required_string(obj, "agent_id")?,
+        phase: required_string(obj, "phase")?,
+        correct: optional_bool(obj, "correct").unwrap_or(false),
+        answerability: optional_f32(obj, "answerability").unwrap_or(0.0),
+        supported: optional_bool(obj, "supported").unwrap_or(false),
+        confidence: optional_f32(obj, "confidence").unwrap_or(-1.0),
+        prompt_hash: required_string(obj, "prompt_hash")?,
+        context_hash: required_string(obj, "context_hash")?,
+        route_metadata: route_metadata_from_json(required(obj, "route_metadata")?)?,
+        token_usage: token_usage_from_json(required(obj, "token_usage")?)?,
+    })
+}
+
+fn judge_trial_from_json(value: &Json) -> Result<JudgeTrial, String> {
+    let obj = as_object(value)?;
+    Ok(JudgeTrial {
+        agent_id: required_string(obj, "agent_id")?,
+        accepted: optional_bool(obj, "accepted").unwrap_or(false),
+        confidence: optional_f32(obj, "confidence").unwrap_or(-1.0),
+        rationale_hash: required_string(obj, "rationale_hash")?,
+        route_metadata: route_metadata_from_json(required(obj, "route_metadata")?)?,
+        token_usage: token_usage_from_json(required(obj, "token_usage")?)?,
+    })
+}
+
+fn context_pack_provenance_from_json(value: &Json) -> Result<ContextPackProvenance, String> {
+    let obj = as_object(value)?;
+    Ok(ContextPackProvenance {
+        kind: required_string(obj, "kind")?,
+        context_hash: required_string(obj, "context_hash")?,
+        prompt_hash: required_string(obj, "prompt_hash")?,
+        section_ids: optional_string_array(obj, "section_ids"),
+        estimated_tokens: optional_i64(obj, "estimated_tokens").unwrap_or(0).max(0) as u32,
+    })
+}
+
+fn route_metadata_from_json(value: &Json) -> Result<RouteMetadata, String> {
+    let obj = as_object(value)?;
+    let token_usage = obj
+        .get("token_usage")
+        .and_then(as_object_ok)
+        .map(|usage| token_usage_from_object(usage))
+        .transpose()?;
+    Ok(RouteMetadata {
+        request_id: required_string(obj, "request_id")?,
+        provider: optional_string(obj, "provider").unwrap_or_default(),
+        model: optional_string(obj, "model").unwrap_or_default(),
+        route_mode: optional_string(obj, "route_mode"),
+        route_confidence: optional_f32(obj, "route_confidence")
+            .or_else(|| optional_f32(obj, "confidence")),
+        primary_model_id: optional_string(obj, "primary_model_id"),
+        backup_model_ids: optional_string_array(obj, "backup_model_ids"),
+        fusion_model_id: optional_string(obj, "fusion_model_id"),
+        winner_model_id: optional_string(obj, "winner_model_id"),
+        prompt_hash: optional_string(obj, "prompt_hash"),
+        context_hash: optional_string(obj, "context_hash"),
+        receipts_hash: optional_string(obj, "receipts_hash"),
+        token_usage,
+        model_decisions_hash: optional_string(obj, "model_decisions_hash"),
+        model_decisions: parse_array(obj, "model_decisions", model_decision_from_json)?,
+    })
+}
+
+fn model_decision_from_json(value: &Json) -> Result<ModelDecision, String> {
+    let obj = as_object(value)?;
+    Ok(ModelDecision {
+        model_id: required_string(obj, "model_id")?,
+        configured_score: optional_f32(obj, "configured_score").unwrap_or(0.0),
+        selection_score: optional_f32(obj, "selection_score").unwrap_or(0.0),
+        latency_ms: optional_i64(obj, "latency_ms").unwrap_or(0).max(0) as u64,
+        status: optional_string(obj, "status").unwrap_or_default(),
+        output_hash: optional_string(obj, "output_hash"),
+        selected: optional_bool(obj, "selected").unwrap_or(false),
+        token_usage: token_usage_from_json(required(obj, "token_usage")?)?,
+    })
+}
+
+fn token_usage_from_object(
+    obj: &std::collections::BTreeMap<String, Json>,
+) -> Result<TokenUsage, String> {
+    Ok(TokenUsage {
+        prompt_tokens: optional_i64(obj, "prompt_tokens").unwrap_or(0).max(0) as u32,
+        completion_tokens: optional_i64(obj, "completion_tokens").unwrap_or(0).max(0) as u32,
+        total_tokens: optional_i64(obj, "total_tokens").unwrap_or(0).max(0) as u32,
+    })
+}
+
+fn parse_route_metadata_list(value: Option<&Json>) -> Result<Vec<RouteMetadata>, String> {
+    match value {
+        Some(Json::Array(items)) => items.iter().map(route_metadata_from_json).collect(),
+        Some(Json::Object(_)) => {
+            route_metadata_from_json(value.expect("value")).map(|item| vec![item])
+        }
+        Some(_) => Err("route_metadata must be an object or array".to_string()),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn token_usage_from_json(value: &Json) -> Result<TokenUsage, String> {
+    let obj = as_object(value)?;
+    token_usage_from_object(obj)
+}
+
+fn acceptance_metrics_from_json(value: &Json) -> Result<AcceptanceMetrics, String> {
+    let obj = as_object(value)?;
+    Ok(AcceptanceMetrics {
+        focused_agreement: optional_f32(obj, "focused_agreement").unwrap_or(0.0),
+        focused_correct_rate: optional_f32(obj, "focused_correct_rate").unwrap_or(0.0),
+        answerability: optional_f32(obj, "answerability").unwrap_or(0.0),
+        saturated_blind_correct_rate: optional_f32(obj, "saturated_blind_correct_rate")
+            .unwrap_or(1.0),
+        saturated_mean_confidence: optional_f32(obj, "saturated_mean_confidence").unwrap_or(1.0),
+    })
+}
+
+fn artifact_provenance_from_json(value: &Json) -> Result<ArtifactProvenance, String> {
+    let obj = as_object(value)?;
+    Ok(ArtifactProvenance {
+        run_id: required_string(obj, "run_id")?,
+        reducer_version: required_string(obj, "reducer_version")?,
+        agent_mode: optional_string(obj, "agent_mode"),
+        fixture_provenance: optional_bool(obj, "fixture_provenance").unwrap_or(false),
+        answer_leakage_detected: optional_bool(obj, "answer_leakage_detected").unwrap_or(true),
+        license_ambiguous: optional_bool(obj, "license_ambiguous").unwrap_or(true),
+    })
+}
+
+fn parse_array<T>(
+    obj: &std::collections::BTreeMap<String, Json>,
+    key: &str,
+    parse: fn(&Json) -> Result<T, String>,
+) -> Result<Vec<T>, String> {
+    match obj.get(key) {
+        Some(value) => required_array_value(value, key)?
+            .iter()
+            .map(parse)
+            .collect(),
+        None => Ok(Vec::new()),
+    }
 }
 
 fn answer_key_from_json(value: &Json) -> Result<AnswerKey, String> {
@@ -287,4 +469,22 @@ fn context_pack_from_json(value: &Json) -> Result<ContextPack, String> {
         target_section_ids: optional_string_array(obj, "target_section_ids"),
         distractor_section_ids: optional_string_array(obj, "distractor_section_ids"),
     })
+}
+
+fn retrieval_kinds(obj: &std::collections::BTreeMap<String, Json>) -> Vec<String> {
+    match obj
+        .get("retrieval_receipts")
+        .and_then(|value| required_array_value(value, "retrieval_receipts").ok())
+    {
+        Some(items) => items
+            .iter()
+            .filter_map(as_object_ok)
+            .filter_map(|receipt| optional_string(receipt, "kind"))
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+fn optional_bool(obj: &std::collections::BTreeMap<String, Json>, key: &str) -> Option<bool> {
+    obj.get(key).and_then(as_bool)
 }

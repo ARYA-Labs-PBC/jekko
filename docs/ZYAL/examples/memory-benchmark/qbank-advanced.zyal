@@ -15,7 +15,7 @@ job:
   risk:
     - Reject license-ambiguous papers
     - Reject challenges without source-supported focused agreement
-    - Keep checked-in artifacts under crates/memory-benchmark/data/real-paper-bank
+    - Keep checked-in artifacts under crates/memory-benchmark/data/fixture-paper-bank
 
 loop:
   policy: once
@@ -25,7 +25,7 @@ loop:
 stop:
   all:
     - shell:
-        command: "test -d crates/memory-benchmark/data/real-paper-bank"
+        command: "test -d crates/memory-benchmark/data/fixture-paper-bank"
         timeout: 10s
         assert: { exit_code: 0 }
 
@@ -92,7 +92,7 @@ research:
       - "open access methods paper ablation table"
     open_access: required
     max_papers: 50
-    output_root: crates/memory-benchmark/data/real-paper-bank/papers
+    output_root: crates/memory-benchmark/data/fixture-paper-bank/papers
     raw_receipts: .jekko/daemon/paper-qbank-advanced/discovery
   full_text:
     enabled: true
@@ -102,7 +102,7 @@ research:
     license_policy: public_license_only
   dedupe:
     enabled: true
-    state_root: crates/memory-benchmark/data/real-paper-bank/papers
+    state_root: crates/memory-benchmark/data/fixture-paper-bank/papers
     duplicate_policy: skip_existing
     hash_keys: [doi, arxiv, pmid, pmcid, openalex, url, content_hash]
   context_packing:
@@ -111,20 +111,26 @@ research:
     output_reserve_tokens: 4096
     safe_window_tokens: 128000
   question_bank:
-    output_root: crates/memory-benchmark/data/real-paper-bank
-    papers_root: crates/memory-benchmark/data/real-paper-bank/papers
-    challenges_root: crates/memory-benchmark/data/real-paper-bank/challenges
-    rejected_root: crates/memory-benchmark/data/real-paper-bank/rejected
+    output_root: crates/memory-benchmark/data/fixture-paper-bank
+    papers_root: crates/memory-benchmark/data/fixture-paper-bank/papers
+    challenges_root: crates/memory-benchmark/data/fixture-paper-bank/challenges
+    rejected_root: crates/memory-benchmark/data/fixture-paper-bank/rejected
     work_items:
-      - id: generators
+      - id: publication_extract
+        publication_hash: pending
+        role: publication_extractor
+      - id: candidate_question_tournament
         publication_hash: pending
         role: question_generator
-      - id: blind-answerers
+      - id: focused_support_audit
         publication_hash: pending
-        role: answerer
-      - id: focused-auditors
+        role: focused_auditor
+      - id: saturated_blind_answering
         publication_hash: pending
-        role: auditor
+        role: saturated_answerer
+      - id: judge_reduce
+        publication_hash: pending
+        role: judge_reducer
     acceptance:
       min_auditor_agreement: 0.75
       min_answerability: 0.90
@@ -139,6 +145,11 @@ research:
     focused_auditors: 4
     min_auditor_agreement: 0.75
     min_answerability: 0.90
+  route_metadata:
+    required: true
+    require_request_id: true
+    require_provider: jnoccio
+    require_model_profile: true
 
 fleet:
   max_workers: 10
@@ -156,7 +167,14 @@ fleet:
 fan_out:
   strategy: scatter_gather
   split:
-    shell: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover --query 'open access hard answerable scientific papers' --run-root .jekko/daemon/paper-qbank-advanced/discovery && cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- make-work --bank crates/memory-benchmark/data/real-paper-bank --out .jekko/daemon/paper-qbank-advanced/work.jsonl"
+    shell: >
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover
+      --query 'redistributable open access hard answerable scientific papers'
+      --run-root .jekko/daemon/paper-qbank-advanced/discovery &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- make-work
+      --mode production-hard-recall
+      --bank crates/memory-benchmark/data/fixture-paper-bank
+      --out .jekko/daemon/paper-qbank-advanced/work.jsonl
   worker:
     agent: build
     isolation: git_worktree
@@ -166,18 +184,13 @@ fan_out:
     strategy: custom_shell
     command: >
       mkdir -p .jekko/daemon/paper-qbank-advanced/reports &&
-      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- publish --bank crates/memory-benchmark/data/real-paper-bank &&
-      if cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100 > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate.json;
-      then printf '{"mode":"production","dev_only":false}\n' > .jekko/daemon/paper-qbank-advanced/reports/qbank-mode.json;
-      else printf '{"mode":"dev_only_fixture_fallback","dev_only":true}\n' > .jekko/daemon/paper-qbank-advanced/reports/qbank-mode.json &&
-        memory_benchmark_dev_qbank=1 cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100 --allow-empty > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate.json;
-      fi &&
-      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- emit-cogcore --bank crates/memory-benchmark/data/real-paper-bank --out .jekko/daemon/paper-qbank-advanced/reports/cogcore-events.jsonl &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- reduce-trials --strict-production --input .jekko/daemon/paper-qbank-advanced/trials --bank crates/memory-benchmark/data/fixture-paper-bank --run-root .jekko/daemon/paper-qbank-advanced &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- publish --strict-production --bank crates/memory-benchmark/data/fixture-paper-bank &&
+      cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/fixture-paper-bank --top-n 100 > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate.json &&
+      printf '{"mode":"production","dev_only":false}\n' > .jekko/daemon/paper-qbank-advanced/reports/qbank-mode.json &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- emit-cogcore --bank crates/memory-benchmark/data/fixture-paper-bank --out .jekko/daemon/paper-qbank-advanced/reports/cogcore-events.jsonl &&
       cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin cogcore_bench -- --events .jekko/daemon/paper-qbank-advanced/reports/cogcore-events.jsonl --out .jekko/daemon/paper-qbank-advanced/reports/cogcore-smoke.json &&
-      if cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out .jekko/daemon/paper-qbank-advanced/reports/real-paper-top100.json;
-      then :;
-      else memory_benchmark_dev_qbank=1 cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/real-paper-bank --qbank-top-n 100 --out .jekko/daemon/paper-qbank-advanced/reports/real-paper-top100.json;
-      fi
+      cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate reference_evidence_ledger --suite real-papers --paper-bank crates/memory-benchmark/data/fixture-paper-bank --qbank-top-n 100 --out .jekko/daemon/paper-qbank-advanced/reports/real-paper-top100.json
   on_partial_failure: continue
 
 experiments:
@@ -187,7 +200,15 @@ experiments:
     min_plan_distance: 0.40
     axes: [generation, blind_hardness, focused_support, audit]
   lanes:
-    - id: question_tournament
+    - id: publication_extract
+      hypothesis: "Redistributable OA full text can be canonicalized into paper JSON with license proof."
+      prompt_strategy: qbank_publication_extract
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 60m
+      budget: { max_iterations: 6, max_diff_lines: 1200, max_cost_usd: 5.00 }
+    - id: candidate_question_tournament
       hypothesis: "Multi-generator tournament finds hard, source-supported QBank questions."
       prompt_strategy: qbank_generation_tournament
       agent: build
@@ -195,11 +216,27 @@ experiments:
       isolation: git_worktree
       timeout: 60m
       budget: { max_iterations: 6, max_diff_lines: 1200, max_cost_usd: 5.00 }
-    - id: saturated_blind_checks
+    - id: focused_support_audit
+      hypothesis: "Focused auditors verify source support and answerability with non-null route metadata."
+      prompt_strategy: focused_support_audit
+      agent: build
+      model: builder
+      isolation: git_worktree
+      timeout: 60m
+      budget: { max_iterations: 6, max_diff_lines: 1200, max_cost_usd: 5.00 }
+    - id: saturated_blind_answering
       hypothesis: "Saturated context blind answerers separate hard recall from easy lookup."
       prompt_strategy: saturated_context_blind_answering
       agent: build
       model: builder
+      isolation: git_worktree
+      timeout: 60m
+      budget: { max_iterations: 6, max_diff_lines: 1200, max_cost_usd: 5.00 }
+    - id: judge_reduce
+      hypothesis: "Judge reducer writes accepted v2 artifacts only when focused evidence is strong and saturated blind confidence stays low."
+      prompt_strategy: qbank_judge_reduce
+      agent: judge
+      model: critic
       isolation: git_worktree
       timeout: 60m
       budget: { max_iterations: 6, max_diff_lines: 1200, max_cost_usd: 5.00 }
@@ -242,7 +279,7 @@ memory:
 
 sandbox:
   paths:
-    - path: crates/memory-benchmark/data/real-paper-bank
+    - path: crates/memory-benchmark/data/fixture-paper-bank
       access: write
     - path: .jekko/daemon/paper-qbank-advanced
       access: write
@@ -278,10 +315,7 @@ done:
 checkpoint:
   verify:
     - command: >
-        if cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100 > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate-checkpoint.json;
-        then :;
-        else memory_benchmark_dev_qbank=1 cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/real-paper-bank --top-n 100 --allow-empty > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate-checkpoint.json;
-        fi
+        cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank crates/memory-benchmark/data/fixture-paper-bank --top-n 100 > .jekko/daemon/paper-qbank-advanced/reports/qbank-validate-checkpoint.json
       timeout: 5m
       assert: { exit_code: 0 }
 <<<END_ZYAL id=paper-qbank-advanced>>>

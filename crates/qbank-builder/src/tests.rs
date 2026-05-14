@@ -81,6 +81,14 @@ fn accepted_challenge(paper: &PaperRecord, canonical: &str, accepted: bool) -> C
             redistributable: true,
             reason: None,
         },
+        source_publication: None,
+        focused_support_trials: vec![],
+        saturated_blind_trials: vec![],
+        judge_trials: vec![],
+        context_packs: vec![],
+        route_metadata: vec![],
+        acceptance_metrics: None,
+        artifact_provenance: None,
         artifact_hash: None,
     })
 }
@@ -179,6 +187,14 @@ fn challenge_sort_is_deterministic() {
             blind_correct_rate: blind,
             ..base_acceptance.clone()
         },
+        source_publication: None,
+        focused_support_trials: vec![],
+        saturated_blind_trials: vec![],
+        judge_trials: vec![],
+        context_packs: vec![],
+        route_metadata: vec![],
+        acceptance_metrics: None,
+        artifact_provenance: None,
         artifact_hash: None,
     };
     let sorted = sorted_challenges(vec![
@@ -248,4 +264,359 @@ fn read_challenges_skips_directory_manifest() {
     let loaded = read_challenges(root.path()).expect("read challenges");
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].challenge_hash, challenge.challenge_hash);
+}
+
+#[test]
+fn seed_fixture_bank_writes_challenges_and_papers() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let source_manifest = root.path().join("seed-manifest.json");
+    std::fs::write(
+        &source_manifest,
+        r#"[
+  {
+    "challenge_hash": "fixture-qbank-001",
+    "publication_hash": "paper-fixture-001",
+    "question": "According to the fixture paper, what is result 001?",
+    "answer_key": "result 001",
+    "support_sections": ["s1"],
+    "context_pack": { "target_fill_ratio": 0.82, "output_reserve_tokens": 4096 },
+    "acceptance": { "accepted": true, "reason": "fixture" }
+  }
+]"#,
+    )
+    .expect("write seed manifest");
+
+    let bank = root.path().join("bank");
+    let summary = seed_fixture_bank(&bank, &source_manifest).expect("seed bank");
+    assert_eq!(summary.papers_written, 1);
+    assert_eq!(summary.challenges_written, 1);
+
+    let papers = read_papers(&bank).expect("read papers");
+    let challenges = read_challenges(&bank).expect("read challenges");
+    assert_eq!(papers.len(), 1);
+    assert_eq!(challenges.len(), 1);
+    assert_eq!(papers[0].publication_hash, "paper-fixture-001");
+    assert_eq!(challenges[0].publication_hash, "paper-fixture-001");
+    assert_eq!(challenges[0].support.len(), 1);
+    assert_eq!(
+        challenges[0].support[0].section_hash,
+        papers[0].sections[0].section_hash
+    );
+}
+
+#[test]
+fn agent_json_extracts_direct_fenced_and_wrapped_objects() {
+    let direct: GeneratorAgentOutput = parse_agent_json(
+        r#"{"question":"q","answer":"a","difficulty_rationale":"r","expected_failure_mode":"f","support":[],"confidence":80}"#,
+    )
+    .expect("direct json");
+    assert_eq!(direct.confidence, 80);
+
+    let fenced: TestingAgentOutput = parse_agent_json(
+        "```json\n{\"answer\":\"a\",\"confidence\":40,\"reasoning_summary\":\"r\"}\n```",
+    )
+    .expect("fenced json");
+    assert_eq!(fenced.answer, "a");
+
+    let wrapped: VerificationAgentOutput = parse_agent_json(
+        "Here is the object: {\"accepted\":true,\"answer\":\"a\",\"confidence\":90,\"support_correct\":true,\"reason\":\"r\",\"missing_or_wrong_support\":[]} done.",
+    )
+    .expect("wrapped json");
+    assert!(wrapped.accepted);
+    assert!(parse_agent_json::<TestingAgentOutput>(
+        "{\"answer\":\"a\",\"confidence\":40,\"reasoning_summary\":\"r\"} and {\"answer\":\"b\"}"
+    )
+    .is_err());
+}
+
+#[test]
+fn generator_validation_rejects_bad_confidence_and_missing_quote() {
+    let paper = canonicalize_paper(sample_paper()).expect("paper");
+    let valid_support = vec![SupportQuote {
+        section_id: "s1".to_string(),
+        section_hash: paper.sections[0].section_hash.clone(),
+        quote: "Alpha equals one in the calibrated fixture.".to_string(),
+        why_it_matters: "support".to_string(),
+    }];
+    let mut output = GeneratorAgentOutput {
+        question: "What value?".to_string(),
+        answer: "one".to_string(),
+        difficulty_rationale: "hard".to_string(),
+        expected_failure_mode: "miss".to_string(),
+        support: valid_support,
+        confidence: 101,
+    };
+    assert!(agent_json::validate_generator_output(&output, &paper).is_err());
+    output.confidence = 80;
+    output.support[0].quote = "absent quote".to_string();
+    assert!(agent_json::validate_generator_output(&output, &paper).is_err());
+}
+
+#[test]
+fn generator_validation_preserves_raw_answer_but_trusts_exact_support_quote() {
+    let paper = canonicalize_paper(sample_paper()).expect("paper");
+    let output = GeneratorAgentOutput {
+        question: "What value anchors the calibrated fixture?".to_string(),
+        answer: "The calibrated value is one.".to_string(),
+        difficulty_rationale: "hard".to_string(),
+        expected_failure_mode: "paraphrase".to_string(),
+        support: vec![SupportQuote {
+            section_id: "s1".to_string(),
+            section_hash: paper.sections[0].section_hash.clone(),
+            quote: "Alpha equals one in the calibrated fixture.".to_string(),
+            why_it_matters: "support".to_string(),
+        }],
+        confidence: 80,
+    };
+
+    agent_json::validate_generator_output(&output, &paper).expect("valid support quote");
+    assert_ne!(output.answer, output.support[0].quote);
+}
+
+#[test]
+fn full_text_validation_rejects_abstract_only_production_paper() {
+    let mut paper = sample_paper();
+    paper.sections = vec![PaperSection {
+        section_id: "abstract".to_string(),
+        title: "Abstract".to_string(),
+        text: "Only an abstract is present.".to_string(),
+        section_hash: String::new(),
+    }];
+    paper.license.source_url = Some("https://openaccess.example/paper".to_string());
+    paper.retrieval_receipts = vec![serde_json::json!({"kind":"test_import"})];
+    let paper = canonicalize_paper(paper).expect("paper");
+    assert!(validate_full_text_paper(&paper, true).is_err());
+}
+
+#[test]
+fn live_support_quote_candidates_are_exact_body_quotes() {
+    let mut paper = sample_paper();
+    paper.title = "Real Results Paper".to_string();
+    paper.sections = vec![
+        PaperSection {
+            section_id: "s1".to_string(),
+            title: "Results".to_string(),
+            text: "The measured fracture strain increased to 87 percent after the third annealing pass, while the control group remained below 40 percent in the same assay. This follow-up sentence is shorter.".to_string(),
+            section_hash: String::new(),
+        },
+        PaperSection {
+            section_id: "refs".to_string(),
+            title: "References".to_string(),
+            text: "The reference list contains 100 entries and should never be used as a hard answer support quote.".to_string(),
+            section_hash: String::new(),
+        },
+    ];
+    let paper = canonicalize_paper(paper).expect("paper");
+
+    let candidates = crate::paper_tournament::support_quote_candidates(&paper);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, "q001");
+    assert_eq!(candidates[0].section_id, "s1");
+    assert!(paper.sections[0].text.contains(&candidates[0].quote));
+    assert_eq!(candidates[0].section_hash, paper.sections[0].section_hash);
+}
+
+#[test]
+fn live_paper_quality_rejects_corrections_and_errata() {
+    let mut paper = sample_paper();
+    paper.title = "Correction: Alpha Paper".to_string();
+    assert!(!crate::paper_tournament::paper_quality_allowed(&paper));
+    paper.title = "Alpha Paper With Full Results".to_string();
+    assert!(crate::paper_tournament::paper_quality_allowed(&paper));
+}
+
+#[test]
+fn testing_prompt_blinds_target_and_includes_distractor_content_without_answer_key() {
+    let primary = canonicalize_paper(sample_paper()).expect("primary");
+    let mut distractor = sample_paper();
+    distractor.title = "Distractor Paper".to_string();
+    distractor.dedupe_keys = vec!["doi:10.1/distractor".to_string()];
+    distractor.source_ids = vec!["doi:10.1/distractor".to_string()];
+    distractor.sections[0].text =
+        "The distractor result reports a calibrated beta value of 19 percent after the control pass."
+            .to_string();
+    let distractor = canonicalize_paper(distractor).expect("distractor");
+    let prompt = build_testing_prompt(
+        &primary,
+        &[primary.clone(), distractor.clone()],
+        &[distractor.publication_hash.clone()],
+        "Which calibrated fixture value does the result section state?",
+    );
+
+    assert!(prompt.contains("Paper "));
+    assert!(prompt.contains("Distractor Paper"));
+    assert!(prompt.contains("calibrated beta value"));
+    assert!(prompt.contains(
+        "Confidence must mean confidence that your answer contains every requested material detail"
+    ));
+    assert!(!prompt.contains("Primary paper"));
+    assert!(!prompt.contains("Distractor paper:"));
+    assert!(!prompt.contains("Answer key:"));
+    assert!(!prompt.contains("hard_answer"));
+}
+
+#[test]
+fn tournament_majority_and_grader_reduction_follow_plan_thresholds() {
+    let verifier = |accepted: bool, index: usize| VerificationTrial {
+        agent_name: format!("v{index}"),
+        output: VerificationAgentOutput {
+            accepted,
+            answer: "answer".to_string(),
+            confidence: 80,
+            support_correct: accepted,
+            reason: "reason".to_string(),
+            missing_or_wrong_support: Vec::new(),
+        },
+        receipt: AgentCallReceipt {
+            agent_name: format!("v{index}"),
+            phase: "verification".to_string(),
+            prompt_hash: "p".to_string(),
+            context_hash: "c".to_string(),
+            raw_output_hash: "r".to_string(),
+            route_metadata: None,
+            token_usage: None,
+        },
+    };
+    assert!(verification_majority(&[
+        verifier(true, 1),
+        verifier(true, 2),
+        verifier(true, 3),
+        verifier(false, 4),
+        verifier(false, 5),
+    ]));
+    assert!(!verification_majority(&[
+        verifier(true, 1),
+        verifier(true, 2),
+        verifier(false, 3),
+        verifier(false, 4),
+        verifier(false, 5),
+    ]));
+
+    let grading = |correct: bool, index: usize| GradingTrial {
+        agent_name: format!("g{index}"),
+        testing_agent_name: "tester".to_string(),
+        output: GradingAgentOutput {
+            correct,
+            score_0_100: if correct { 90 } else { 10 },
+            matched_key_points: Vec::new(),
+            missed_key_points: Vec::new(),
+            reason: "reason".to_string(),
+        },
+        receipt: AgentCallReceipt {
+            agent_name: format!("g{index}"),
+            phase: "grading".to_string(),
+            prompt_hash: "p".to_string(),
+            context_hash: "c".to_string(),
+            raw_output_hash: "r".to_string(),
+            route_metadata: None,
+            token_usage: None,
+        },
+    };
+    let reduced = grade_reduction(
+        &[grading(true, 1), grading(true, 2), grading(false, 3)],
+        "tester",
+    )
+    .expect("reduction");
+    assert!(reduced.0);
+    assert!(reduced.1 > 60.0);
+}
+
+#[test]
+fn mock_tournament_preserves_decimal_answer_text() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let bank = root.path().join("bank");
+    let run_root = root.path().join("run");
+    let config = BuildPaperTournamentConfig {
+        bank,
+        run_root,
+        target_accepted: 1,
+        candidate_papers: 1,
+        generators: 3,
+        verifiers: 3,
+        testers: 3,
+        graders: 3,
+        distractor_papers: 2,
+        strict_production: false,
+        agent_runner: AgentRunnerMode::Mock,
+        jnoccio_base_url: None,
+        jnoccio_model: None,
+        jnoccio_max_output_tokens: 4096,
+        jnoccio_request_timeout_seconds: 120,
+        paper_timeout_seconds: 900,
+        phase_retries: 2,
+        progress_jsonl: None,
+        candidate_manifest: None,
+        resume: false,
+        allow_mock_smoke: true,
+        mock_agents: None,
+    };
+    let summary = build_paper_tournament(&config).expect("build tournament");
+    let artifact_path = summary
+        .sample_accepted_artifact
+        .expect("sample accepted artifact");
+    let artifact: FinalPaperChallengeArtifact = read_json(&artifact_path).expect("artifact");
+    assert_eq!(
+        final_paper_challenge_artifact_hash(&artifact).expect("artifact hash"),
+        artifact.artifact_hash
+    );
+    assert!(artifact.hard_answer.contains("42.7 microjoules"));
+    assert!(artifact.hard_answer.contains("annealing pass"));
+    assert!(artifact.generation_trials[0].output.support[0]
+        .quote
+        .contains("42.7 microjoules"));
+    assert_eq!(
+        artifact.hard_answer,
+        artifact.generation_trials[0].output.support[0].quote
+    );
+}
+
+#[test]
+fn mock_tournament_writes_accepted_artifact_and_challenge() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let bank = root.path().join("bank");
+    let run_root = root.path().join("run");
+    let config = BuildPaperTournamentConfig {
+        bank: bank.clone(),
+        run_root: run_root.clone(),
+        target_accepted: 1,
+        candidate_papers: 1,
+        generators: 3,
+        verifiers: 3,
+        testers: 3,
+        graders: 3,
+        distractor_papers: 2,
+        strict_production: false,
+        agent_runner: AgentRunnerMode::Mock,
+        jnoccio_base_url: None,
+        jnoccio_model: None,
+        jnoccio_max_output_tokens: 4096,
+        jnoccio_request_timeout_seconds: 120,
+        paper_timeout_seconds: 900,
+        phase_retries: 2,
+        progress_jsonl: None,
+        candidate_manifest: None,
+        resume: false,
+        allow_mock_smoke: true,
+        mock_agents: None,
+    };
+    let summary = build_paper_tournament(&config).expect("build tournament");
+    assert_eq!(summary.accepted, 1);
+    assert!(summary.reduce_report.exists());
+    let artifact_path = summary
+        .sample_accepted_artifact
+        .expect("sample accepted artifact");
+    let artifact: FinalPaperChallengeArtifact = read_json(&artifact_path).expect("artifact");
+    assert!(!artifact.paper_content.full_text.is_empty());
+    assert!(!artifact.hard_question.is_empty());
+    assert!(!artifact.hard_answer.is_empty());
+    assert!(!artifact.artifact_hash.is_empty());
+
+    let challenges = read_challenges(&bank).expect("challenges");
+    assert_eq!(challenges.len(), 1);
+    assert!(!challenges[0].challenge_hash.is_empty());
+    assert!(challenges[0]
+        .artifact_provenance
+        .as_ref()
+        .is_some_and(|provenance| provenance.fixture_provenance));
+    assert!(!production_acceptance_errors(&challenges[0]).is_empty());
 }

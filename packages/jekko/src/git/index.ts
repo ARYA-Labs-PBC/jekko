@@ -1,5 +1,5 @@
 import { CrossSpawnSpawner } from "@jekko-ai/core/cross-spawn-spawner"
-import { Effect, Layer, Context } from "effect"
+import { Effect, Exit, Fiber, Layer, Context } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { collectStreamOutput } from "@/util/process-output"
 
@@ -115,12 +115,21 @@ export const layer = Layer.effect(
           stderr: "pipe",
         })
         const handle = yield* spawner.spawn(proc)
-        const [stdout, stderr] = yield* Effect.all(
-          [collectStreamOutput(handle.stdout, opts.maxOutputBytes), collectStreamOutput(handle.stderr, opts.maxOutputBytes)],
-          { concurrency: 2 },
+        const stdoutFiber = yield* Effect.forkScoped(collectStreamOutput(handle.stdout, opts.maxOutputBytes))
+        const stderrFiber = yield* Effect.forkScoped(collectStreamOutput(handle.stderr, opts.maxOutputBytes))
+        const exitCode = yield* handle.exitCode
+        const stdout = yield* Fiber.await(stdoutFiber).pipe(
+          Effect.flatMap((result) =>
+            Exit.isSuccess(result) ? Effect.succeed(result.value) : Effect.failCause(result.cause),
+          ),
+        )
+        const stderr = yield* Fiber.await(stderrFiber).pipe(
+          Effect.flatMap((result) =>
+            Exit.isSuccess(result) ? Effect.succeed(result.value) : Effect.failCause(result.cause),
+          ),
         )
         return {
-          exitCode: yield* handle.exitCode,
+          exitCode,
           text: () => stdout.buffer.toString("utf8"),
           stdout: stdout.buffer,
           stderr: stderr.buffer,

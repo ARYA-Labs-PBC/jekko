@@ -11,7 +11,10 @@ pub struct PubMedProvider {
 
 impl PubMedProvider {
     pub fn new(email: String) -> Self {
-        Self { client: client(), email }
+        Self {
+            client: client(),
+            email,
+        }
     }
 
     pub fn parse_fixture(value: &Value) -> Result<ProviderSearchResponse> {
@@ -20,7 +23,10 @@ impl PubMedProvider {
             None => Vec::new(),
         };
         let mut hits = Vec::new();
-        for id in ids.into_iter().filter_map(|value| value.as_str().map(str::to_string)) {
+        for id in ids
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+        {
             hits.push(crate::providers::hit_from_value(
                 ProviderId::PubMed,
                 format!("PubMed PMID {id}"),
@@ -29,13 +35,20 @@ impl PubMedProvider {
                 vec![format!("pmid:{id}")],
             )?);
         }
-        Ok(ProviderSearchResponse { hits, evidence: Vec::new(), receipts: Vec::new(), warnings: Vec::new() })
+        Ok(ProviderSearchResponse {
+            hits,
+            evidence: Vec::new(),
+            receipts: Vec::new(),
+            warnings: Vec::new(),
+        })
     }
 }
 
 #[async_trait]
 impl SearchProvider for PubMedProvider {
-    fn id(&self) -> ProviderId { ProviderId::PubMed }
+    fn id(&self) -> ProviderId {
+        ProviderId::PubMed
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(false, true, false, false, false, false, true)
@@ -50,9 +63,18 @@ impl SearchProvider for PubMedProvider {
             .append_pair("retmax", &req.limit.to_string())
             .append_pair("tool", "agent_search")
             .append_pair("email", &self.email);
-        let json: Value = self.client.get(url).send().await?.error_for_status()?.json().await?;
+        let json: Value = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         let mut response = Self::parse_fixture(&json)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

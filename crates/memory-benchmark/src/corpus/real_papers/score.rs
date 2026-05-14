@@ -1,6 +1,5 @@
 use super::super::model::{
-    wanted_section_ids, LoadedChallenge, NumericTolerance, PaperChallenge, PaperRecord,
-    PaperSection,
+    LoadedChallenge, NumericTolerance, PaperChallenge, PaperRecord, PaperSection,
 };
 use super::allow_fixture_qbank;
 use crate::{AxisScores, ClaimModality, Event, EventKind, MemorySystem, PrivacyClass, Source};
@@ -26,11 +25,7 @@ pub(crate) fn observe_paper(
             paper.publication_hash
         ));
     }
-    let wanted = wanted_section_ids(challenge);
     for section in paper.sections {
-        if !wanted.is_empty() && !wanted.contains(&section.section_id) {
-            continue;
-        }
         let event = Event {
             id: format!("{}#{}", paper.publication_hash, section.section_id),
             kind: EventKind::Claim,
@@ -78,6 +73,10 @@ fn fixture_paper_from_challenge(challenge: &PaperChallenge) -> PaperRecord {
         title: "fixture paper".to_string(),
         license_spdx: "CC-BY-4.0".to_string(),
         redistributable: true,
+        dedupe_keys: Vec::new(),
+        source_ids: Vec::new(),
+        source_url: None,
+        retrieval_kinds: Vec::new(),
         sections: challenge
             .support
             .iter()

@@ -43,7 +43,11 @@ pub struct ProviderPolicy {
 impl Default for ProviderPolicy {
     fn default() -> Self {
         Self {
-            prefer: vec!["official_api".to_string(), "primary_source".to_string(), "privacy_first".to_string()],
+            prefer: vec![
+                "official_api".to_string(),
+                "primary_source".to_string(),
+                "privacy_first".to_string(),
+            ],
             allow: vec![
                 "openalex".to_string(),
                 "crossref".to_string(),
@@ -85,7 +89,11 @@ impl Default for ExtractionPolicy {
         Self {
             enabled: true,
             max_pages: 12,
-            allowed_extractors: vec![ExtractorId::BuiltIn, ExtractorId::Jina, ExtractorId::Firecrawl],
+            allowed_extractors: vec![
+                ExtractorId::BuiltIn,
+                ExtractorId::Jina,
+                ExtractorId::Firecrawl,
+            ],
         }
     }
 }

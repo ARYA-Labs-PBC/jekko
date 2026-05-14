@@ -15,7 +15,11 @@ fn synthetic_event(topic: &str, idx: usize) -> StoredEvent {
     let subject = format!("{} subject {}", topic, idx);
     let body = format!(
         "Synthetic body for {} cell {} — describes properties P{}, Q{}, R{}.",
-        topic, idx, idx % 7, idx % 11, idx % 13
+        topic,
+        idx,
+        idx % 7,
+        idx % 11,
+        idx % 13
     );
     StoredEvent {
         id: String::new(),
@@ -70,7 +74,11 @@ fn scale_10k_ingest_then_recall_under_budget() {
 
     // Memory ceiling: state_bytes < 256 MiB
     let state_bytes = core.state_bytes();
-    eprintln!("scale_10k: state_bytes={} ({:.2} MiB)", state_bytes, state_bytes as f64 / (1024.0 * 1024.0));
+    eprintln!(
+        "scale_10k: state_bytes={} ({:.2} MiB)",
+        state_bytes,
+        state_bytes as f64 / (1024.0 * 1024.0)
+    );
     assert!(
         state_bytes < 256 * 1024 * 1024,
         "state_bytes {} exceeded 256 MiB",

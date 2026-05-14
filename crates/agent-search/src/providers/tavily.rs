@@ -10,7 +10,10 @@ pub struct TavilyProvider {
 
 impl TavilyProvider {
     pub fn new(api_key: String) -> Self {
-        Self { client: client(), api_key }
+        Self {
+            client: client(),
+            api_key,
+        }
     }
 
     pub fn parse_fixture(value: &Value) -> Result<ProviderSearchResponse> {
@@ -32,7 +35,9 @@ impl TavilyProvider {
 
 #[async_trait]
 impl SearchProvider for TavilyProvider {
-    fn id(&self) -> ProviderId { ProviderId::Tavily }
+    fn id(&self) -> ProviderId {
+        ProviderId::Tavily
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(true, false, false, false, false, true, true)
@@ -61,7 +66,9 @@ impl SearchProvider for TavilyProvider {
             .json()
             .await?;
         let mut response = Self::parse_fixture(&json)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

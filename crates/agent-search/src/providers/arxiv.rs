@@ -33,7 +33,12 @@ impl ArxivProvider {
                 vec!["arxiv".to_string()],
             )?);
         }
-        Ok(ProviderSearchResponse { hits, evidence: Vec::new(), receipts: Vec::new(), warnings: Vec::new() })
+        Ok(ProviderSearchResponse {
+            hits,
+            evidence: Vec::new(),
+            receipts: Vec::new(),
+            warnings: Vec::new(),
+        })
     }
 }
 
@@ -58,7 +63,9 @@ fn html_unescape(input: &str) -> String {
 
 #[async_trait]
 impl SearchProvider for ArxivProvider {
-    fn id(&self) -> ProviderId { ProviderId::Arxiv }
+    fn id(&self) -> ProviderId {
+        ProviderId::Arxiv
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(false, true, false, false, false, false, true)
@@ -70,9 +77,18 @@ impl SearchProvider for ArxivProvider {
             .append_pair("search_query", &req.query)
             .append_pair("start", "0")
             .append_pair("max_results", &req.limit.to_string());
-        let body = self.client.get(url).send().await?.error_for_status()?.text().await?;
+        let body = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
         let mut response = Self::parse_fixture(&body)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

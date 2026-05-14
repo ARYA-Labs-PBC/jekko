@@ -76,7 +76,12 @@ fn rebuild_preserves_state_hash() {
 fn historical_recall_does_not_mutate() {
     let mut c = Core::default();
     c.observe(ev("prior", "subj", "prior fact", "2020-01-01T00:00:00Z"));
-    c.observe(ev("current", "subj", "current fact", "2025-01-01T00:00:00Z"));
+    c.observe(ev(
+        "current",
+        "subj",
+        "current fact",
+        "2025-01-01T00:00:00Z",
+    ));
     let before = c.export_state_hash();
     c.recall_as_of(&q("subj"), "2022-06-01T00:00:00Z");
     c.recall_at(&q("subj"), "2022-06-01T00:00:00Z");

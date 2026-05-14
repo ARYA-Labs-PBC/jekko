@@ -17,7 +17,9 @@ struct TestProvider {
 
 #[async_trait]
 impl SearchProvider for TestProvider {
-    fn id(&self) -> ProviderId { self.id }
+    fn id(&self) -> ProviderId {
+        self.id
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(true, true, true, true, false, false, true)
@@ -92,6 +94,12 @@ async fn honors_max_parallel_and_surfaces_partial_failures() {
     let response = search_parallel(providers, request, QueryClass::Mixed).await;
     assert_eq!(peak.load(Ordering::SeqCst), 1);
     assert_eq!(response.hits.len(), 1);
-    assert!(response.warnings.iter().any(|warning| warning.contains("boom")));
-    assert!(response.receipts.iter().any(|receipt| matches!(receipt.status, ReceiptStatus::Failed)));
+    assert!(response
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("boom")));
+    assert!(response
+        .receipts
+        .iter()
+        .any(|receipt| matches!(receipt.status, ReceiptStatus::Failed)));
 }

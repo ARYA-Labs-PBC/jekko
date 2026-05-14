@@ -37,7 +37,9 @@ crate::providers::default_from_new!(GdeltProvider);
 
 #[async_trait]
 impl SearchProvider for GdeltProvider {
-    fn id(&self) -> ProviderId { ProviderId::Gdelt }
+    fn id(&self) -> ProviderId {
+        ProviderId::Gdelt
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(true, false, true, false, false, false, true)
@@ -50,9 +52,18 @@ impl SearchProvider for GdeltProvider {
             .append_pair("mode", "artlist")
             .append_pair("format", "json")
             .append_pair("maxrecords", &req.limit.to_string());
-        let json: Value = self.client.get(url).send().await?.error_for_status()?.json().await?;
+        let json: Value = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         let mut response = Self::parse_fixture(&json)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

@@ -278,8 +278,7 @@ impl Core {
             contradiction_pressure: 0.0,
             stats: crate::topic::empty_stats(),
         });
-        self.topic_lookup
-            .insert(consolidate::topic_key(label), id);
+        self.topic_lookup.insert(consolidate::topic_key(label), id);
         id
     }
 }

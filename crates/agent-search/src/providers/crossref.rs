@@ -11,11 +11,17 @@ pub struct CrossrefProvider {
 
 impl CrossrefProvider {
     pub fn new(mailto: Option<String>) -> Self {
-        Self { client: client(), mailto }
+        Self {
+            client: client(),
+            mailto,
+        }
     }
 
     pub fn parse_fixture(value: &Value) -> Result<ProviderSearchResponse> {
-        let items = match value.get("message").and_then(|message| message.get("items")) {
+        let items = match value
+            .get("message")
+            .and_then(|message| message.get("items"))
+        {
             Some(items) => array_or_empty(Some(items)),
             None => Vec::new(),
         };
@@ -33,7 +39,9 @@ impl CrossrefProvider {
 
 #[async_trait]
 impl SearchProvider for CrossrefProvider {
-    fn id(&self) -> ProviderId { ProviderId::Crossref }
+    fn id(&self) -> ProviderId {
+        ProviderId::Crossref
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(false, true, false, false, false, false, true)
@@ -41,11 +49,20 @@ impl SearchProvider for CrossrefProvider {
 
     async fn search(&self, req: ProviderSearchRequest) -> Result<ProviderSearchResponse> {
         let mut url = Url::parse("https://api.crossref.org/works")?;
-        url.query_pairs_mut().append_pair("query", &req.query).append_pair("rows", &req.limit.to_string());
+        url.query_pairs_mut()
+            .append_pair("query", &req.query)
+            .append_pair("rows", &req.limit.to_string());
         if let Some(email) = &self.mailto {
             url.query_pairs_mut().append_pair("mailto", email);
         }
-        let json: Value = self.client.get(url).send().await?.error_for_status()?.json().await?;
+        let json: Value = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         let items = match json.get("message").and_then(|message| message.get("items")) {
             Some(items) => array_or_empty(Some(items)),
             None => Vec::new(),
@@ -59,7 +76,9 @@ impl SearchProvider for CrossrefProvider {
             &["abstract", "publisher"],
             Some("doi"),
         )?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }

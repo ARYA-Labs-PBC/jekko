@@ -58,6 +58,10 @@ fn answer_key_is_not_observed_as_memory_event() {
             title: "Paper A".to_string(),
             license_spdx: "CC-BY-4.0".to_string(),
             redistributable: true,
+            dedupe_keys: Vec::new(),
+            source_ids: Vec::new(),
+            source_url: None,
+            retrieval_kinds: Vec::new(),
             sections: vec![PaperSection {
                 section_id: "s1".to_string(),
                 title: "Result".to_string(),
@@ -67,6 +71,7 @@ fn answer_key_is_not_observed_as_memory_event() {
             }],
         }),
         challenge: PaperChallenge {
+            schema_version: "opencode-qbank-challenge-v1".to_string(),
             challenge_hash: "challenge-a".to_string(),
             publication_hash: "paper-a".to_string(),
             domain: "science".to_string(),
@@ -89,6 +94,14 @@ fn answer_key_is_not_observed_as_memory_event() {
                 target_section_ids: vec!["s1".to_string()],
                 ..ContextPack::default()
             },
+            source_publication: None,
+            focused_support_trials: Vec::new(),
+            saturated_blind_trials: Vec::new(),
+            judge_trials: Vec::new(),
+            context_packs: Vec::new(),
+            route_metadata: Vec::new(),
+            acceptance_metrics: None,
+            artifact_provenance: None,
         },
     };
     let mut adapter = baseline::Adapter::default();
@@ -168,7 +181,7 @@ fn validate_bank_requires_papers_unless_dev_mode_is_explicit() {
 ]"#,
     )
     .expect("write manifest");
-    let prod = super::validation::validate_bank(&root, false, 50).expect("validate prod");
+    let prod = super::validation::validate_bank(&root, false, 50, 50).expect("validate prod");
     assert!(
         prod.errors
             .iter()
@@ -178,13 +191,32 @@ fn validate_bank_requires_papers_unless_dev_mode_is_explicit() {
     );
 
     std::env::set_var("memory_benchmark_dev_qbank", "1");
-    let dev = super::validation::validate_bank(&root, false, 50).expect("validate dev");
+    let dev = super::validation::validate_bank(&root, false, 50, 50).expect("validate dev");
     assert!(dev.errors.is_empty(), "dev errors: {:?}", dev.errors);
     assert!(dev
         .warnings
         .iter()
         .any(|warning| warning.contains("dev_only fixture qbank mode enabled")));
     std::env::remove_var("memory_benchmark_dev_qbank");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn empty_allowed_bank_passes_quarantine_validation() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    std::env::remove_var("memory_benchmark_dev_qbank");
+    let root = temp_qbank_dir("empty-allowed-bank");
+    std::fs::create_dir_all(root.join("papers")).expect("create papers");
+    std::fs::create_dir_all(root.join("challenges")).expect("create challenges");
+    std::fs::create_dir_all(root.join("rejected")).expect("create rejected");
+    let validation = super::validation::validate_bank(&root, true, 50, 50).expect("validate empty");
+    assert!(
+        validation.errors.is_empty(),
+        "errors: {:?}",
+        validation.errors
+    );
+    assert!(!validation.qbank_trusted);
+    assert_eq!(validation.accepted_challenges, 0);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -220,6 +252,7 @@ fn top_n_sort_uses_hardness_then_rates_then_hashes() {
 
 fn fixture_challenge(hash: &str, difficulty: f32, blind: f32) -> PaperChallenge {
     PaperChallenge {
+        schema_version: "opencode-qbank-challenge-v1".to_string(),
         challenge_hash: hash.to_string(),
         publication_hash: "paper".to_string(),
         domain: "science".to_string(),
@@ -242,6 +275,14 @@ fn fixture_challenge(hash: &str, difficulty: f32, blind: f32) -> PaperChallenge 
             section_hash: "h1".to_string(),
         }],
         context_pack: ContextPack::default(),
+        source_publication: None,
+        focused_support_trials: Vec::new(),
+        saturated_blind_trials: Vec::new(),
+        judge_trials: Vec::new(),
+        context_packs: Vec::new(),
+        route_metadata: Vec::new(),
+        acceptance_metrics: None,
+        artifact_provenance: None,
     }
 }
 

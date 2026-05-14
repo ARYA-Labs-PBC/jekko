@@ -5,6 +5,7 @@ pub(crate) use score::{challenge_order, observe_paper};
 
 use super::model::{LoadedChallenge, PaperChallenge};
 use super::parse::{load_all_challenges, load_paper, load_selection};
+use super::validation::validate_bank;
 use crate::json::Json;
 use crate::memory_api::axes_to_json;
 use crate::runner::CandidateReport;
@@ -64,6 +65,7 @@ pub fn run_candidate(
 ) -> Result<CandidateReport, String> {
     let loaded = load_bank(bank, config)?;
     let dev_only = allow_fixture_qbank();
+    let validation = validate_bank(bank, false, config.qbank_top_n.max(100), 500)?;
     if loaded.is_empty() {
         return Err(format!(
             "no accepted challenge JSON found under {}",
@@ -75,6 +77,13 @@ pub fn run_candidate(
             "real-papers bank at {} has only {} accepted challenges (need 50 unless memory_benchmark_dev_qbank=1)",
             bank.display(),
             loaded.len()
+        ));
+    }
+    if !dev_only && !validation.qbank_trusted {
+        return Err(format!(
+            "real-papers bank at {} failed strict production validation: {}",
+            bank.display(),
+            validation.errors.join("; ")
         ));
     }
 
@@ -136,7 +145,31 @@ pub fn run_candidate(
     top.insert("dev_only".to_string(), Json::Bool(dev_only));
     top.insert(
         "qbank_trusted".to_string(),
-        Json::Bool(!dev_only && loaded.len() >= 50),
+        Json::Bool(
+            !dev_only
+                && validation.accepted_challenges >= validation.min_required_accepted
+                && validation.qbank_trusted,
+        ),
+    );
+    top.insert(
+        "qbank_strict_production".to_string(),
+        Json::Bool(validation.strict_production),
+    );
+    top.insert(
+        "qbank_min_required_accepted".to_string(),
+        Json::Int(validation.min_required_accepted as i64),
+    );
+    top.insert(
+        "qbank_unique_publications".to_string(),
+        Json::Int(validation.unique_publications as i64),
+    );
+    top.insert(
+        "qbank_accepted_challenges".to_string(),
+        Json::Int(validation.accepted_challenges as i64),
+    );
+    top.insert(
+        "qbank_source_diversity".to_string(),
+        Json::Float(validation.source_diversity as f64),
     );
     top.insert("total".to_string(), Json::Float(total as f64));
     top.insert("axes".to_string(), axes_to_json(&avg));

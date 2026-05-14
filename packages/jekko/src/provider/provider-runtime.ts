@@ -53,6 +53,7 @@ import {
   sort,
   toPluginProvider,
 } from "./provider-schema"
+import { createJnoccioMetadataExtractor, wrapJnoccioLanguageModel } from "./jnoccio-route-metadata"
 import type { Interface, State } from "./provider-schema"
 
 export {
@@ -1299,6 +1300,9 @@ const layer: Layer.Layer<
             ...options["headers"],
             ...model.headers,
           }
+        if (model.providerID === JNOCCIO_PROVIDER_ID && model.api.npm.includes("@ai-sdk/openai-compatible")) {
+          options["metadataExtractor"] = createJnoccioMetadataExtractor()
+        }
 
         const key = Hash.fast(
           JSON.stringify({
@@ -1443,8 +1447,9 @@ const layer: Layer.Layer<
                 ...model.options,
               })
             : sdk.languageModel(model.api.id)
-          s.models.set(key, language)
-          return language
+          const resolved = model.providerID === JNOCCIO_PROVIDER_ID ? wrapJnoccioLanguageModel(language) : language
+          s.models.set(key, resolved)
+          return resolved
         } catch (e) {
           if (e instanceof NoSuchModelError)
             throw new ModelNotFoundError(

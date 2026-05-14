@@ -3,7 +3,10 @@ use std::str::FromStr;
 
 #[test]
 fn provider_id_parsing_and_display_stay_stable() {
-    assert_eq!(ProviderId::from_str("semantic-scholar").unwrap(), ProviderId::SemanticScholar);
+    assert_eq!(
+        ProviderId::from_str("semantic-scholar").unwrap(),
+        ProviderId::SemanticScholar
+    );
     assert_eq!(ProviderId::SemanticScholar.to_string(), "semantic_scholar");
 }
 

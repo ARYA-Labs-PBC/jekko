@@ -104,6 +104,8 @@ ZYAL_ARM RUN_FOREVER id=test`
       "generated-challenge.zyal",
       "prompt-scoring.zyal",
       "qbank-advanced.zyal",
+      "qbank-deep-stem-500.zyal",
+      "qbank-live-smoke-10.zyal",
       "qbank-simple.zyal",
       "qbank-ultra.zyal",
     ])
@@ -112,6 +114,17 @@ ZYAL_ARM RUN_FOREVER id=test`
       expect(parsed.spec.intent).toBe("daemon")
       expect(parsed.preview.id).toBe(parsed.spec.id)
     }
+  })
+
+  test("parses the production qbank deep STEM 500 headless script", async () => {
+    const file = path.resolve(
+      import.meta.dir,
+      "../../../../docs/ZYAL/examples/memory-benchmark/qbank-deep-stem-500.zyal",
+    )
+    const parsed = await Effect.runPromise(parseZyal(fs.readFileSync(file, "utf8")))
+    expect(parsed.spec.id).toBe("paper-qbank-deep-stem-500")
+    expect(parsed.preview.armed).toBe(true)
+    expect(parsed.spec.fan_out?.split?.shell).toContain("make-work")
   })
 
   test("accepts experiments scoring primary and rejects unknown scoring keys", async () => {
@@ -395,6 +408,8 @@ ZYAL_ARM RUN_FOREVER id=one`
       "memory-benchmark/generated-challenge.zyal",
       "memory-benchmark/prompt-scoring.zyal",
       "memory-benchmark/qbank-advanced.zyal",
+      "memory-benchmark/qbank-deep-stem-500.zyal",
+      "memory-benchmark/qbank-live-smoke-10.zyal",
       "memory-benchmark/qbank-simple.zyal",
       "memory-benchmark/qbank-ultra.zyal",
     ])

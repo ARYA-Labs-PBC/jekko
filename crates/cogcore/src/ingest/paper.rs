@@ -479,7 +479,11 @@ mod tests {
         };
         let events = RuleBackend.ingest_paper(&paper);
         // Abstract + 1 section + at least 1 equation
-        assert!(events.len() >= 2, "expected >=2 events, got {}", events.len());
+        assert!(
+            events.len() >= 2,
+            "expected >=2 events, got {}",
+            events.len()
+        );
         assert!(events.iter().any(|e| e.kind == "Equation"));
         assert!(events.iter().all(|e| e.subject == "neutrino"));
     }

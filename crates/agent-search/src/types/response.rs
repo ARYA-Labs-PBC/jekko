@@ -30,7 +30,8 @@ impl SearchHit {
             None => url.clone(),
         };
         let retrieved_at = Utc::now();
-        let content_hash = crate::dedupe::hash_fingerprint(&provider, &title, &normalized_url, snippet.as_deref());
+        let content_hash =
+            crate::dedupe::hash_fingerprint(&provider, &title, &normalized_url, snippet.as_deref());
         Ok(Self {
             provider,
             title,
@@ -80,7 +81,11 @@ pub struct ProviderReceipt {
 }
 
 impl ProviderReceipt {
-    pub fn skipped(provider: crate::types::ProviderId, query: &str, reason: impl Into<String>) -> Self {
+    pub fn skipped(
+        provider: crate::types::ProviderId,
+        query: &str,
+        reason: impl Into<String>,
+    ) -> Self {
         let normalized_query = query.trim().to_string();
         Self {
             provider,
@@ -104,12 +109,19 @@ impl ProviderReceipt {
             reason: None,
             normalized_query: query.trim().to_string(),
             content_hash: crate::dedupe::hash_search_batch(provider, query, hits),
-            citation_ids: hits.iter().flat_map(|hit| hit.citation_ids.clone()).collect(),
+            citation_ids: hits
+                .iter()
+                .flat_map(|hit| hit.citation_ids.clone())
+                .collect(),
             url_count: hits.len(),
         }
     }
 
-    pub fn failed(provider: crate::types::ProviderId, query: &str, reason: impl Into<String>) -> Self {
+    pub fn failed(
+        provider: crate::types::ProviderId,
+        query: &str,
+        reason: impl Into<String>,
+    ) -> Self {
         Self {
             provider,
             query: query.to_string(),

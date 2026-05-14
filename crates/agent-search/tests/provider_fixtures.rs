@@ -2,12 +2,16 @@ use agent_search::providers::{
     arxiv::ArxivProvider, brave::BraveProvider, crossref::CrossrefProvider, exa::ExaProvider,
     firecrawl::FirecrawlProvider, gdelt::GdeltProvider, github::GithubProvider, jina::JinaProvider,
     openalex::OpenAlexProvider, pubmed::PubMedProvider, searxng::SearxngProvider,
-    semantic_scholar::SemanticScholarProvider, tavily::TavilyProvider, unpaywall::UnpaywallProvider,
+    semantic_scholar::SemanticScholarProvider, tavily::TavilyProvider,
+    unpaywall::UnpaywallProvider,
 };
 use agent_search::ProviderId;
 use serde_json::json;
 
-fn assert_single_hit(result: agent_search::Result<agent_search::ProviderSearchResponse>, provider: ProviderId) {
+fn assert_single_hit(
+    result: agent_search::Result<agent_search::ProviderSearchResponse>,
+    provider: ProviderId,
+) {
     let response = result.expect("fixture parses");
     assert_eq!(response.hits.len(), 1);
     assert_eq!(response.hits[0].provider, provider);
@@ -166,4 +170,3 @@ fn parses_jina_fixture() {
         ProviderId::Jina,
     );
 }
-

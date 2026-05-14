@@ -15,6 +15,30 @@ pub fn parse(src: &str) -> Result<Json, String> {
     Ok(v)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::parse;
+    use crate::json::Json;
+
+    #[test]
+    fn parses_raw_utf8_and_unicode_escapes() {
+        assert_eq!(
+            parse(r#"{"text":"CPPD deposition (Figure 2 ). β"}"#).expect("json"),
+            Json::Object(std::collections::BTreeMap::from([(
+                "text".to_string(),
+                Json::Str("CPPD deposition (Figure 2 ). β".to_string())
+            )]))
+        );
+        assert_eq!(
+            parse(r#"{"text":"snowman \u2603 smile \uD83D\uDE00"}"#).expect("json"),
+            Json::Object(std::collections::BTreeMap::from([(
+                "text".to_string(),
+                Json::Str("snowman ☃ smile 😀".to_string())
+            )]))
+        );
+    }
+}
+
 struct Parser<'a> {
     src: &'a str,
     pos: usize,
@@ -23,11 +47,6 @@ struct Parser<'a> {
 impl<'a> Parser<'a> {
     fn peek(&self) -> Option<u8> {
         self.src.as_bytes().get(self.pos).copied()
-    }
-    fn bump(&mut self) -> Option<u8> {
-        let b = self.peek()?;
-        self.pos += 1;
-        Some(b)
     }
     fn skip_ws(&mut self) {
         while let Some(b) = self.peek() {
@@ -121,38 +140,61 @@ impl<'a> Parser<'a> {
         self.expect(b'"')?;
         let mut out = String::new();
         loop {
-            match self.bump() {
-                Some(b'"') => return Ok(out),
-                Some(b'\\') => match self.bump() {
-                    Some(b'"') => out.push('"'),
-                    Some(b'\\') => out.push('\\'),
-                    Some(b'/') => out.push('/'),
-                    Some(b'n') => out.push('\n'),
-                    Some(b'r') => out.push('\r'),
-                    Some(b't') => out.push('\t'),
-                    Some(b'b') => out.push('\u{08}'),
-                    Some(b'f') => out.push('\u{0c}'),
-                    Some(b'u') => {
-                        let hex = &self.src[self.pos..self.pos + 4];
-                        let cp = u32::from_str_radix(hex, 16)
-                            .map_err(|e| format!("bad \\u escape: {}", e))?;
-                        if let Some(c) = char::from_u32(cp) {
-                            out.push(c);
-                        }
-                        self.pos += 4;
-                    }
-                    other => {
-                        return Err(format!(
-                            "bad escape {:?} at {}",
-                            other.map(|b| b as char),
-                            self.pos
-                        ))
-                    }
+            match self.bump_char() {
+                Some('"') => return Ok(out),
+                Some('\\') => match self.bump_char() {
+                    Some('"') => out.push('"'),
+                    Some('\\') => out.push('\\'),
+                    Some('/') => out.push('/'),
+                    Some('n') => out.push('\n'),
+                    Some('r') => out.push('\r'),
+                    Some('t') => out.push('\t'),
+                    Some('b') => out.push('\u{08}'),
+                    Some('f') => out.push('\u{0c}'),
+                    Some('u') => out.push(self.parse_unicode_escape()?),
+                    other => return Err(format!("bad escape {:?} at {}", other, self.pos)),
                 },
-                Some(c) => out.push(c as char),
+                Some(c) => out.push(c),
                 None => return Err("unterminated string".to_string()),
             }
         }
+    }
+    fn bump_char(&mut self) -> Option<char> {
+        let ch = self.src[self.pos..].chars().next()?;
+        self.pos += ch.len_utf8();
+        Some(ch)
+    }
+    fn parse_unicode_escape(&mut self) -> Result<char, String> {
+        let high = self.parse_hex4()?;
+        let codepoint = if (0xD800..=0xDBFF).contains(&high) {
+            if !self.src[self.pos..].starts_with("\\u") {
+                return Err("missing low surrogate in \\u escape".to_string());
+            }
+            self.pos += 2;
+            let low = self.parse_hex4()?;
+            if !(0xDC00..=0xDFFF).contains(&low) {
+                return Err("invalid low surrogate in \\u escape".to_string());
+            }
+            0x10000 + (((high - 0xD800) << 10) | (low - 0xDC00))
+        } else if (0xDC00..=0xDFFF).contains(&high) {
+            return Err("unexpected low surrogate in \\u escape".to_string());
+        } else {
+            high
+        };
+        char::from_u32(codepoint).ok_or_else(|| "invalid \\u escape codepoint".to_string())
+    }
+    fn parse_hex4(&mut self) -> Result<u32, String> {
+        let end = self
+            .pos
+            .checked_add(4)
+            .filter(|end| *end <= self.src.len())
+            .ok_or_else(|| "truncated \\u escape".to_string())?;
+        let hex = &self.src[self.pos..end];
+        if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!("bad \\u escape at byte {}", self.pos));
+        }
+        self.pos = end;
+        u32::from_str_radix(hex, 16).map_err(|err| format!("bad \\u escape: {err}"))
     }
     fn parse_array(&mut self) -> Result<Json, String> {
         self.expect(b'[')?;

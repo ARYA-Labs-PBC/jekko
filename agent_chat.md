@@ -1568,3 +1568,6 @@ ETA 6h. Will receipt when done.
 - Phase 6+ deferred
 
 — claude-opus-4-7
+
+[2026-05-13T11:50:23-06:00] Codex: starting headless Jnoccio investigation/repair scope; will preserve existing daemon/Jnoccio evidence and avoid unrelated dirty work.
+[2026-05-13T18:18:55Z] Codex: added structured request/route/upstream logging to jnoccio-fusion, verified with a fresh local smoke server on 127.0.0.1:4321, and confirmed the log file now records HTTP start/finish, route planning, upstream transport request/response, and completion metadata for a real chat completion.

@@ -106,10 +106,10 @@ pub fn extract_equations(text: &str) -> Vec<EqAtom> {
             // A '.' terminates the sentence unless it is a decimal point in a
             // number (digit on both sides, like the `.` in `7.5`).
             if bracket_depth == 0 && c == '.' {
-                let prev_is_digit = rhs_end > rhs_start
-                    && (bytes[rhs_end - 1] as char).is_ascii_digit();
-                let next_is_digit = rhs_end + 1 < bytes.len()
-                    && (bytes[rhs_end + 1] as char).is_ascii_digit();
+                let prev_is_digit =
+                    rhs_end > rhs_start && (bytes[rhs_end - 1] as char).is_ascii_digit();
+                let next_is_digit =
+                    rhs_end + 1 < bytes.len() && (bytes[rhs_end + 1] as char).is_ascii_digit();
                 if !(prev_is_digit && next_is_digit) {
                     break;
                 }

@@ -39,7 +39,11 @@ pub(crate) fn client() -> Client {
 }
 
 pub(crate) fn value_string(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 pub(crate) fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
@@ -71,7 +75,8 @@ pub(crate) fn hit_from_value(
         None => url.clone(),
     };
     let title = title.into();
-    let content_hash = crate::dedupe::hash_fingerprint(&provider, &title, &normalized_url, snippet.as_deref());
+    let content_hash =
+        crate::dedupe::hash_fingerprint(&provider, &title, &normalized_url, snippet.as_deref());
     Ok(SearchHit {
         provider,
         title,
@@ -108,7 +113,10 @@ pub(crate) fn response_from_items(
         let snippet = first_string(item, snippet_keys);
         let mut citation_ids = Vec::new();
         if let Some(prefix) = citation_prefix {
-            citation_ids.push(format!("{prefix}:{}", title.to_lowercase().replace(' ', "-")));
+            citation_ids.push(format!(
+                "{prefix}:{}",
+                title.to_lowercase().replace(' ', "-")
+            ));
         }
         hits.push(hit_from_value(provider, title, url, snippet, citation_ids)?);
     }

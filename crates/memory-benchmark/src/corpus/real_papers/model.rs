@@ -1,5 +1,8 @@
 use crate::qbank_hash::sha256_hex;
-use std::collections::BTreeSet;
+use serde::{Deserialize, Serialize};
+
+pub const PRODUCTION_CHALLENGE_SCHEMA_VERSION: &str = "opencode-qbank-challenge-v3";
+pub const PRODUCTION_MANIFEST_SCHEMA_VERSION: &str = "opencode-qbank-manifest-v3";
 
 #[derive(Debug, Clone)]
 pub struct PaperRecord {
@@ -7,6 +10,10 @@ pub struct PaperRecord {
     pub title: String,
     pub license_spdx: String,
     pub redistributable: bool,
+    pub dedupe_keys: Vec<String>,
+    pub source_ids: Vec<String>,
+    pub source_url: Option<String>,
+    pub retrieval_kinds: Vec<String>,
     pub sections: Vec<PaperSection>,
 }
 
@@ -20,6 +27,7 @@ pub struct PaperSection {
 
 #[derive(Debug, Clone)]
 pub struct PaperChallenge {
+    pub schema_version: String,
     pub challenge_hash: String,
     pub publication_hash: String,
     pub domain: String,
@@ -32,6 +40,24 @@ pub struct PaperChallenge {
     pub answer_key: AnswerKey,
     pub support: Vec<SupportRef>,
     pub context_pack: ContextPack,
+    pub source_publication: Option<SourcePublication>,
+    pub focused_support_trials: Vec<ModelTrial>,
+    pub saturated_blind_trials: Vec<ModelTrial>,
+    pub judge_trials: Vec<JudgeTrial>,
+    pub context_packs: Vec<ContextPackProvenance>,
+    pub route_metadata: Vec<RouteMetadata>,
+    pub acceptance_metrics: Option<AcceptanceMetrics>,
+    pub artifact_provenance: Option<ArtifactProvenance>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SourcePublication {
+    pub publication_hash: String,
+    pub content_hash: String,
+    pub license_spdx: String,
+    pub redistributable: bool,
+    pub source_url: Option<String>,
+    pub section_hashes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -68,6 +94,96 @@ pub struct ContextPack {
 }
 
 #[derive(Debug, Clone)]
+pub struct ContextPackProvenance {
+    pub kind: String,
+    pub context_hash: String,
+    pub prompt_hash: String,
+    pub section_ids: Vec<String>,
+    pub estimated_tokens: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelTrial {
+    pub agent_id: String,
+    pub phase: String,
+    pub correct: bool,
+    pub answerability: f32,
+    pub supported: bool,
+    pub confidence: f32,
+    pub prompt_hash: String,
+    pub context_hash: String,
+    pub route_metadata: RouteMetadata,
+    pub token_usage: TokenUsage,
+}
+
+#[derive(Debug, Clone)]
+pub struct JudgeTrial {
+    pub agent_id: String,
+    pub accepted: bool,
+    pub confidence: f32,
+    pub rationale_hash: String,
+    pub route_metadata: RouteMetadata,
+    pub token_usage: TokenUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteMetadata {
+    pub request_id: String,
+    pub provider: String,
+    pub model: String,
+    pub route_mode: Option<String>,
+    pub route_confidence: Option<f32>,
+    pub primary_model_id: Option<String>,
+    pub backup_model_ids: Vec<String>,
+    pub fusion_model_id: Option<String>,
+    pub winner_model_id: Option<String>,
+    pub prompt_hash: Option<String>,
+    pub context_hash: Option<String>,
+    pub receipts_hash: Option<String>,
+    pub token_usage: Option<TokenUsage>,
+    pub model_decisions_hash: Option<String>,
+    pub model_decisions: Vec<ModelDecision>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelDecision {
+    pub model_id: String,
+    pub configured_score: f32,
+    pub selection_score: f32,
+    pub latency_ms: u64,
+    pub status: String,
+    pub output_hash: Option<String>,
+    pub selected: bool,
+    pub token_usage: TokenUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct AcceptanceMetrics {
+    pub focused_agreement: f32,
+    pub focused_correct_rate: f32,
+    pub answerability: f32,
+    pub saturated_blind_correct_rate: f32,
+    pub saturated_mean_confidence: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArtifactProvenance {
+    pub run_id: String,
+    pub reducer_version: String,
+    pub agent_mode: Option<String>,
+    pub fixture_provenance: bool,
+    pub answer_leakage_detected: bool,
+    pub license_ambiguous: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct LoadedChallenge {
     pub challenge: PaperChallenge,
     pub paper: Option<PaperRecord>,
@@ -79,7 +195,16 @@ pub struct BankValidation {
     pub rejected_challenges: usize,
     pub duplicate_publications: usize,
     pub top_selected: usize,
+    pub unique_publications: usize,
+    pub distinct_domains: usize,
+    pub max_publication_share: f32,
+    pub max_domain_share: f32,
+    pub source_diversity: f32,
+    pub min_required_accepted: usize,
     pub manifest_hash: String,
+    pub manifest_schema: String,
+    pub strict_production: bool,
+    pub qbank_trusted: bool,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -107,24 +232,10 @@ pub fn stable_challenge_hash(
     sha256_hex(material.as_bytes())
 }
 
-pub(crate) fn wanted_section_ids(challenge: &PaperChallenge) -> BTreeSet<String> {
-    let mut ids = BTreeSet::new();
-    for support in &challenge.support {
-        ids.insert(support.section_id.clone());
-    }
-    for id in &challenge.context_pack.target_section_ids {
-        ids.insert(id.clone());
-    }
-    for id in &challenge.context_pack.distractor_section_ids {
-        ids.insert(id.clone());
-    }
-    ids
-}
-
 pub(crate) fn normalize_text(input: &str) -> String {
     input
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .to_ascii_lowercase()
+        .to_lowercase()
 }

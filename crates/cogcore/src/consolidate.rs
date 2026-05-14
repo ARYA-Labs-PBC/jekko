@@ -212,10 +212,26 @@ impl ConsolidationBackend for RuleBackend {
 fn is_known_si_unit(u: &str) -> bool {
     matches!(
         u.trim(),
-        "kg" | "m" | "s" | "A" | "K" | "mol" | "cd"
-        | "m/s" | "m/s^2" | "J" | "W" | "N" | "Pa" | "Hz"
-        | "eV" | "keV" | "MeV" | "GeV" | "TeV"
-        | "eV^2" | "GeV^2"
+        "kg" | "m"
+            | "s"
+            | "A"
+            | "K"
+            | "mol"
+            | "cd"
+            | "m/s"
+            | "m/s^2"
+            | "J"
+            | "W"
+            | "N"
+            | "Pa"
+            | "Hz"
+            | "eV"
+            | "keV"
+            | "MeV"
+            | "GeV"
+            | "TeV"
+            | "eV^2"
+            | "GeV^2"
     )
 }
 
@@ -264,7 +280,9 @@ mod tests {
             contradiction_pressure: 0.0,
             stats: crate::topic::empty_stats(),
         };
-        let lesson = backend.summarize_topic(&topic, &members, &mut budget).unwrap();
+        let lesson = backend
+            .summarize_topic(&topic, &members, &mut budget)
+            .unwrap();
         assert!(lesson.summary_body.contains("body of b"));
         assert_eq!(lesson.source_cell_ids.len(), 3);
     }
@@ -338,7 +356,9 @@ mod tests {
         let good = ev("good", 0.95, vec!["other".to_string()]);
         let other = ev("other", 0.95, vec![]);
         let peers = vec![&other];
-        assert!(backend.detect_adversarial_claim(&good, &peers, &mut budget).is_none());
+        assert!(backend
+            .detect_adversarial_claim(&good, &peers, &mut budget)
+            .is_none());
     }
 
     #[test]
@@ -348,13 +368,17 @@ mod tests {
         let mut backend = StubBackend;
         let mut budget = Budget::ZERO;
         let cell = ev("x", 0.9, vec![]);
-        assert!(backend.detect_adversarial_claim(&cell, &[], &mut budget).is_none());
+        assert!(backend
+            .detect_adversarial_claim(&cell, &[], &mut budget)
+            .is_none());
         let eq = EqAtom {
             lhs: "a".to_string(),
             op: "=".to_string(),
             rhs: "b".to_string(),
             units: None,
         };
-        assert!(backend.verify_equation_units(&eq, &[], &mut budget).is_none());
+        assert!(backend
+            .verify_equation_units(&eq, &[], &mut budget)
+            .is_none());
     }
 }

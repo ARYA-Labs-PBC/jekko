@@ -11,7 +11,10 @@ pub struct BraveProvider {
 
 impl BraveProvider {
     pub fn new(api_key: String) -> Self {
-        Self { client: client(), api_key }
+        Self {
+            client: client(),
+            api_key,
+        }
     }
 
     pub fn parse_fixture(value: &Value) -> Result<ProviderSearchResponse> {
@@ -33,7 +36,9 @@ impl BraveProvider {
 
 #[async_trait]
 impl SearchProvider for BraveProvider {
-    fn id(&self) -> ProviderId { ProviderId::Brave }
+    fn id(&self) -> ProviderId {
+        ProviderId::Brave
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::new(true, false, false, false, false, true, true)
@@ -57,7 +62,9 @@ impl SearchProvider for BraveProvider {
             .json()
             .await?;
         let mut response = Self::parse_fixture(&json)?;
-        response.receipts.push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
+        response
+            .receipts
+            .push(ProviderReceipt::ok(self.id(), &req.query, &response.hits));
         Ok(response)
     }
 }
