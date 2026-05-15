@@ -4,6 +4,16 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { Instance } from "@/project/instance"
 import { InstanceStore } from "@/project/instance-store"
 import { Server } from "@/server/server"
+import { UI } from "./ui"
+import {
+  collectDaemonProgress,
+  formatDaemonEventLine,
+  formatDaemonHeartbeatLine,
+  formatDaemonRunStatusLine,
+  isTerminalDaemonStatus,
+  type DaemonProgressLine,
+  type DaemonProgressSnapshot,
+} from "@/session/daemon-progress"
 import {
   delay,
   fetchJnoccioMetrics,
@@ -43,6 +53,42 @@ export class HeadlessRunError extends Error {
     super(message)
     this.name = "HeadlessRunError"
   }
+}
+
+function requestJsonArray(target: { baseUrl: string; fetch: typeof fetch }, path: string, init: RequestInit = {}) {
+  return requestJson(target, path, init).then((value) => {
+    if (Array.isArray(value)) return value
+    throw new Error(`Expected array response from ${path}`)
+  })
+}
+
+function progressStyle(tone: DaemonProgressLine["tone"]) {
+  switch (tone) {
+    case "success":
+      return UI.Style.TEXT_SUCCESS_BOLD
+    case "warning":
+      return UI.Style.TEXT_WARNING_BOLD
+    case "danger":
+      return UI.Style.TEXT_DANGER_BOLD
+    case "muted":
+      return UI.Style.TEXT_DIM_BOLD
+    default:
+      return UI.Style.TEXT_INFO_BOLD
+  }
+}
+
+function paintProgressLine(line: DaemonProgressLine, prefix = "headless") {
+  return `${progressStyle(line.tone)}${prefix}: ${line.text}${UI.Style.TEXT_NORMAL}`
+}
+
+function paintHeartbeat(run: any, progress?: DaemonProgressSnapshot) {
+  return `${UI.Style.TEXT_DIM}headless: ${formatDaemonHeartbeatLine({ run, progress })}${UI.Style.TEXT_NORMAL}`
+}
+
+function paintRunStatus(run: any, progress?: DaemonProgressSnapshot) {
+  const status = String(run?.status ?? "")
+  const tone = status === "satisfied" ? "success" : status === "paused" ? "warning" : status === "aborted" || status === "failed" ? "danger" : "info"
+  return `${progressStyle(tone)}${formatDaemonRunStatusLine({ run, progress })}${UI.Style.TEXT_NORMAL}`
 }
 
 export async function runShellOnlyHeadless(
@@ -186,6 +232,7 @@ export async function runDaemonHeadless(
   }
   const artifactRoot = path.join(input.cwd, ".jekko", "daemon", runID)
   input.options.print?.(`headless: daemon run ${runID} artifacts ${artifactRoot}`)
+  input.options.print?.(`headless: ${paintRunStatus(startedRun as any)}`)
 
   const pollStarted = Date.now()
   const timeoutMs = input.options.headlessTimeoutMs
@@ -193,25 +240,45 @@ export async function runDaemonHeadless(
   let finalRun: unknown = undefined
   let lastActivityAt = Date.now()
   let lastPollState = ""
+  let lastHeartbeatAt = Date.now()
+  let cursor = 0
   const streamed = { ledgerLines: 0, stateText: "" }
   while (true) {
-    const poll = await requestJson(target, `/daemon/${runID}`)
+    const [poll, events] = await Promise.all([
+      requestJson(target, `/daemon/${runID}`),
+      requestJsonArray(target, `/daemon/${runID}/events`),
+    ])
     finalRun = poll
     const pollRecord = isRecord(poll) ? poll : undefined
     const status = readStringField(pollRecord, "status") ?? "running"
     const phase = readStringField(pollRecord, "phase") ?? "running"
     const iteration = readNumberField(pollRecord, "iteration") ?? 0
-    input.options.print?.(`headless: daemon ${status} · ${phase} · iter ${iteration}`)
     const pollState = `${status}:${phase}:${iteration}`
     if (pollState !== lastPollState) {
       lastPollState = pollState
       lastActivityAt = Date.now()
     }
+    const progress = collectDaemonProgress(events as any[])
+    const newEvents = (events as any[]).slice(cursor)
+    if (newEvents.length > 0) {
+      for (const event of newEvents) {
+        const line = formatDaemonEventLine(event as any)
+        if (line) input.options.print?.(paintProgressLine(line))
+      }
+      cursor = events.length
+      lastActivityAt = Date.now()
+      lastHeartbeatAt = Date.now()
+    } else if (Date.now() - lastHeartbeatAt >= 5000) {
+      input.options.print?.(paintHeartbeat(poll, progress))
+      lastHeartbeatAt = Date.now()
+    }
     if (await streamDaemonArtifacts(artifactRoot, input.options.print, streamed)) {
       lastActivityAt = Date.now()
     }
-    if (["satisfied", "aborted", "failed"].includes(status)) break
-    if (status === "paused") break
+    if (isTerminalDaemonStatus(status)) {
+      input.options.print?.(paintRunStatus(poll, progress))
+      break
+    }
     if (timeoutMs !== undefined && Date.now() - pollStarted > timeoutMs) {
       finalRun = { ...(typeof finalRun === "object" && finalRun !== null ? finalRun : {}), status: "failed", timeout: true }
       break

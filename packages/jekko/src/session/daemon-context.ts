@@ -2,6 +2,7 @@
 import type { ZyalParsed } from "@/agent-script/schema"
 import type { RunInfo, IterationInfo, TaskInfo, WorkerInfo } from "./daemon-store"
 import type { JankuraiConfig } from "./daemon-jankurai"
+import { formatDaemonProgressTrace, type DaemonProgressSnapshot } from "./daemon-progress"
 import { DaemonJankurai } from "./daemon-jankurai"
 
 // Threshold for stall detection. If the same terminal reason appears in this
@@ -23,6 +24,8 @@ export function buildDaemonIterationPrompt(input: {
     workers: readonly WorkerInfo[]
     currentTask?: TaskInfo
     regression?: unknown
+    bootstrap?: unknown
+    progress?: DaemonProgressSnapshot
   }
 }) {
   const interaction = input.parsed.spec.interaction
@@ -62,6 +65,7 @@ export function buildDaemonIterationPrompt(input: {
     `Checkpoint: ${input.checkpointSha ?? "(none)"}`,
     `Active locks: ${input.locks?.join(", ") || "(none)"}`,
     `Last iteration: ${input.lastIteration?.terminal_reason ?? "(none)"}`,
+    input.jankurai?.progress ? `Stage trace: ${formatDaemonProgressTrace(input.jankurai.progress)}` : `Stage trace: (none)`,
     ...(input.jankurai ? DaemonJankurai.promptSummaryLines(input.jankurai) : []),
     policy === "forever"
       ? `Continue with one bounded unit of work. The daemon runs forever — only the stop conditions in the spec end the run, never the model. If the current task is blocked, mark it Status: Blocked and CLAIM THE NEXT ONE. Never stop.`

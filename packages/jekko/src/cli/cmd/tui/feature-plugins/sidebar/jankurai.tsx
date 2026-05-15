@@ -95,7 +95,7 @@ function View(props: { api: TuiPluginApi }) {
         {/* Header */}
         <text fg={NEON.header}>
           <b>◆ Jankurai</b>
-          <span style={{ fg: theme().textMuted }}> v{score()?.standardVersion ?? "?"}</span>
+          <span style={{ fg: theme().textMuted }}> v{score()?.auditorVersion ?? "?"}</span>
         </text>
 
         {/* Score */}

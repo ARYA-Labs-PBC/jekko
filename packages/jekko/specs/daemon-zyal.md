@@ -1,7 +1,7 @@
 # ZYAL v1
 
 - Contract version: `2.6.0`
-- Release tag: `v1.0.0`
+- Release tag: `v1.0.2`
 - Runtime sentinel version: `v1`
 - Research block version: `v1`
 

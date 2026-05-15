@@ -64,7 +64,7 @@ export const JankuraiBootstrapCommand = effectCmd<BootstrapArgs, BootstrapReceip
       installed = result.installed
       updateOutcome = { exitCode: result.exitCode, stderr: result.stderr }
       if (!installed) {
-        UI.println("jankurai not on PATH — skipping update. Install with: cargo install --git https://github.com/neverhuman/jankurai --tag v1.3.0 --locked jankurai")
+        UI.println("jankurai not on PATH — skipping update. Install with: cargo install --git https://github.com/neverhuman/jankurai --tag v1.4.2 --locked jankurai")
       } else if (result.exitCode !== 0) {
         UI.println(`jankurai update exited ${result.exitCode}. stderr: ${result.stderr.trim()}`)
       }

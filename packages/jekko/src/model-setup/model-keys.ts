@@ -25,7 +25,7 @@ export type SecretRef = {
   providerID: string
 }
 
-const MODEL_KEY_TEMPLATE_PATH = "~/.jekko/jekko.env"
+export const MODEL_KEY_TEMPLATE_PATH = "~/.jekko/jekko.env"
 
 function homedirPath() {
   return path.join(os.homedir(), ".jekko", "jekko.env")

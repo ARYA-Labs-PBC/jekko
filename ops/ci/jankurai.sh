@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-cargo install --git https://github.com/neverhuman/jankurai --tag v1.3.0 --locked jankurai
+cargo install --git https://github.com/neverhuman/jankurai --tag v1.4.1 --locked jankurai
 if command -v go >/dev/null 2>&1; then
   go install github.com/gitleaks/gitleaks/v8@v8.24.2
   export PATH="$(go env GOPATH)/bin:$PATH"

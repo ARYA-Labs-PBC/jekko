@@ -1126,7 +1126,7 @@ const layer: Layer.Layer<
               auth: {
                 configured: true,
                 active: true,
-                source: "legacy-config",
+                source: "config-file",
               },
             })
             secrets[providerID] = provider.key
@@ -1188,7 +1188,7 @@ const layer: Layer.Layer<
               auth: {
                 configured: true,
                 active: true,
-                source: "legacy-config",
+                source: "config-file",
               },
             })
           }

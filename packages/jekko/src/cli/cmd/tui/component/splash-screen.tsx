@@ -1,12 +1,12 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { TextAttributes, type RGBA } from "@opentui/core"
 import { useTheme, tint } from "@tui/context/theme"
-import { Spinner } from "@tui/component/spinner"
 import { InstallationVersion } from "@jekko-ai/core/installation/version"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useSync } from "@tui/context/sync"
 import { useProject } from "@tui/context/project"
 import { useJnoccioBootStatus } from "@tui/context/jnoccio-boot"
+import { useStartupQuit } from "./startup-quit"
 import fs from "fs"
 import path from "path"
 
@@ -36,6 +36,7 @@ const NEVER_HUMAN = "N · E · V · E · R · H · U · M · A · N"
 export type SplashScreenProps = {
   ready: () => boolean
   onDismiss: () => void
+  onQuit?: () => void
 }
 
 function padEnd(value: string, width: number): string {
@@ -55,6 +56,7 @@ export function SplashScreen(props: SplashScreenProps) {
   const sync = useSync()
   const project = useProject()
   const jnoccio = useJnoccioBootStatus()
+  useStartupQuit(props.onQuit)
   const mountedAt = performance.now()
   const [entries, setEntries] = createSignal<BootEntry[]>([])
   const [now, setNow] = createSignal(performance.now())
@@ -194,6 +196,23 @@ export function SplashScreen(props: SplashScreenProps) {
     return SPINNER_FRAMES[idx] ?? SPINNER_FRAMES[0]
   })
 
+  const loadingBand = createMemo(() => {
+    const width = dimensions().width ?? 0
+    const cells = Math.max(12, Math.floor(width * 0.34) - 4)
+    const dense = spinnerFrame().repeat(2)
+    const sparse = " "
+    const scan = Array.from({ length: cells }, (_, index) => {
+      const cycle = index % 6
+      if (cycle === 0) return dense
+      if (cycle === 1) return dense
+      if (cycle === 2) return sparse
+      if (cycle === 3) return spinnerFrame()
+      if (cycle === 4) return sparse
+      return spinnerFrame()
+    }).join("")
+    return scan
+  })
+
   function statusGlyph(entry: BootEntry, isFinal: boolean): { glyph: string; color: RGBA } {
     if (entry.status === "done") {
       return {
@@ -275,7 +294,9 @@ export function SplashScreen(props: SplashScreenProps) {
           <text fg={loadingPulse()}>loading…</text>
         </box>
         <box height={1} />
-        <Spinner color={theme.accent} />
+        <text fg={theme.textMuted}>[q] quit</text>
+        <box height={1} />
+        <text fg={loadingPulse()}>{loadingBand()}</text>
       </box>
     </box>
   )

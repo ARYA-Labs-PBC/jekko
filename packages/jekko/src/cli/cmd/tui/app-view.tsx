@@ -10,6 +10,7 @@ import {
   batch,
   Show,
   on,
+  onCleanup,
 } from "solid-js"
 import { Flag } from "@jekko-ai/core/flag/flag"
 import { useDialog } from "@tui/ui/dialog"
@@ -43,7 +44,7 @@ import { errorMessage } from "@/util/error"
 
 const bootLog = Log.create({ service: "tui.boot" })
 
-export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: () => void }) {
+export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: () => void; onQuit?: () => void }) {
   const tuiConfig = useTuiConfig()
   const route = useRoute()
   const dimensions = useTerminalDimensions()
@@ -96,6 +97,7 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
     renderer,
   })
   const [ready, setReady] = createSignal(process.env.JEKKO_FAST_BOOT === "1")
+  const [bootVisible, setBootVisible] = createSignal(true)
   const [splashDismissed, setSplashDismissed] = createSignal(false)
   const pluginStartedAt = Date.now()
   bootLog.info("plugin init start", {
@@ -103,7 +105,16 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
     pure: process.env.JEKKO_PURE === "1",
     log: Log.file(),
   })
-  TuiPluginRuntime.init({
+  setReady(true)
+  const bootTimer = setTimeout(() => {
+    setBootVisible(false)
+  }, 5000)
+  onCleanup(() => clearTimeout(bootTimer))
+  const splashForceDismiss = setTimeout(() => {
+    if (!splashDismissed()) setSplashDismissed(true)
+  }, 2200)
+  onCleanup(() => clearTimeout(splashForceDismiss))
+  void TuiPluginRuntime.init({
     api,
     config: tuiConfig,
   })
@@ -121,10 +132,15 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
         duration: Date.now() - pluginStartedAt,
         log: Log.file(),
       })
-      setReady(true)
     })
 
   bootJnoccioFusion()
+
+  createEffect(() => {
+    if (!ready() || splashDismissed()) return
+    const timer = setTimeout(() => setSplashDismissed(true), 180)
+    return () => clearTimeout(timer)
+  })
 
   const [terminalTitleEnabled, setTerminalTitleEnabled] = createSignal(kv.get("terminal_title_enabled", true))
   const [pasteSummaryEnabled, setPasteSummaryEnabled] = createSignal(
@@ -253,9 +269,7 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
     return render({ params: route.data.data })
   })
 
-  if (!splashDismissed()) return <SplashScreen ready={ready} onDismiss={() => setSplashDismissed(true)} />
-
-  return (
+  const mainView = (
     <box
       width={dimensions().width}
       height={dimensions().height}
@@ -283,5 +297,14 @@ export function App(props: { onSnapshot?: () => Promise<string[]>; onVisible?: (
         </box>
       </Show>
     </box>
+  )
+
+  return (
+    <Show
+      when={bootVisible() || !ready()}
+      fallback={mainView}
+    >
+      <SplashScreen ready={ready} onDismiss={() => setSplashDismissed(true)} onQuit={props.onQuit} />
+    </Show>
   )
 }

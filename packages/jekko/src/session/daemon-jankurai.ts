@@ -1,16 +1,18 @@
 import { createHash } from "crypto"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises"
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "fs/promises"
 import os from "os"
 import path from "path"
 import { Effect } from "effect"
 import { ulid } from "ulid"
 import type { ZyalJankurai, ZyalJankuraiAuditDelta, ZyalJankuraiAuditMode, ZyalJankuraiRisk, ZyalScript } from "@/agent-script/schema"
+import { detectCanonical } from "@/cli/cmd/jankurai/detect"
 import type { Worktree } from "@/worktree"
 import type { Session } from "./session"
 import type { SessionPrompt } from "./prompt"
 import { SessionID } from "./schema"
 import type { DaemonChecks, ShellCheckResult } from "./daemon-checks"
 import type { DaemonStore } from "./daemon-store"
+import type { DaemonProgressSnapshot } from "./daemon-progress"
 
 type JsonRecord = Record<string, unknown>
 
@@ -23,6 +25,14 @@ export type JankuraiConfig = {
     readonly branch_prefix: string
     readonly integration_branch?: string
     readonly commit_on_green: boolean
+  }
+  readonly bootstrap?: {
+    readonly run_update_on_start: boolean
+    readonly ensure_init: boolean
+    readonly ensure_canonical: boolean
+    readonly yes: boolean
+    readonly strict: boolean
+    readonly dry_run: boolean
   }
   readonly audit: {
     readonly mode: ZyalJankuraiAuditMode
@@ -153,6 +163,16 @@ export function resolveJankuraiConfig(spec: ZyalScript): JankuraiConfig | undefi
           commit_on_green: pool.commit_on_green ?? true,
         }
       : undefined,
+    bootstrap: block.bootstrap
+      ? {
+          run_update_on_start: block.bootstrap.run_update_on_start ?? false,
+          ensure_init: block.bootstrap.ensure_init ?? false,
+          ensure_canonical: block.bootstrap.ensure_canonical ?? false,
+          yes: block.bootstrap.yes ?? false,
+          strict: block.bootstrap.strict ?? false,
+          dry_run: block.bootstrap.dry_run ?? false,
+        }
+      : undefined,
     audit: {
       mode: auditMode,
       json: block.audit?.json ?? "target/jankurai/repo-score.json",
@@ -277,13 +297,19 @@ export function taskRoute(input: {
   const eligibility = stringFrom(input.packet.repair_eligibility) ?? "agent-assisted"
   const humanReview = booleanFrom(input.packet.human_review_required) ?? eligibility === "human-required"
   const pathValue = stringFrom(input.packet.finding_path) ?? stringFrom(input.packet.path) ?? stringFrom(input.finding?.path) ?? ""
+  const allowedPaths = stringArray(input.packet.allowed_paths)
+  const uncoveredRequiredPaths = requiredFixPaths(input.packet, input.finding).filter(
+    (requiredPath) => !isCoveredByAllowedPaths(requiredPath, allowedPaths),
+  )
   const text = [
     ruleID,
     pathValue,
     stringFrom(input.packet.reason),
     stringFrom(input.packet.problem),
     stringFrom(input.packet.why),
+    stringFrom(input.packet.agent_fix),
     stringFrom(input.finding?.problem),
+    stringFrom(input.finding?.agent_fix),
   ].filter(Boolean).join(" ").toLowerCase()
 
   const neverAuto =
@@ -309,8 +335,19 @@ export function taskRoute(input: {
       blockedReason: neverAuto
         ? "jankurai policy blocks automatic repair"
         : configuredDefer
-          ? `rule ${ruleID} deferred by jankurai.selection.defer_rules`
+        ? `rule ${ruleID} deferred by jankurai.selection.defer_rules`
           : "human review required",
+    }
+  }
+
+  if (uncoveredRequiredPaths.length > 0) {
+    return {
+      status: "blocked",
+      lane: "blocked",
+      phase: "blocked",
+      priority: priorityFor(input.config, risk, eligibility, true),
+      riskScore: RISK_SCORE[risk],
+      blockedReason: `required fix path outside allowed_paths: ${uncoveredRequiredPaths.slice(0, 3).join(", ")}`,
     }
   }
 
@@ -363,12 +400,26 @@ export function preflight(input: {
       root: config.root,
       require_clean_start: config.verification.require_clean_start,
     })
-    if (config.verification.require_clean_start || config.pool?.integration_branch) {
+    let bootstrapReceipt: Awaited<ReturnType<typeof runBootstrap>> | undefined
+    if (config.verification.require_clean_start) {
       const clean = yield* input.checks.gitClean({ cwd: input.cwd, allowUntracked: false })
       if (!clean.clean) {
         const reason = `jankurai requires a clean start; dirty paths: ${clean.dirty.join(", ")}`
         yield* appendOptionalEvent(input.store, input.runID, input.iteration ?? 0, "jankurai.checkpoint.blocked", { reason })
         return { ok: false, enabled: true as const, reason }
+      }
+    }
+    if (config.bootstrap) {
+      bootstrapReceipt = yield* runBootstrap({
+        cwd: input.cwd,
+        config,
+        checks: input.checks,
+        store: input.store,
+        runID: input.runID,
+        iteration: input.iteration ?? 0,
+      })
+      if (!bootstrapReceipt.ok) {
+        return { ok: false, enabled: true as const, reason: bootstrapReceipt.reason }
       }
     }
     if (config.pool?.integration_branch) {
@@ -384,7 +435,7 @@ export function preflight(input: {
         return { ok: false, enabled: true as const, reason: branchResult.reason }
       }
     }
-    return { ok: true, enabled: true as const, config }
+    return { ok: true, enabled: true as const, config, bootstrap: bootstrapReceipt }
   })
 }
 
@@ -414,12 +465,16 @@ export function runAudit(input: {
     })
     const result = yield* input.checks.runShellCheck({ cwd: input.cwd, command, timeout: "15 minutes" })
     const report = yield* readJsonFile(path.resolve(input.cwd, input.config.audit.json))
+    const ok = isAuditReportShape(report)
+    const reason = ok ? undefined : "audit report missing or invalid"
     yield* appendOptionalEvent(input.store, input.runID, input.iteration ?? 0, "jankurai.audit.completed", {
       matched: result.matched,
       exitCode: result.exitCode,
-      summary: report ? summarizeReport(report) : undefined,
+      ok,
+      reason,
+      summary: ok ? summarizeReport(report) : undefined,
     })
-    return { result, report }
+    return { result, report: ok ? report : undefined, ok, reason }
   })
 }
 
@@ -446,12 +501,16 @@ export function runRepairPlan(input: {
     ].join(" ")
     const result = yield* input.checks.runShellCheck({ cwd: input.cwd, command, timeout: "15 minutes" })
     const plan = yield* readJsonFile(path.resolve(input.cwd, input.config.repair_plan.json))
+    const ok = isRepairPlanShape(plan)
+    const reason = ok ? undefined : "repair plan missing or invalid"
     yield* appendOptionalEvent(input.store, input.runID, input.iteration ?? 0, "jankurai.repair_plan.completed", {
       matched: result.matched,
       exitCode: result.exitCode,
-      packet_count: extractRepairPackets(plan).length,
+      ok,
+      reason,
+      packet_count: ok ? extractRepairPackets(plan).length : 0,
     })
-    return { result, plan }
+    return { result, plan: ok ? plan : undefined, ok, reason }
   })
 }
 
@@ -616,7 +675,7 @@ export function runWorkerTask(input: {
       eventType: "jankurai.worker.started",
       payload: { workerID: input.workerID, taskID: input.task.id },
     })
-    const worktree = yield* input.worktree.create({
+  const worktree = yield* input.worktree.create({
       name: `jankurai-${input.run.id.slice(-8)}-${input.workerID.slice(-8)}-${input.task.id.slice(-12)}`,
       branchPrefix: input.config.pool?.branch_prefix ?? "jekko",
     })
@@ -660,14 +719,119 @@ export function runWorkerTask(input: {
         task: input.task,
         beforeReport: input.beforeReport,
       })
+      const workerStatus = yield* input.checks.runShellCheck({
+        cwd: worktree.directory,
+        command: "git status --porcelain",
+        timeout: "1 minute",
+      })
+      const workerStatusLines = workerStatus.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+      if (!workerStatus.matched) {
+        const reason = workerStatus.error ?? "worker status check failed"
+        yield* input.store.appendTaskMemory({
+          runID: input.run.id,
+          taskID: input.task.id,
+          kind: "risk_review",
+          title: `${input.task.title}: blocked`,
+          summary: reason,
+          payload: {
+            reason,
+            workerVerification,
+            workerStatus,
+            patchPath: null,
+          },
+          importance: 0.7,
+          confidence: 0.6,
+        })
+        yield* input.store.blockTask({
+          taskID: input.task.id,
+          evidence: { reason, workerVerification, workerStatus, worktree: worktree.directory },
+        })
+        yield* input.store.appendEvent({
+          runID: input.run.id,
+          iteration: input.run.iteration,
+          eventType: "jankurai.worker.blocked",
+          payload: { workerID: input.workerID, taskID: input.task.id, reason, statusLines: workerStatusLines },
+        })
+        return { ok: false as const, reason, patchPath: null }
+      }
+      if (workerVerification.ok && workerStatusLines.length === 0) {
+        const reason = "worker produced no diff"
+        yield* input.store.appendTaskMemory({
+          runID: input.run.id,
+          taskID: input.task.id,
+          kind: "risk_review",
+          title: `${input.task.title}: blocked`,
+          summary: reason,
+          payload: {
+            reason,
+            workerVerification,
+            workerStatus,
+            patchPath: null,
+          },
+          importance: 0.7,
+          confidence: 0.6,
+        })
+        yield* input.store.blockTask({
+          taskID: input.task.id,
+          evidence: { reason, workerVerification, workerStatus, worktree: worktree.directory },
+        })
+        yield* input.store.appendEvent({
+          runID: input.run.id,
+          iteration: input.run.iteration,
+          eventType: "jankurai.worker.blocked",
+          payload: { workerID: input.workerID, taskID: input.task.id, reason, statusLines: workerStatusLines },
+        })
+        return { ok: false as const, reason, patchPath: null }
+      }
       const taskDir = path.join(input.cwd, ".jekko", "daemon", input.run.id, "tasks", input.task.id)
       yield* Effect.promise(() => mkdir(taskDir, { recursive: true }))
       const patchPath = path.join(taskDir, "worker.patch")
       const patch = yield* input.checks.runShellCheck({
         cwd: worktree.directory,
-        command: `git diff --binary HEAD > ${shellQuote(patchPath)}`,
+        command: `git add -N . && git diff --binary HEAD > ${shellQuote(patchPath)}`,
         timeout: "1 minute",
       })
+      const patchSize = yield* Effect.promise(() => stat(patchPath).then((file) => file.size).catch(() => 0))
+      if (workerVerification.ok && patchSize === 0) {
+        const reason = `worker patch empty despite dirty worktree: ${workerStatusLines.slice(0, 5).join(" | ")}`
+        yield* input.store.appendTaskMemory({
+          runID: input.run.id,
+          taskID: input.task.id,
+          kind: "risk_review",
+          title: `${input.task.title}: blocked`,
+          summary: reason,
+          payload: {
+            reason,
+            workerVerification,
+            workerStatus,
+            patch,
+            patchSize,
+            statusLines: workerStatusLines,
+          },
+          importance: 0.7,
+          confidence: 0.6,
+        })
+        yield* input.store.blockTask({
+          taskID: input.task.id,
+          evidence: { reason, workerVerification, workerStatus, patch, patchSize, statusLines: workerStatusLines },
+        })
+        yield* input.store.appendEvent({
+          runID: input.run.id,
+          iteration: input.run.iteration,
+          eventType: "jankurai.worker.blocked",
+          payload: {
+            workerID: input.workerID,
+            taskID: input.task.id,
+            reason,
+            patchPath,
+            statusLines: workerStatusLines,
+          },
+        })
+        return { ok: false as const, reason, patchPath }
+      }
       const primaryClean = yield* input.checks.gitClean({ cwd: input.cwd, allowUntracked: false })
       const applyCheck = workerVerification.ok && primaryClean.clean
         ? yield* input.checks.runShellCheck({
@@ -893,6 +1057,10 @@ export function runWorkerPool(input: {
       started: results.filter((result) => !("skipped" in result)).length,
       verified: results.filter((result) => "ok" in result && result.ok === true).length,
       blocked: results.filter((result) => "ok" in result && result.ok === false).length,
+      reason:
+        results.filter((result) => !("skipped" in result)).length === 0
+          ? results.find((result) => "skipped" in result)?.reason ?? "no conflict-free task"
+          : results.find((result) => "ok" in result && result.ok === false)?.reason,
     }
   })
 }
@@ -1043,11 +1211,26 @@ export function promptSummaryLines(input: {
   workers: readonly DaemonStore.WorkerInfo[]
   currentTask?: DaemonStore.TaskInfo
   regression?: unknown
+  bootstrap?: unknown
+  progress?: DaemonProgressSnapshot
 }) {
   const report = input.report ? summarizeReport(input.report) : undefined
   const stats = jankuraiTaskStats(input.tasks)
   const activeWorkers = input.workers.filter((worker) => ["active", "running", "leased"].includes(String(worker.status))).length
   return [
+    input.progress
+      ? `Jankurai stage: ${input.progress.lastSuccessfulStage ?? "(none)"}`
+      : `Jankurai stage: (unknown)`,
+    input.progress?.recentStages.length
+      ? `Jankurai trace: ${input.progress.recentStages.map((line) => line.text).join(" -> ")}`
+      : `Jankurai trace: (none)`,
+    input.progress?.blockedReasons.length
+      ? `Jankurai blocked: ${input.progress.blockedReasons.slice(-3).join(" | ")}`
+      : `Jankurai blocked: (none)`,
+    input.progress ? `Jankurai seed: ${input.progress.seededArtifacts}` : `Jankurai seed: (unknown)`,
+    input.progress?.workerWave
+      ? `Jankurai worker wave: verified ${input.progress.workerWave.verified > 0 ? "yes" : "no"} (${input.progress.workerWave.started} started, ${input.progress.workerWave.blocked} blocked${input.progress.workerWave.reason ? `, ${input.progress.workerWave.reason}` : ""})`
+      : `Jankurai worker wave: (none)`,
     report
       ? `Jankurai: score ${report.score}, findings ${report.finding_count}, hard ${report.hard_findings}, soft ${report.soft_findings}`
       : `Jankurai: no audit report loaded`,
@@ -1056,6 +1239,19 @@ export function promptSummaryLines(input: {
     input.config.pool
       ? `Jankurai pool: size ${input.config.pool.size}, hard cap ${input.config.pool.hard_cap}, branch prefix ${input.config.pool.branch_prefix}, commit_on_green ${input.config.pool.commit_on_green ? "on" : "off"}`
       : `Jankurai pool: (default worker namespace)`,
+    input.config.bootstrap
+      ? `Jankurai bootstrap: ${[
+          input.config.bootstrap.run_update_on_start ? "update_on_start" : null,
+          input.config.bootstrap.ensure_init ? "ensure_init" : null,
+          input.config.bootstrap.ensure_canonical ? "ensure_canonical" : null,
+          input.config.bootstrap.yes ? "yes" : null,
+          input.config.bootstrap.strict ? "strict" : null,
+          input.config.bootstrap.dry_run ? "dry_run" : null,
+        ]
+          .filter(Boolean)
+          .join(" ")}`
+      : `Jankurai bootstrap: (not configured)`,
+    input.bootstrap ? `Jankurai bootstrap receipt: ${JSON.stringify(input.bootstrap)}` : `Jankurai bootstrap receipt: (none)`,
     input.currentTask ? `Jankurai current task: ${input.currentTask.external_id ?? input.currentTask.id}` : `Jankurai current task: (none)`,
     `Jankurai proof: ${input.config.verification.commands.join("; ") || "(configured audit only)"}`,
     input.regression ? `Jankurai regression: ${JSON.stringify(input.regression)}` : `Jankurai regression: (none)`,
@@ -1153,6 +1349,51 @@ function proofCommandsForPacket(packet: JsonRecord, finding: JsonRecord | undefi
   ].filter((item): item is string => typeof item === "string" && item.trim().length > 0)
 }
 
+function requiredFixPaths(packet: JsonRecord, finding: JsonRecord | undefined) {
+  const sources = [
+    stringFrom(packet.agent_fix),
+    stringFrom(packet.problem),
+    stringFrom(packet.why),
+    stringFrom(finding?.agent_fix),
+    stringFrom(finding?.problem),
+    stringFrom(finding?.reason),
+    stringFrom(finding?.rerun_command),
+  ].filter((value): value is string => typeof value === "string" && value.length > 0)
+  const paths = new Set<string>()
+  const pathPattern = /(?:[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.*?-]+)+|(?:\.\/)?[A-Za-z0-9_-]+\.[A-Za-z0-9._-]+)/g
+  for (const source of sources) {
+    for (const match of source.match(pathPattern) ?? []) {
+      const normalized = match.replace(/^[("'`]+|[)"'`,.;:]+$/g, "")
+      if (normalized) paths.add(normalized)
+    }
+  }
+  return [...paths]
+}
+
+function isCoveredByAllowedPaths(candidatePath: string, allowedPaths: readonly string[]) {
+  const candidate = normalizeTaskPath(candidatePath)
+  if (!candidate) return true
+  for (const allowedPath of allowedPaths) {
+    const allowed = normalizeTaskPath(allowedPath)
+    if (!allowed) continue
+    if (allowed.includes("*")) {
+      const prefix = allowed.slice(0, allowed.indexOf("*"))
+      if (prefix && candidate.startsWith(prefix)) return true
+      continue
+    }
+    if (allowed.endsWith("/")) {
+      if (candidate.startsWith(allowed)) return true
+      continue
+    }
+    if (candidate === allowed || candidate.startsWith(`${allowed}/`)) return true
+  }
+  return false
+}
+
+function normalizeTaskPath(value: string) {
+  return value.trim().replace(/^\.\//, "").replace(/^\/+/, "")
+}
+
 function priorityFor(config: JankuraiConfig, risk: ZyalJankuraiRisk, eligibility: string, blocked: boolean) {
   const quickWin = config.selection.order === "quick_wins_first"
   const riskBase = quickWin ? 5000 - RISK_ORDER[risk] * 1000 : RISK_ORDER[risk] * 1000
@@ -1167,6 +1408,16 @@ function isHardFinding(finding: JsonRecord) {
   if (hardness === "hard") return true
   const severity = stringFrom(finding.severity)?.toLowerCase()
   return severity === "high" || severity === "critical"
+}
+
+function isAuditReportShape(value: unknown): value is JsonRecord {
+  const record = asRecord(value)
+  return Array.isArray(record.findings)
+}
+
+function isRepairPlanShape(value: unknown): value is JsonRecord {
+  const record = asRecord(value)
+  return Array.isArray(record.packets)
 }
 
 function buildWorkerPrompt(input: {
@@ -1192,12 +1443,14 @@ function buildWorkerPrompt(input: {
     `Allowed paths: ${stringArray(body.allowed_paths).join(", ") || "(none declared)"}`,
     `Forbidden paths: ${stringArray(body.forbidden_paths).join(", ") || "(none declared)"}`,
     `Locked paths: ${lockedPaths.join(", ") || "(none declared)"}`,
-    `Proof commands: ${proofCommandsForPacket(packet, finding, config).join("; ") || "(configured verification only)"}`,
+    `Proof commands: ${proofCommandsForPacket(packet, finding, input.config).join("; ") || "(configured verification only)"}`,
     `Blocked reason: ${stringFrom(input.task.blocked_reason) ?? "(none)"}`,
     input.beforeReport ? `Regression status: ${JSON.stringify(summarizeReport(input.beforeReport))}` : `Regression status: (none)`,
     ``,
     `Recent task memory:`,
     recentMemories ? recentMemories : `- (none)`,
+    ``,
+    `If you have a verified, low-risk, and reversible slice, commit it to ${input.config.pool?.integration_branch ?? "the integration branch"} before widening scope. Prefer frequent small commits over one large batch. If a change is broken but safely revertible, commit the last known-good slice and let another attempt continue from there.`,
     ``,
     `Repair exactly this finding. Do not include secret evidence in logs or comments. Stop and report blocked if the fix needs human review, a migration, generated-output hand edits, public API redesign, or security authority changes.`,
     ``,
@@ -1247,6 +1500,83 @@ function bootstrapIntegrationBranch(input: {
       command,
     })
     return { ok: true as const, branch, command }
+  })
+}
+
+function runBootstrap(input: {
+  cwd: string
+  config: JankuraiConfig
+  checks: DaemonChecks.Interface
+  store?: DaemonStore.Interface
+  runID?: string
+  iteration?: number
+}) {
+  return Effect.gen(function* () {
+    const bootstrap = input.config.bootstrap
+    if (!bootstrap) return { ok: true as const, skipped: true as const }
+
+    const detectionBefore = detectCanonical(input.cwd)
+    const commands: string[] = []
+
+    if (bootstrap.run_update_on_start) {
+      const updateCommand = "jankurai update --client-start --quiet"
+      commands.push(updateCommand)
+      const update = yield* input.checks.runShellCheck({
+        cwd: input.cwd,
+        command: updateCommand,
+        timeout: "5 minutes",
+      })
+      if (!update.matched) {
+        const reason = update.error ?? "jankurai update failed"
+        yield* appendOptionalEvent(input.store, input.runID, input.iteration ?? 0, "jankurai.bootstrap.blocked", {
+          step: "update",
+          reason,
+          commands,
+        })
+        return { ok: false as const, reason }
+      }
+    }
+
+    if (bootstrap.ensure_canonical) {
+      const canonicalCommand = bootstrap.dry_run
+        ? "jankurai init --dry-run"
+        : "jankurai init --yes"
+      commands.push(canonicalCommand)
+      const canonical = yield* input.checks.runShellCheck({
+        cwd: input.cwd,
+        command: canonicalCommand,
+        timeout: "10 minutes",
+      })
+      if (!canonical.matched) {
+        const reason = canonical.error ?? "jankurai canonical bootstrap failed"
+        yield* appendOptionalEvent(input.store, input.runID, input.iteration ?? 0, "jankurai.bootstrap.blocked", {
+          step: "canonical",
+          reason,
+          commands,
+        })
+        return { ok: false as const, reason }
+      }
+    }
+
+    const detectionAfter = detectCanonical(input.cwd)
+    if ((bootstrap.ensure_init || bootstrap.ensure_canonical) && detectionAfter.missingRequired.length > 0) {
+      const reason = `jankurai init incomplete; missing required files: ${detectionAfter.missingRequired.join(", ")}`
+      yield* appendOptionalEvent(input.store, input.runID, input.iteration ?? 0, "jankurai.bootstrap.blocked", {
+        step: "verify",
+        reason,
+        commands,
+      })
+      return { ok: false as const, reason }
+    }
+
+    yield* appendOptionalEvent(input.store, input.runID, input.iteration ?? 0, "jankurai.bootstrap.completed", {
+      commands,
+      missing_required_before: detectionBefore.missingRequired,
+      missing_optional_before: detectionBefore.missingOptional,
+      missing_required_after: detectionAfter.missingRequired,
+      missing_optional_after: detectionAfter.missingOptional,
+    })
+    return { ok: true as const, commands, detectionBefore, detectionAfter }
   })
 }
 

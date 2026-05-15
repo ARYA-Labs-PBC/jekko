@@ -9,7 +9,9 @@ job:
   objective: |
     Run the full jankurai forever loop with dispatch, 20 worktree workers,
     concept and receipt memory, external research gates, taint quarantine,
-    and reviewer-backed promotion blocking.
+    and reviewer-backed promotion blocking. Commit verified reversible slices
+    frequently on jankurai_port so a later plan failure can be reverted and
+    retried without losing the good work.
 
 arming:
   preview_hash_required: true
@@ -170,6 +172,11 @@ research:
 jankurai:
   enabled: true
   root: "."
+  bootstrap:
+    run_update_on_start: true
+    ensure_init: true
+    ensure_canonical: true
+    yes: true
   pool:
     size: 20
     hard_cap: 20
@@ -198,7 +205,7 @@ jankurai:
     max_new_hard_findings: 0
     max_score_drop: 0
   verification:
-    require_clean_start: true
+    require_clean_start: false
     require_clean_after_checkpoint: true
     proof_from_test_map: true
     commands:
@@ -206,6 +213,47 @@ jankurai:
       - "git diff --check"
     audit_delta: no_new_findings
     rollback_unverified: true
+
+experiments:
+  strategy: portfolio_search
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.45
+    axes:
+      - edit_order
+      - verification_order
+      - lane_split
+  lanes:
+    - id: plan-scout
+      hypothesis: "Find the safest cap refactor shape before touching code."
+      prompt_strategy: default
+      isolation: same_session
+      timeout: 10m
+    - id: plan-audit
+      hypothesis: "Audit the plan against regression and proof requirements."
+      prompt_strategy: default
+      isolation: same_session
+      timeout: 10m
+    - id: plan-fuse
+      hypothesis: "Fuse the strongest plan fragments into one highest-confidence path."
+      prompt_strategy: default
+      isolation: same_session
+      timeout: 10m
+    - id: plan-spike
+      hypothesis: "Spike an alternate approach when the refactor is unexpectedly broad."
+      prompt_strategy: default
+      isolation: same_session
+      timeout: 10m
+  fork_from: current_head
+  max_parallel: 4
+  scoring:
+    command: "just fast"
+    goal_direction: maximize
+  reduce:
+    strategy: synthesize_best
+    require_final_verification: true
+  on_partial_failure: continue
+  preserve_failed_lanes_as_negative_memory: true
 
 incubator:
   enabled: true
@@ -354,7 +402,7 @@ checkpoint:
 stop:
   all:
     - shell:
-        command: "jq -e '(.findings // []) | length == 0' target/jankurai/repo-score.json"
+        command: "test -f .jekko/daemon-stop"
         timeout: 10m
     - git_clean:
         allow_untracked: false

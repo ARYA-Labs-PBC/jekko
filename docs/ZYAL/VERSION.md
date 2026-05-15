@@ -2,7 +2,7 @@
 
 - Contract version: `2.6.0`
 - Canonical schema: [`SPEC.md`](SPEC.md)
-- Release tag: `v1.0.0`
+- Release tag: `v1.0.2`
 - Runtime sentinel version: `<<<ZYAL v1:daemon ...>>>`
 - `research.version`: `v1`
 

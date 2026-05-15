@@ -8,6 +8,15 @@ import { UI } from "../ui"
 import { Filesystem } from "@/util/filesystem"
 import { Server } from "../../server/server"
 import { ServerAuth } from "@/server/auth"
+import {
+  collectDaemonProgress,
+  formatDaemonEventLine,
+  formatDaemonHeartbeatLine,
+  formatDaemonRunStatusLine,
+  isTerminalDaemonStatus,
+  type DaemonProgressLine,
+  type DaemonProgressSnapshot,
+} from "@/session/daemon-progress"
 
 type RequestTarget = {
   readonly baseUrl: string
@@ -63,18 +72,63 @@ function formatScore(value?: number) {
   return `${Math.round(value * 100)}%`
 }
 
-export function formatDaemonRunSummary(run: any, taskCount = 0) {
-  return [
-    `run ${run.id}`,
-    `status ${run.status}`,
-    `phase ${run.phase}`,
-    `iter ${run.iteration}`,
-    `epoch ${run.epoch}`,
-    `tasks ${taskCount}`,
-    run.last_error ? `error ${run.last_error}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ")
+function progressStyle(tone: DaemonProgressLine["tone"]) {
+  switch (tone) {
+    case "success":
+      return UI.Style.TEXT_SUCCESS_BOLD
+    case "warning":
+      return UI.Style.TEXT_WARNING_BOLD
+    case "danger":
+      return UI.Style.TEXT_DANGER_BOLD
+    case "muted":
+      return UI.Style.TEXT_DIM_BOLD
+    default:
+      return UI.Style.TEXT_INFO_BOLD
+  }
+}
+
+function paintProgressLine(line: DaemonProgressLine, prefix = "daemon") {
+  return `${progressStyle(line.tone)}${prefix}: ${line.text}${UI.Style.TEXT_NORMAL}`
+}
+
+function paintHeartbeat(run: any, progress?: DaemonProgressSnapshot) {
+  return `${UI.Style.TEXT_DIM}${formatDaemonHeartbeatLine({ run, progress })}${UI.Style.TEXT_NORMAL}`
+}
+
+async function followDaemonRun(input: RequestTarget, runID: string, prefix = "daemon") {
+  let cursor = 0
+  let lastHeartbeat = Date.now()
+  while (true) {
+    const [events, currentRun] = await Promise.all([
+      requestJsonArray(input, `/daemon/${runID}/events`),
+      requestJson(input, `/daemon/${runID}`),
+    ])
+    const progress = collectDaemonProgress(events as any[])
+    const newEvents = (events as any[]).slice(cursor)
+    if (newEvents.length > 0) {
+      for (const event of newEvents) {
+        const line = formatDaemonEventLine(event as any)
+        if (line) UI.println(paintProgressLine(line, prefix))
+      }
+      cursor = events.length
+      lastHeartbeat = Date.now()
+    } else if (Date.now() - lastHeartbeat >= 5000) {
+      UI.println(paintHeartbeat(currentRun as any, progress))
+      lastHeartbeat = Date.now()
+    }
+    if (isTerminalDaemonStatus((currentRun as any)?.status)) {
+      const terminal = (currentRun as any)?.status === "satisfied" ? "success" : (currentRun as any)?.status === "paused" ? "warning" : "danger"
+      UI.println(
+        `${progressStyle(terminal)}${formatDaemonRunStatusLine({ run: currentRun as any, progress })}${UI.Style.TEXT_NORMAL}`,
+      )
+      break
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+}
+
+export function formatDaemonRunSummary(run: any, taskCount = 0, progress?: DaemonProgressSnapshot) {
+  return formatDaemonRunStatusLine({ run, taskCount, progress })
 }
 
 export function formatDaemonRunList(runs: readonly any[]) {
@@ -168,6 +222,11 @@ export const DaemonStartCommand = effectCmd({
         describe: "required arm sentinel",
         default: "RUN_FOREVER",
       })
+      .option("watch", {
+        type: "boolean",
+        default: true,
+        describe: "follow the live event stream after starting the run",
+      })
       .option("attach", {
         type: "string",
         describe: "attach to a running jekko server (e.g. http://localhost:4096)",
@@ -218,7 +277,12 @@ export const DaemonStartCommand = effectCmd({
         }),
       }),
     )
-    UI.println(JSON.stringify(run, null, 2))
+    UI.println(paintProgressLine({ tone: "info", text: formatDaemonRunStatusLine({ run: run as any }) }))
+
+    const runID = (run as any)?.id
+    if (!runID) return
+    if (!args.watch) return
+    yield* Effect.promise(() => followDaemonRun(input, runID))
   }),
 })
 
@@ -227,10 +291,16 @@ export const DaemonStatusCommand = effectCmd({
   describe: "show daemon run status",
   instance: false,
   builder: (yargs) =>
-    yargs.positional("runID", {
-      type: "string",
-      describe: "daemon run id",
-    }),
+    yargs
+      .positional("runID", {
+        type: "string",
+        describe: "daemon run id",
+      })
+      .option("watch", {
+        type: "boolean",
+        default: false,
+        describe: "follow the live event stream until the run exits",
+      }),
   handler: Effect.fn("Cli.daemon.status")(function* (args) {
     const input = target(args)
     if (!args.runID) {
@@ -242,9 +312,14 @@ export const DaemonStatusCommand = effectCmd({
       ? yield* Effect.promise(() => requestJson(input, `/daemon/${args.runID}`))
       : undefined
     if (!run) return
+    const events = yield* Effect.promise(() => requestJsonArray(input, `/daemon/${args.runID}/events`))
+    const progress = collectDaemonProgress(events as any[])
     const tasks = yield* Effect.promise(() => requestJsonArray(input, `/daemon/${args.runID}/tasks`))
-    UI.println(formatDaemonRunSummary(run as any, tasks.length))
+    UI.println(formatDaemonRunSummary(run as any, tasks.length, progress))
     if (tasks.length) UI.println(formatDaemonTaskList(tasks))
+    if (args.watch) {
+      yield* Effect.promise(() => followDaemonRun(input, args.runID!, "status"))
+    }
   }),
 })
 

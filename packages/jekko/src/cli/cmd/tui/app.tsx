@@ -4,7 +4,7 @@ import * as Clipboard from "@tui/util/clipboard"
 import { createCliRenderer, type CliRenderer, type CliRendererConfig } from "@opentui/core"
 import { RouteProvider } from "@tui/context/route"
 import { createSignal, ErrorBoundary, Show } from "solid-js"
-import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
+import { win32DisableProcessedInput, win32FlushInputBuffer, win32InstallCtrlCGuard } from "./win32"
 import { Flag } from "@jekko-ai/core/flag/flag"
 import { DialogProvider } from "@tui/ui/dialog"
 import { ErrorComponent } from "@tui/component/error-component"
@@ -32,6 +32,8 @@ import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { App } from "./app-view"
 import * as Log from "@jekko-ai/core/util/log"
 import { errorMessage } from "@/util/error"
+import { useStartupQuit } from "./component/startup-quit"
+import { runStartupPreflight } from "./startup-preflight"
 
 const bootLog = Log.create({ service: "tui.boot" })
 
@@ -129,7 +131,8 @@ function printFatalStartupError(error: unknown) {
   process.stderr.write(`Jekko TUI failed to start.${suffix}\n${errorMessage(error)}\n`)
 }
 
-function RootStartupFallback(props: { visible: () => boolean; stage: () => string }) {
+function RootStartupFallback(props: { visible: () => boolean; stage: () => string; onQuit?: () => void }) {
+  useStartupQuit(props.onQuit)
   return (
     <Show when={props.visible()}>
       <box
@@ -144,6 +147,7 @@ function RootStartupFallback(props: { visible: () => boolean; stage: () => strin
           <text fg="#d4a843">Jekko</text>
           <text fg="#d8dee9">{props.stage()}</text>
           <text fg="#7d8590">{Log.file() ? `Log: ${Log.file()}` : "Logs: stderr"}</text>
+          <text fg="#7d8590">[q] quit</text>
         </box>
       </box>
     </Show>
@@ -182,8 +186,21 @@ export function tui(input: {
       await TuiPluginRuntime.dispose()
       bootLog.info("plugin dispose complete", { log: Log.file() })
     }
+    const onStartupQuit = async () => {
+      await onBeforeExit()
+      renderer?.setTerminalTitle("")
+      renderer?.destroy()
+      win32FlushInputBuffer()
+      await onExit()
+    }
 
     try {
+      if (!(await runStartupPreflight(input.directory))) {
+        process.exitCode = 1
+        resolve()
+        return
+      }
+
       const config = rendererConfig(input.config)
       bootLog.info("renderer create start", {
         config: {
@@ -242,7 +259,7 @@ export function tui(input: {
       await render(() => {
         return (
           <ErrorBoundary {...(errorBoundaryProps as any)}>
-            <RootStartupFallback visible={() => !appVisible()} stage={stage} />
+            <RootStartupFallback visible={() => !appVisible()} stage={stage} onQuit={() => void onStartupQuit()} />
             <ArgsProvider {...input.args}>
               <ExitProvider onBeforeExit={onBeforeExit} onExit={onExit}>
                 <KVProvider>
@@ -312,6 +329,7 @@ export function tui(input: {
           </ErrorBoundary>
         )
       }, renderer)
+      setAppVisible(true)
       bootLog.info("solid render complete", {
         duration: Date.now() - startedAt,
         ...terminalSnapshot(renderer),

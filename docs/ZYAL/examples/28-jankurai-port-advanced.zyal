@@ -10,7 +10,9 @@ job:
     Run ten worktree workers across easy findings first, keep a shared memory
     trail of blocked reasons and completed receipts, route medium and risky
     work through the incubator, and checkpoint verified progress on
-    jankurai_port.
+    jankurai_port. If a plan slice is verified and confidently reversible,
+    commit it before expanding scope so another pass can recover from any
+    later failure.
 
 arming:
   preview_hash_required: true
@@ -68,6 +70,11 @@ memory:
 jankurai:
   enabled: true
   root: "."
+  bootstrap:
+    run_update_on_start: true
+    ensure_init: true
+    ensure_canonical: true
+    yes: true
   pool:
     size: 10
     hard_cap: 20
@@ -96,7 +103,7 @@ jankurai:
     max_new_hard_findings: 0
     max_score_drop: 0
   verification:
-    require_clean_start: true
+    require_clean_start: false
     require_clean_after_checkpoint: true
     proof_from_test_map: true
     commands:
@@ -104,6 +111,42 @@ jankurai:
       - "git diff --check"
     audit_delta: no_new_findings
     rollback_unverified: true
+
+experiments:
+  strategy: parallel_distill_refine
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.35
+    axes:
+      - edit_order
+      - file_grouping
+      - verification_order
+  lanes:
+    - id: plan-scout
+      hypothesis: "Map the cap-heavy refactor, identify the smallest safe slice, and pin proof commands."
+      prompt_strategy: default
+      isolation: same_session
+      timeout: 10m
+    - id: plan-alt
+      hypothesis: "Explore an alternate decomposition that reduces parallel conflicts."
+      prompt_strategy: default
+      isolation: same_session
+      timeout: 10m
+    - id: plan-fuse
+      hypothesis: "Fuse the strongest plan fragments into one verified execution path."
+      prompt_strategy: default
+      isolation: same_session
+      timeout: 10m
+  fork_from: current_head
+  max_parallel: 3
+  scoring:
+    command: "just fast"
+    goal_direction: maximize
+  reduce:
+    strategy: synthesize_best
+    require_final_verification: true
+  on_partial_failure: continue
+  preserve_failed_lanes_as_negative_memory: true
 
 incubator:
   enabled: true
@@ -199,7 +242,7 @@ checkpoint:
 stop:
   all:
     - shell:
-        command: "jq -e '(.findings // []) | length == 0' target/jankurai/repo-score.json"
+        command: "test -f .jekko/daemon-stop"
         timeout: 10m
     - git_clean:
         allow_untracked: false

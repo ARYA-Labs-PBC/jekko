@@ -34,7 +34,7 @@ import * as Clipboard from "../../util/clipboard"
 import type { FilePart, UserMessage } from "@jekko-ai/sdk/v2"
 import { TuiEvent } from "../../event"
 import { detectZyal, scanZyalEnvelope, type ZyalDetection } from "@/agent-script/activation"
-import { isZyalFlashSourceActive, setZyalFlashSource, textHasZyalSentinel, useZyalFlash } from "@tui/context/zyal-flash"
+import { isZyalFlashSourceActive, setZyalFlashSource, textHasZyalSentinel, useZyalFlash, useZyalMetrics } from "@tui/context/zyal-flash"
 import { tokenizeYaml } from "@tui/util/yaml-tokenize"
 import { iife } from "@/util/iife"
 import { Locale } from "@/util/locale"
@@ -199,6 +199,7 @@ export function Prompt(props: PromptProps) {
   // signal call is what wires reactivity; we don't need the value itself,
   // we just need the memo to recompute.
   const zyalFlashSignal = useZyalFlash()
+  const zyalMetrics = useZyalMetrics()
   const status = createMemo(() => {
     const raw = sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" }
     if (raw.type !== "idle") return raw
@@ -662,6 +663,15 @@ export function Prompt(props: PromptProps) {
             void sdk.client.session.abort({
               sessionID: props.sessionID,
             })
+            // Also abort the daemon run if one is active, otherwise the
+            // supervisor loop immediately restarts the next iteration and
+            // the interrupt appears to do nothing.
+            const daemonRunId = zyalMetrics()?.runId
+            if (daemonRunId && isZyalFlashSourceActive("session:daemon")) {
+              void sdk.fetch(new URL(`/daemon/${daemonRunId}/abort`, sdk.url), {
+                method: "POST",
+              })
+            }
             setStore("interrupt", 0)
           }
           dialog.clear()

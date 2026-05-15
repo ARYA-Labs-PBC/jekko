@@ -34,7 +34,7 @@ check_cmd python3 "brew install python"
 check_cmd gitleaks "brew install gitleaks"
 check_cmd syft "brew install syft"
 check_cmd latexmk "brew install --cask mactex (or texlive on linux)"
-check_cmd jankurai "cargo install --git https://github.com/neverhuman/jankurai --tag v1.3.0 --locked jankurai"
+check_cmd jankurai "cargo install --git https://github.com/neverhuman/jankurai --tag v1.4.2 --locked jankurai"
 
 if command -v cargo >/dev/null 2>&1; then
   cargo audit --version >/dev/null 2>&1 || warnings+=("cargo-audit missing (run `cargo install cargo-audit --locked`)")

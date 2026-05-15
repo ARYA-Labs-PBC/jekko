@@ -23,8 +23,9 @@ Use this file as the checklist for setting up upstream access.
 
 ## Env File
 
-Put the values in `/Users/bentaylor/Code/jekko/.env.jnoccio` only for the
-developer-only protected Jnoccio workflow.
+Put the values in `~/.env.jnoccio` only for the developer-only protected
+Jnoccio workflow. The startup preflight checks this home-level file first so
+it works the same way from every repo on the machine.
 
 Jekko model setup does not use this file. Public model keys belong in
 `~/.jekko/jekko.env`.

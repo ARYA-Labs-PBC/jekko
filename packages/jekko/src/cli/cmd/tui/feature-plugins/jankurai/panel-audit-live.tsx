@@ -59,7 +59,7 @@ export function JankuraiAuditLivePanel(props: { api: TuiPluginApi }) {
           <text fg={theme().textMuted}>vs main: {formatDelta(scoreDelta())}</text>
         </box>
         <text fg={theme().textMuted}>
-          Audit · {ageText()} · {score()?.decision} · v{score()?.standardVersion}
+          Audit · {ageText()} · {score()?.decision} · v{score()?.auditorVersion}
         </text>
         <box flexDirection="row" gap={2}>
           <box flexDirection="column">

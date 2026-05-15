@@ -14,6 +14,18 @@ const mockIt = testEffect(
   ),
 )
 
+const failureIt = testEffect(
+  DaemonChecks.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Config.defaultLayer,
+        Git.defaultLayer,
+        mockSpawnerLayer({ exitCode: 1, stdout: "stdout text", stderr: "stderr text" }),
+      ),
+    ),
+  ),
+)
+
 const timeoutIt = testEffect(
   DaemonChecks.layer.pipe(
     Layer.provide(Layer.mergeAll(Config.defaultLayer, Git.defaultLayer, timeoutSpawnerLayer())),
@@ -86,7 +98,7 @@ describe("daemon checks", () => {
     }),
   )
 
-  it.instance("treats missing files as failed stop checks", () =>
+  failureIt.instance("treats missing files as failed stop checks with command details", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       const checks = yield* DaemonChecks.Service
@@ -97,7 +109,10 @@ describe("daemon checks", () => {
 
       expect(result.exitCode).not.toBe(0)
       expect(result.matched).toBe(false)
-      expect(result.error).toBe("shell assertion failed")
+      expect(result.error).toContain("command failed: test -f missing-file")
+      expect(result.error).toContain("exitCode=1")
+      expect(result.error).toContain("stdout=stdout text")
+      expect(result.error).toContain("stderr=stderr text")
     }),
   )
 
@@ -113,7 +128,8 @@ describe("daemon checks", () => {
 
       expect(result.exitCode).toBe(124)
       expect(result.matched).toBe(false)
-      expect(result.error).toBe("shell assertion failed")
+      expect(result.error).toContain("command failed: sleep 999")
+      expect(result.error).toContain("exitCode=124")
     }),
   )
 })

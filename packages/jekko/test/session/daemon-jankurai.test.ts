@@ -1,6 +1,8 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { CrossSpawnSpawner } from "@jekko-ai/core/cross-spawn-spawner"
+import { mkdir, writeFile } from "fs/promises"
+import path from "path"
 import { ZyalScriptSchema } from "../../src/agent-script/schema"
 import { DaemonJankurai } from "../../src/session/daemon-jankurai"
 import { DaemonStore } from "../../src/session/daemon-store"
@@ -44,12 +46,30 @@ function specWithPool() {
     ...spec(),
     jankurai: {
       ...(spec() as any).jankurai,
+      verification: {
+        require_clean_start: false,
+      },
       pool: {
         size: 30,
         hard_cap: 20,
         branch_prefix: "zyal/jankurai-port",
         integration_branch: "jankurai_port",
         commit_on_green: true,
+      },
+    },
+  })
+}
+
+function specWithBootstrap() {
+  return Schema.decodeUnknownSync(ZyalScriptSchema)({
+    ...spec(),
+    jankurai: {
+      ...(spec() as any).jankurai,
+      bootstrap: {
+        run_update_on_start: true,
+        ensure_init: true,
+        ensure_canonical: true,
+        yes: true,
       },
     },
   })
@@ -317,10 +337,109 @@ describe("session.daemon-jankurai", () => {
     yield* Effect.void
   }))
 
+  it.effect("blocks packets whose inferred fix paths exceed allowed_paths", Effect.gen(function* () {
+    const config = DaemonJankurai.resolveJankuraiConfig(spec())!
+    const route = DaemonJankurai.taskRoute({
+      config,
+      packet: {
+        finding_fingerprint: "sha256:route",
+        finding_path: "packages/jekko/src/a.ts",
+        rule_id: "HLT-001-DEAD-MARKER",
+        risk_level: "low",
+        repair_eligibility: "agent-assisted",
+        allowed_paths: ["packages/jekko/src/a.ts"],
+        agent_fix: "Update scripts/ci-local.sh and rust-toolchain.toml before running the repair",
+      },
+      finding: {
+        path: "packages/jekko/src/a.ts",
+        problem: "needs a repair plan that updates scripts/ci-local.sh and rust-toolchain.toml",
+      },
+    })
+
+    expect(route.status).toBe("blocked")
+    expect(route.blockedReason).toContain("scripts/ci-local.sh")
+    expect(route.blockedReason).toContain("rust-toolchain.toml")
+    yield* Effect.void
+  }))
+
+  it.effect("blocks workflow packets whose fix needs ops or scripts paths", Effect.gen(function* () {
+    const config = DaemonJankurai.resolveJankuraiConfig(spec())!
+    const route = DaemonJankurai.taskRoute({
+      config,
+      packet: {
+        finding_fingerprint: "sha256:workflow-route",
+        finding_path: ".github/workflows/jankurai.yml",
+        rule_id: "HLT-001-DEAD-MARKER",
+        risk_level: "low",
+        repair_eligibility: "agent-assisted",
+        allowed_paths: [".github/workflows/jankurai.yml"],
+        why: "Needs updates in ops/ci-local.sh and scripts/ci-doctor.sh before the workflow can pass",
+      },
+      finding: {
+        path: ".github/workflows/jankurai.yml",
+        problem: "workflow repair requires ops/ci-local.sh and scripts/ci-doctor.sh",
+      },
+    })
+
+    expect(route.status).toBe("blocked")
+    expect(route.blockedReason).toContain("ops/ci-local.sh")
+    expect(route.blockedReason).toContain("scripts/ci-doctor.sh")
+    yield* Effect.void
+  }))
+
   it.effect("resolves pool size with fleet and hard caps", Effect.gen(function* () {
     const config = DaemonJankurai.resolveJankuraiConfig(specWithPool())!
     expect(DaemonJankurai.resolveWorkerPoolSize({ config, fleetMaxWorkers: 8 })).toBe(8)
     expect(DaemonJankurai.resolveWorkerPoolSize({ config, fleetMaxWorkers: 30 })).toBe(20)
+    yield* Effect.void
+  }))
+
+  it.effect("runs bootstrap update/init before preflight proceeds", Effect.gen(function* () {
+    const commands: string[] = []
+    yield* provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const specValue = specWithBootstrap()
+          const result = yield* DaemonJankurai.preflight({
+            cwd: directory,
+            spec: specValue,
+            checks: {
+              runShellCheck: ({ command }: { command: string }) =>
+                Effect.gen(function* () {
+                  commands.push(command)
+                  if (command === "jankurai init --yes" || command === "jankurai init --dry-run") {
+                    const files = [
+                      "agent/JANKURAI_STANDARD.md",
+                      "agent/audit-policy.toml",
+                      "agent/owner-map.json",
+                      "agent/test-map.json",
+                      "agent/proof-lanes.toml",
+                      "agent/boundaries.toml",
+                    ]
+                    for (const file of files) {
+                      const full = path.join(directory, file)
+                      yield* Effect.promise(() => mkdir(path.dirname(full), { recursive: true }))
+                      yield* Effect.promise(() => writeFile(full, "# bootstrap\n"))
+                    }
+                    const ci = path.join(directory, ".github", "workflows", "jankurai.yml")
+                    yield* Effect.promise(() => mkdir(path.dirname(ci), { recursive: true }))
+                    yield* Effect.promise(() => writeFile(ci, "name: jankurai\n"))
+                  }
+                  return { exitCode: 0, stdout: "", stderr: "", truncated: false, matched: true }
+                }),
+              gitClean: () => Effect.succeed({ clean: true, dirty: [] }),
+              evaluateJsonPath: () => Effect.succeed(undefined),
+            } as any,
+          })
+
+          expect(result.ok).toBe(true)
+          expect(result.bootstrap?.ok).toBe(true)
+          expect(result.bootstrap?.commands).toContain("jankurai update --client-start --quiet")
+          expect(commands).toContain("jankurai update --client-start --quiet")
+          expect(commands).toContain("jankurai init --yes")
+        }),
+      { git: false },
+    )
     yield* Effect.void
   }))
 
@@ -351,7 +470,7 @@ describe("session.daemon-jankurai", () => {
     yield* Effect.void
   }))
 
-  it.effect("rejects a dirty worktree before integration branch bootstrap", Effect.gen(function* () {
+  it.effect("allows a dirty worktree when clean start is not required", Effect.gen(function* () {
     const commands: string[] = []
     const checks = {
       runShellCheck: (input: { command: string }) =>
@@ -369,9 +488,9 @@ describe("session.daemon-jankurai", () => {
       checks,
     })
 
-    expect(result.ok).toBe(false)
-    expect(result.reason).toContain("clean start")
-    expect(commands.length).toBe(0)
+    expect(result.ok).toBe(true)
+    expect(commands.some((command) => command.includes("git show-ref --verify --quiet 'refs/heads/jankurai_port'"))).toBe(true)
+    expect(commands.some((command) => command.includes("git switch 'jankurai_port'"))).toBe(true)
     yield* Effect.void
   }))
 })

@@ -28,6 +28,7 @@ use tuiwright::{Key, Page};
 mod test_helpers;
 use test_helpers::{
     copy_jekko_logs, ensure_artifact_dir, jekko_bin, prepare_workspace, spawn_jekko_with_size,
+    spawn_jekko_with_size_env,
 };
 
 const ARTIFACT_SUBDIR: &str = "jnoccio-tui";
@@ -35,6 +36,7 @@ const BOOT_TIMEOUT: Duration = Duration::from_secs(30);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(2);
 const JNOCCIO_ADDR: &str = "127.0.0.1:4317";
 const FAKE_API_KEY: &str = "tuiwright-offline-fake-key";
+const FAKE_DEVELOPER_KEY: &str = "fake";
 
 struct MockJnoccioServer {
     stop: Arc<AtomicBool>,
@@ -140,6 +142,14 @@ fn write_jnoccio_model_config(config_home: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+fn write_jnoccio_home_key(home: &std::path::Path) -> Result<()> {
+    std::fs::write(
+        home.join(".env.jnoccio"),
+        format!("JNOCCIO_DEVELOPER_KEY={FAKE_DEVELOPER_KEY}\n"),
+    )?;
+    Ok(())
+}
+
 fn spawn_jekko_with_jnoccio_enabled(
     parent: &tempfile::TempDir,
     jekko: &std::path::Path,
@@ -231,7 +241,17 @@ fn jnoccio_dashboard_hidden_when_server_offline() -> Result<()> {
     std::fs::create_dir_all(&artifact_dir)?;
 
     let (workspace, _project, _, _, _, _) = prepare_workspace("project", "# test\n")?;
-    let page = spawn_jekko_with_size(&workspace, &jekko, 200, 60, "jnoccio-hidden-offline")?;
+    write_jnoccio_home_key(workspace.path())?;
+    let model_keys_path = workspace.path().join("model-keys.env");
+    std::fs::write(&model_keys_path, "OPENAI_API_KEY=fake-openai-key\n")?;
+    let page = spawn_jekko_with_size_env(
+        &workspace,
+        &jekko,
+        200,
+        60,
+        "jnoccio-hidden-offline",
+        &[("JEKKO_MODEL_KEYS_FILE", model_keys_path.to_string_lossy().as_ref())],
+    )?;
 
     // Wait for TUI boot
     wait_for_boot(&page, &workspace, &artifact_dir, "jnoccio-hidden-offline")?;
@@ -266,7 +286,17 @@ fn jnoccio_ctrl_j_noop_when_offline() -> Result<()> {
     std::fs::create_dir_all(&artifact_dir)?;
 
     let (workspace, _project, _, _, _, _) = prepare_workspace("project", "# test\n")?;
-    let page = spawn_jekko_with_size(&workspace, &jekko, 200, 60, "jnoccio-ctrl-j-offline")?;
+    write_jnoccio_home_key(workspace.path())?;
+    let model_keys_path = workspace.path().join("model-keys.env");
+    std::fs::write(&model_keys_path, "OPENAI_API_KEY=fake-openai-key\n")?;
+    let page = spawn_jekko_with_size_env(
+        &workspace,
+        &jekko,
+        200,
+        60,
+        "jnoccio-ctrl-j-offline",
+        &[("JEKKO_MODEL_KEYS_FILE", model_keys_path.to_string_lossy().as_ref())],
+    )?;
     wait_for_boot(&page, &workspace, &artifact_dir, "jnoccio-ctrl-j-offline")?;
 
     page.screenshot(artifact_dir.join("02-home-before-ctrl-j.png"))?;
@@ -306,9 +336,21 @@ fn jnoccio_header_shortcut_visible_when_model_enabled() -> Result<()> {
 
     let (workspace, _project, _, _, xdg_config, _) =
         prepare_workspace("project", "# jnoccio enabled header\n")?;
+    write_jnoccio_home_key(workspace.path())?;
+    let model_keys_path = workspace.path().join("model-keys.env");
+    std::fs::write(&model_keys_path, "OPENAI_API_KEY=fake-openai-key\n")?;
     write_jnoccio_model_config(&xdg_config)?;
-    let page =
-        spawn_jekko_with_jnoccio_enabled(&workspace, &jekko, "jnoccio-header-shortcut-ready")?;
+    let page = spawn_jekko_with_size_env(
+        &workspace,
+        &jekko,
+        200,
+        60,
+        "jnoccio-header-shortcut-ready",
+        &[
+            ("JEKKO_MODEL_KEYS_FILE", model_keys_path.to_string_lossy().as_ref()),
+            ("JNOCCIO_DEFAULT_API_KEY", FAKE_API_KEY),
+        ],
+    )?;
     wait_for_boot(
         &page,
         &workspace,
@@ -355,7 +397,17 @@ fn jnoccio_build_contains_dashboard_plugin() -> Result<()> {
     std::fs::create_dir_all(&artifact_dir)?;
 
     let (workspace, _project, _, _, _, _) = prepare_workspace("project", "# test\n")?;
-    let page = spawn_jekko_with_size(&workspace, &jekko, 200, 60, "jnoccio-command-palette")?;
+    write_jnoccio_home_key(workspace.path())?;
+    let model_keys_path = workspace.path().join("model-keys.env");
+    std::fs::write(&model_keys_path, "OPENAI_API_KEY=fake-openai-key\n")?;
+    let page = spawn_jekko_with_size_env(
+        &workspace,
+        &jekko,
+        200,
+        60,
+        "jnoccio-command-palette",
+        &[("JEKKO_MODEL_KEYS_FILE", model_keys_path.to_string_lossy().as_ref())],
+    )?;
     wait_for_boot(&page, &workspace, &artifact_dir, "jnoccio-command-palette")?;
 
     // Open command palette

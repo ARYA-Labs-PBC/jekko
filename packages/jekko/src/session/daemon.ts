@@ -1,5 +1,7 @@
 // jankurai:allow HLT-001-DEAD-MARKER reason=functional-optional-returns-by-design-in-daemon expires=2027-01-01
 // jankurai:allow HLT-000-SCORE-DIMENSION reason=daemon-supervisor-shares-evaluation-paths-by-design expires=2027-01-01
+import path from "path"
+import { readFile } from "fs/promises"
 import { Effect, Layer, Context, Scope, Cause, Fiber, Option, Duration } from "effect"
 import { parseZyal } from "@/agent-script/parser"
 import { buildZyalPreview, type ZyalHookStep, type ZyalParsed, type ZyalPreview, type ZyalScript, type ZyalSignal } from "@/agent-script/schema"
@@ -21,17 +23,19 @@ import { Event as DaemonEvent, type DaemonPhase, type DaemonRunStatus } from "./
 import { SessionID } from "./schema"
 import { MessageV2 } from "./message"
 import { MCP } from "@/mcp"
+import { Filesystem } from "@/util/filesystem"
 import { evaluateOnHandlers, getOnHandlers, incrementSignalCounter, type SignalCounters } from "./daemon-on-handler"
 import { evaluateInputGuardrails, evaluateOutputPatternGuardrails } from "./daemon-guardrails"
 import { getHookSteps, resolveHookFailureAction } from "./daemon-hooks"
 import { evaluateAllConstraints, captureBaselines, type ConstraintBaselines } from "./daemon-constraints"
-import { resolveRetryPolicy, computeRetryDelay, canRetry } from "./daemon-retry"
+import { resolveRetryPolicy, computeRetryDelay, canRetry, parseDuration } from "./daemon-retry"
 import { normalizeDaemonSpec, hasAutoResearch, resolveDaemonModel, runAutoResearch } from "./daemon-autoresearch"
 import { hasResearchPipeline, runResearchPreflight } from "./daemon-research"
 import { applyDaemonPermissions } from "./daemon-permissions"
 import { daemonSignalCountsAsError, effectiveDaemonSignal, suppressDaemonSignal } from "./daemon-signals"
 import { resolveDaemonPolicy, resolveDaemonAutomaticAction, shouldRestartDaemonFiber } from "./daemon-lifetime"
 import { InstanceStore } from "@/project/instance-store"
+import { collectDaemonProgress } from "./daemon-progress"
 
 export type StartPayload = {
   readonly sessionID: SessionID
@@ -536,12 +540,11 @@ function retryAgentLoopResult(input: {
         eventType: "retry.attempt",
         payload: { category: "agent_calls", attempt, max_attempts: policy.max_attempts },
       })
-      const result = yield* input.prompt.loopResult({ sessionID: input.sessionID }).pipe(
-        Effect.either,
-      )
-      if (result._tag === "Right") return result.right
-      lastError = result.left
-      const reason = classifyAgentCallFailure(result.left)
+      const result = yield* Effect.exit(input.prompt.loopResult({ sessionID: input.sessionID }))
+      if (result._tag === "Success") return result.value
+      const error = Cause.squash(result.cause)
+      lastError = error
+      const reason = classifyAgentCallFailure(error)
       if (!agentCallReasonRetryable(policy, reason)) {
         yield* input.store.appendEvent({
           runID: input.runID,
@@ -549,7 +552,7 @@ function retryAgentLoopResult(input: {
           eventType: "retry.skipped_non_retryable",
           payload: { category: "agent_calls", attempt, reason },
         })
-        return yield* Effect.fail(result.left)
+        return yield* Effect.fail(error)
       }
       if (!canRetry(policy, attempt)) {
         yield* input.store.appendEvent({
@@ -558,7 +561,7 @@ function retryAgentLoopResult(input: {
           eventType: "retry.exhausted",
           payload: { category: "agent_calls", attempt, reason },
         })
-        return yield* Effect.fail(result.left)
+        return yield* Effect.fail(error)
       }
       const delayMs = computeRetryDelay(policy, attempt - 1)
       yield* input.store.appendEvent({
@@ -712,6 +715,14 @@ function runDaemon(input: RunDaemonInput) {
       jankuraiConfig: NonNullable<ReturnType<typeof DaemonJankurai.resolveJankuraiConfig>>
       jankuraiBeforeReport?: unknown
     }) {
+      yield* input.store.appendEvent({
+        runID: input.runID,
+        iteration: params.iteration,
+        eventType: "jankurai.checkpoint.started",
+        payload: {
+          sessionDirectory: params.sessionDirectory,
+        },
+      })
       const beforeCpHooks = getHookSteps(spec.hooks, "before_checkpoint")
       for (const hook of beforeCpHooks) {
         yield* input.store.appendEvent({
@@ -729,7 +740,7 @@ function runDaemon(input: RunDaemonInput) {
         const patchPath = `${taskDir}/candidate.patch`
         yield* input.checks.runShellCheck({
           cwd: params.sessionDirectory,
-          command: `mkdir -p ${taskDir} && git diff --binary HEAD > ${patchPath}`,
+          command: `mkdir -p ${taskDir} && git add -N . && git diff --binary HEAD > ${patchPath}`,
           timeout: "1 minute",
         })
         const verification = yield* DaemonJankurai.verifyCandidate({
@@ -792,6 +803,16 @@ function runDaemon(input: RunDaemonInput) {
         }
       }
 
+      yield* input.store.appendEvent({
+        runID: input.runID,
+        iteration: params.iteration,
+        eventType: "jankurai.checkpoint.completed",
+        payload: {
+          ok: checkpointResult.ok,
+          reason: checkpointResult.reason,
+          sha: checkpointResult.sha,
+        },
+      })
       return { checkpointResult, jankuraiRegression }
     })
 
@@ -926,31 +947,99 @@ function runDaemon(input: RunDaemonInput) {
         let jankuraiBeforeReport: unknown | undefined
         let jankuraiRegression: unknown | undefined
         if (jankuraiConfig?.enabled) {
-          const audit = yield* DaemonJankurai.runAudit({
-            cwd: session.directory,
-            config: jankuraiConfig,
-            checks: input.checks,
-            store: input.store,
+          const seededAuditPath = path.resolve(session.directory, jankuraiConfig.audit.json)
+          const seededRepairPlanPath = path.resolve(session.directory, jankuraiConfig.repair_plan.json)
+          const seededAudit = yield* readSeededJson(seededAuditPath)
+          const seededRepairPlan = yield* readSeededJson(seededRepairPlanPath)
+          const seededAuditValid = seededAudit.ok && isSeededAuditShape(seededAudit.value)
+          const seededRepairPlanValid = seededRepairPlan.ok && isSeededRepairPlanShape(seededRepairPlan.value)
+          if (run.iteration === 0 && seededAuditValid && seededRepairPlanValid) {
+            const repairQueue = yield* DaemonJankurai.readRepairQueueJsonl(session.directory, jankuraiConfig)
+            jankuraiBeforeReport = seededAudit.value
+            yield* DaemonJankurai.ingestTasks({
+              runID: input.runID,
+              config: jankuraiConfig,
+              store: input.store,
+              report: seededAudit.value,
+              repairPlan: seededRepairPlan.value,
+              repairQueue,
+            })
+            yield* input.store.appendEvent({
+              runID: input.runID,
+              iteration: run.iteration,
+              eventType: "jankurai.seeded_artifacts.reused",
+              payload: {
+                reportPath: jankuraiConfig.audit.json,
+                repairPlanPath: jankuraiConfig.repair_plan.json,
+              },
+            })
+          } else {
+            const seededReason = [
+              run.iteration !== 0 ? "not initial iteration" : undefined,
+              !seededAudit.ok ? `audit ${seededAudit.reason}` : seededAuditValid ? undefined : "audit shape invalid",
+              !seededRepairPlan.ok ? `repair plan ${seededRepairPlan.reason}` : seededRepairPlanValid ? undefined : "repair plan shape invalid",
+            ]
+              .filter(Boolean)
+              .join("; ")
+            if (run.iteration === 0 && seededReason) {
+              yield* input.store.appendEvent({
+                runID: input.runID,
+                iteration: run.iteration,
+                eventType: "jankurai.seeded_artifacts.invalid",
+                payload: {
+                  reportPath: jankuraiConfig.audit.json,
+                  repairPlanPath: jankuraiConfig.repair_plan.json,
+                  reason: seededReason,
+                },
+              })
+            }
+            const audit = yield* DaemonJankurai.runAudit({
+              cwd: session.directory,
+              config: jankuraiConfig,
+              checks: input.checks,
+              store: input.store,
+              runID: input.runID,
+              iteration: run.iteration,
+            })
+            const repair = yield* DaemonJankurai.runRepairPlan({
+              cwd: session.directory,
+              config: jankuraiConfig,
+              checks: input.checks,
+              store: input.store,
+              runID: input.runID,
+              iteration: run.iteration,
+            })
+            if (!audit.report || !repair.plan) {
+              const reason = audit.reason ?? repair.reason ?? "jankurai regeneration failed"
+              yield* input.transitionRun(input.runID, {
+                status: "failed",
+                phase: "terminal",
+                last_error: reason,
+                stopped_at: Date.now(),
+              })
+              return "exit" as const
+            }
+            jankuraiBeforeReport = audit.report
+            const repairQueue = yield* DaemonJankurai.readRepairQueueJsonl(session.directory, jankuraiConfig)
+            yield* DaemonJankurai.ingestTasks({
+              runID: input.runID,
+              config: jankuraiConfig,
+              store: input.store,
+              report: audit.report,
+              repairPlan: repair.plan,
+              repairQueue,
+            })
+          }
+          yield* input.store.appendEvent({
             runID: input.runID,
             iteration: run.iteration,
-          })
-          jankuraiBeforeReport = audit.report
-          const repair = yield* DaemonJankurai.runRepairPlan({
-            cwd: session.directory,
-            config: jankuraiConfig,
-            checks: input.checks,
-            store: input.store,
-            runID: input.runID,
-            iteration: run.iteration,
-          })
-          const repairQueue = yield* DaemonJankurai.readRepairQueueJsonl(session.directory, jankuraiConfig)
-          yield* DaemonJankurai.ingestTasks({
-            runID: input.runID,
-            config: jankuraiConfig,
-            store: input.store,
-            report: audit.report,
-            repairPlan: repair.plan,
-            repairQueue,
+            eventType: "jankurai.worker_wave.started",
+            payload: {
+              workers: DaemonJankurai.resolveWorkerPoolSize({
+                config: jankuraiConfig,
+                fleetMaxWorkers: spec.fleet?.max_workers,
+              }),
+            },
           })
           const workerWave = yield* DaemonJankurai.runWorkerPool({
             cwd: session.directory,
@@ -960,12 +1049,24 @@ function runDaemon(input: RunDaemonInput) {
               fleetMaxWorkers: spec.fleet?.max_workers,
             }),
             config: jankuraiConfig,
-            beforeReport: audit.report,
+            beforeReport: jankuraiBeforeReport,
             sessions: input.sessions,
             prompt: input.prompt,
             store: input.store,
             checks: input.checks,
             worktree: input.worktree,
+          })
+          yield* input.store.appendEvent({
+            runID: input.runID,
+            iteration: run.iteration,
+            eventType: "jankurai.worker_wave.completed",
+            payload: {
+              workers: workerWave.workers,
+              started: workerWave.started,
+              verified: workerWave.verified,
+              blocked: workerWave.blocked,
+              reason: workerWave.reason,
+            },
           })
           yield* input.transitionRun(input.runID, { status: "running", phase: "running_iteration" })
           if (workerWave.verified > 0) {
@@ -973,7 +1074,7 @@ function runDaemon(input: RunDaemonInput) {
               sessionDirectory: session.directory,
               iteration: run.iteration,
               jankuraiConfig,
-              jankuraiBeforeReport: audit.report,
+              jankuraiBeforeReport: jankuraiBeforeReport,
             })
             if (!workerCheckpoint.checkpointResult.ok) {
               const checkpointOutcome = yield* handleCheckpointFailure({
@@ -1212,6 +1313,7 @@ function runDaemon(input: RunDaemonInput) {
         }
 
         const allIterations = yield* input.store.listIterations(input.runID)
+        const allEvents = yield* input.store.listEvents(input.runID)
         const jankuraiPromptContext = jankuraiConfig?.enabled
           ? {
               config: jankuraiConfig,
@@ -1219,6 +1321,8 @@ function runDaemon(input: RunDaemonInput) {
               tasks: yield* input.store.listTasks(input.runID),
               workers: yield* input.store.listWorkers(input.runID),
               regression: jankuraiRegression,
+              bootstrap: jankuraiPreflight?.bootstrap,
+              progress: collectDaemonProgress(allEvents),
             }
           : undefined
         const continuation = DaemonContext.buildDaemonIterationPrompt({
@@ -1238,6 +1342,12 @@ function runDaemon(input: RunDaemonInput) {
 
         const sleep = spec.loop?.sleep ?? "5 seconds"
         yield* input.transitionRun(input.runID, { phase: "sleeping" })
+        yield* input.store.appendEvent({
+          runID: input.runID,
+          iteration,
+          eventType: "jankurai.sleeping",
+          payload: { sleep },
+        })
         yield* Effect.sleep(Duration.millis(parseDuration(sleep)))
         return "ok" as const
       }).pipe(
@@ -1392,6 +1502,29 @@ function evaluateStopConditions(input: {
       }),
     { concurrency: 1 },
   )
+}
+
+function readSeededJson(filePath: string) {
+  return Effect.promise(async () => {
+    try {
+      const text = await readFile(filePath, "utf8")
+      return { ok: true as const, value: JSON.parse(text) as unknown }
+    } catch (error) {
+      return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }
+    }
+  })
+}
+
+function isSeededAuditShape(value: unknown) {
+  return isRecord(value) && Array.isArray(value.findings)
+}
+
+function isSeededRepairPlanShape(value: unknown) {
+  return isRecord(value) && Array.isArray(value.packets)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 export * as Daemon from "./daemon"

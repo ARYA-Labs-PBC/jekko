@@ -80,21 +80,21 @@ ui:
   "jankurai-port-simple": example(
     "jankurai-port-simple",
     "Jankurai port simple",
-    "Single-worker Jankurai forever loop that bootstraps or switches to `jankurai_port`, commits green waves locally, and stays conservative.",
+    "Single-worker Jankurai forever loop that bootstraps or switches to `jankurai_port`, runs update/init bootstrap, commits green waves locally, and stays conservative.",
     readDocExample("27-jankurai-port-simple.zyal"),
   ),
 
   "jankurai-port-advanced": example(
     "jankurai-port-advanced",
     "Jankurai port advanced",
-    "Ten-worker Jankurai porting loop with path locks, shared memory, incubator routing, and reviewer-backed promotion.",
+    "Ten-worker Jankurai porting loop with bootstrap/update/init, path locks, shared memory, incubator routing, and reviewer-backed promotion/fusion.",
     readDocExample("28-jankurai-port-advanced.zyal"),
   ),
 
   "jankurai-port-ultra": example(
     "jankurai-port-ultra",
     "Jankurai port ultra",
-    "Twenty-worker Jankurai porting loop with dispatch, research, memory, taint quarantine, approvals, and reviewer gates.",
+    "Twenty-worker Jankurai porting loop with bootstrap/update/init, dispatch, research, memory, taint quarantine, planning fusion, approvals, and reviewer gates.",
     readDocExample("29-jankurai-port-ultra.zyal"),
   ),
 

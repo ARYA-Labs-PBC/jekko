@@ -30,6 +30,7 @@ export type JankuraiScoreData = {
   decision: "pass" | "fail"
   conformanceLevel: string
   standardVersion: string
+  auditorVersion: string
   generatedAt: number // epoch seconds
 }
 
@@ -117,6 +118,7 @@ function parseScoreJson(raw: string): JankuraiScoreData | null {
       decision: decision.passed === false ? "fail" : "pass",
       conformanceLevel: d.observed_conformance_level ?? d.claimed_conformance_level ?? "—",
       standardVersion: d.standard_version ?? "—",
+      auditorVersion: d.auditor_version ?? "—",
       generatedAt: Number(d.generated_at) || 0,
     }
   } catch {

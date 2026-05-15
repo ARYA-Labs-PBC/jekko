@@ -121,13 +121,24 @@ export const layer = Layer.effect(
             matched,
             truncated: stdout.truncated || stderr.truncated,
           })
+          const stdoutText = stdout.buffer.toString("utf8")
+          const stderrText = stderr.buffer.toString("utf8")
+          const truncated = stdout.truncated || stderr.truncated
           return {
             exitCode: exit.code,
-            stdout: stdout.buffer.toString("utf8"),
-            stderr: stderr.buffer.toString("utf8"),
-            truncated: stdout.truncated || stderr.truncated,
+            stdout: stdoutText,
+            stderr: stderrText,
+            truncated,
             matched,
-            error: matched ? undefined : "shell assertion failed",
+            error: matched
+              ? undefined
+              : summarizeShellFailure({
+                  command: input.command,
+                  exitCode: exit.code,
+                  stdout: stdoutText,
+                  stderr: stderrText,
+                  truncated,
+                }),
           }
         }),
       )
@@ -216,6 +227,30 @@ function checkJsonAssertions(stdout: string, expected: Record<string, unknown>) 
   } catch {
     return false
   }
+}
+
+function summarizeShellFailure(input: {
+  command: string
+  exitCode: number
+  stdout: string
+  stderr: string
+  truncated: boolean
+}) {
+  return [
+    `command failed: ${input.command}`,
+    `exitCode=${input.exitCode}`,
+    `stdout=${excerpt(input.stdout)}`,
+    `stderr=${excerpt(input.stderr)}`,
+    input.truncated ? "truncated=true" : undefined,
+  ]
+    .filter(Boolean)
+    .join("; ")
+}
+
+function excerpt(value: string, limit = 240) {
+  const normalized = value.replace(/\s+/g, " ").trim()
+  if (!normalized) return "(empty)"
+  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized
 }
 
 export * as DaemonChecks from "./daemon-checks"

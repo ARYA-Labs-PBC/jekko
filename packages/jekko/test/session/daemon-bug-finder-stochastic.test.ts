@@ -98,6 +98,28 @@ describe("session.daemon-jankurai", () => {
     }
   })
 
+  test("blocks tasks whose required fix path falls outside allowed_paths", () => {
+    const route = DaemonJankurai.taskRoute({
+      config: config(false),
+      packet: {
+        rule_id: "HLT-042-CI-LOCAL-PARITY",
+        severity: "medium",
+        risk_level: "medium",
+        finding_path: ".github/workflows/jankurai.yml",
+        repair_eligibility: "agent-assisted",
+        allowed_paths: [".github/", "ops/"],
+        agent_fix: "add scripts/ci-doctor.sh listing every tool the ops/ci scripts depend on",
+      },
+      finding: {
+        path: ".github/workflows/jankurai.yml",
+        rerun_command: "just fast",
+      },
+    })
+
+    expect(route.status).toBe("blocked")
+    expect(route.blockedReason).toContain("scripts/ci-doctor.sh")
+  })
+
   test("clamps worker pool growth to 10 even when run max is larger", async () => {
     const upserted: string[] = []
     const result = await Effect.runPromise(
@@ -105,7 +127,14 @@ describe("session.daemon-jankurai", () => {
         cwd: "/tmp",
         run: { id: "run_workers" } as any,
         maxWorkers: 19,
-        config: config(true),
+        config: {
+          ...config(true),
+          pool: {
+            size: 19,
+            hard_cap: 10,
+            branch_prefix: "zyal/jankurai-port",
+          },
+        },
         sessions: {} as any,
         prompt: {} as any,
         store: {
@@ -128,5 +157,28 @@ describe("session.daemon-jankurai", () => {
     expect(result.started).toBe(0)
     expect(result.verified).toBe(0)
     expect(result.blocked).toBe(0)
+  })
+
+  test("reports a zero-lease reason when no conflict-free task exists", async () => {
+    const result = await Effect.runPromise(
+      DaemonJankurai.runWorkerPool({
+        cwd: "/tmp",
+        run: { id: "run_workers_reason" } as any,
+        maxWorkers: 4,
+        config: config(true),
+        sessions: {} as any,
+        prompt: {} as any,
+        store: {
+          listTasks: () => Effect.succeed([] as any),
+          leaseSpecificTask: () => Effect.succeed(undefined),
+          upsertWorker: (input: any) => Effect.succeed(input),
+        } as any,
+        checks: {} as any,
+        worktree: {} as any,
+      }),
+    )
+
+    expect(result.started).toBe(0)
+    expect(result.reason).toBe("no conflict-free task")
   })
 })

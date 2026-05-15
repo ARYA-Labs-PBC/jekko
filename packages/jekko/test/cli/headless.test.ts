@@ -82,6 +82,43 @@ describe("headless ZYAL CLI", () => {
       const sessionID = "daemon-smoke-session"
       const artifactRoot = path.join(dir, ".jekko", "daemon", runID)
       let polls = 0
+      let eventPolls = 0
+      const statusSequence = ["running", "running", "running", "satisfied"]
+      const events = [
+        {
+          event_type: "run.created",
+          payload_json: {},
+        },
+        {
+          event_type: "run.previewed",
+          payload_json: { preview: { spec: { job: { name: "Headless daemon smoke" } } } },
+        },
+        {
+          event_type: "jankurai.seeded_artifacts.reused",
+          payload_json: {
+            reportPath: "target/jankurai/repo-score.json",
+            repairPlanPath: "target/jankurai/repair-plan.json",
+          },
+        },
+        {
+          event_type: "jankurai.worker_wave.started",
+          payload_json: { workers: 1 },
+        },
+        {
+          event_type: "jankurai.worker_wave.completed",
+          payload_json: {
+            workers: 1,
+            started: 0,
+            verified: 0,
+            blocked: 0,
+            reason: "no conflict-free task",
+          },
+        },
+        {
+          event_type: "jankurai.sleeping",
+          payload_json: { sleep: "5 seconds" },
+        },
+      ]
       const defaultSpy = spyOn(Server, "Default").mockReturnValue({
         app: {
           fetch: async (input: Request) => {
@@ -110,22 +147,37 @@ describe("headless ZYAL CLI", () => {
             }
             if (url.pathname === `/daemon/${runID}`) {
               polls += 1
+              const status = statusSequence[Math.min(polls - 1, statusSequence.length - 1)]
               return jsonResponse({
                 id: runID,
-                status: polls === 1 ? "running" : "satisfied",
-                phase: polls === 1 ? "running" : "terminal",
+                status,
+                phase: status === "satisfied" ? "terminal" : "running",
                 iteration: polls - 1,
+                epoch: 0,
+                last_error: null,
               })
+            }
+            if (url.pathname === `/daemon/${runID}/events`) {
+              eventPolls += 1
+              return jsonResponse(events.slice(0, Math.min(events.length, eventPolls + 1)))
             }
             throw new Error(`Unexpected request path: ${url.pathname}`)
           },
         },
       } as unknown as ReturnType<typeof Server.Default>)
 
+      const writes: string[] = []
+      const write = spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+        writes.push(String(chunk))
+        return true
+      })
+
       try {
         const receipt = await runHeadlessFile(file, {
           cwd: dir,
-          print: () => {},
+          print: (line) => {
+            writes.push(`${line}\n`)
+          },
         })
 
         expect(receipt.mode).toBe("daemon")
@@ -138,7 +190,11 @@ describe("headless ZYAL CLI", () => {
         expect(receipt.jnoccio_metrics_after?.total_tokens).toBe(625267234)
         expect((receipt.jnoccio_metrics_after?.total_tokens ?? 0) > (receipt.jnoccio_metrics_before?.total_tokens ?? 0)).toBe(true)
         expect(await readFile(path.join(artifactRoot, "reports", "lanes", "lane-one", "report.json"), "utf8")).toContain("lane-one")
+        expect(writes.join("")).toContain("headless:")
+        expect(writes.join("")).toContain("seeded_artifacts.reused")
+        expect(writes.join("")).toContain("worker_wave.completed")
       } finally {
+        write.mockRestore()
         defaultSpy.mockRestore()
       }
     } finally {
@@ -175,6 +231,47 @@ describe("headless ZYAL CLI", () => {
       const sessionID = "daemon-smoke-session"
       const artifactRoot = path.join(dir, ".jekko", "daemon", runID)
       let polls = 0
+      let eventPolls = 0
+      const events = [
+        {
+          event_type: "run.created",
+          payload_json: {},
+        },
+        {
+          event_type: "run.previewed",
+          payload_json: { preview: { spec: { job: { name: "Headless daemon smoke" } } } },
+        },
+        {
+          event_type: "jankurai.seeded_artifacts.invalid",
+          payload_json: {
+            reportPath: "target/jankurai/repo-score.json",
+            repairPlanPath: "target/jankurai/repair-plan.json",
+            reason: "audit JSON parse failed",
+          },
+        },
+        {
+          event_type: "jankurai.audit.started",
+          payload_json: { command: "jankurai audit ..." },
+        },
+        {
+          event_type: "jankurai.repair_plan.completed",
+          payload_json: { packet_count: 0 },
+        },
+        {
+          event_type: "jankurai.worker_wave.completed",
+          payload_json: {
+            workers: 1,
+            started: 0,
+            verified: 0,
+            blocked: 0,
+            reason: "no conflict-free task",
+          },
+        },
+        {
+          event_type: "jankurai.sleeping",
+          payload_json: { sleep: "5 seconds" },
+        },
+      ]
       const defaultSpy = spyOn(Server, "Default").mockReturnValue({
         app: {
           fetch: async (input: Request) => {
@@ -208,7 +305,13 @@ describe("headless ZYAL CLI", () => {
                 status: polls === 1 ? "running" : "satisfied",
                 phase: polls === 1 ? "running" : "terminal",
                 iteration: polls - 1,
+                epoch: 0,
+                last_error: null,
               })
+            }
+            if (url.pathname === `/daemon/${runID}/events`) {
+              eventPolls += 1
+              return jsonResponse(events.slice(0, Math.min(events.length, eventPolls + 1)))
             }
             throw new Error(`Unexpected request path: ${url.pathname}`)
           },
