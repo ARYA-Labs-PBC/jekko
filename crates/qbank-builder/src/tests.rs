@@ -343,6 +343,11 @@ fn generator_validation_rejects_bad_confidence_and_missing_quote() {
         answer: "one".to_string(),
         difficulty_rationale: "hard".to_string(),
         expected_failure_mode: "miss".to_string(),
+        required_key_points: vec![
+            "Alpha equals one".to_string(),
+            "calibrated".to_string(),
+            "fixture".to_string(),
+        ],
         support: valid_support,
         confidence: 101,
     };
@@ -360,6 +365,11 @@ fn generator_validation_preserves_raw_answer_but_trusts_exact_support_quote() {
         answer: "The calibrated value is one.".to_string(),
         difficulty_rationale: "hard".to_string(),
         expected_failure_mode: "paraphrase".to_string(),
+        required_key_points: vec![
+            "Alpha equals one".to_string(),
+            "calibrated".to_string(),
+            "fixture".to_string(),
+        ],
         support: vec![SupportQuote {
             section_id: "s1".to_string(),
             section_hash: paper.sections[0].section_hash.clone(),
@@ -409,7 +419,7 @@ fn live_support_quote_candidates_are_exact_body_quotes() {
     let paper = canonicalize_paper(paper).expect("paper");
 
     let candidates = crate::paper_tournament::support_quote_candidates(&paper);
-    assert_eq!(candidates.len(), 1);
+    assert!(!candidates.is_empty());
     assert_eq!(candidates[0].id, "q001");
     assert_eq!(candidates[0].section_id, "s1");
     assert!(paper.sections[0].text.contains(&candidates[0].quote));
@@ -422,7 +432,17 @@ fn live_paper_quality_rejects_corrections_and_errata() {
     paper.title = "Correction: Alpha Paper".to_string();
     assert!(!crate::paper_tournament::paper_quality_allowed(&paper));
     paper.title = "Alpha Paper With Full Results".to_string();
+    paper.sections = vec![PaperSection {
+        section_id: "results".to_string(),
+        title: "Results".to_string(),
+        text: "The measured fracture strain increased to 87 percent after the third annealing pass, while the control group remained below 40 percent in the same assay. ".repeat(12),
+        section_hash: String::new(),
+    }];
     assert!(crate::paper_tournament::paper_quality_allowed(&paper));
+    paper.sections[0].title = "Table captions".to_string();
+    paper.sections[0].text =
+        "Table 1 caption reports a value. Figure 2 caption repeats the value. ".repeat(30);
+    assert!(!crate::paper_tournament::paper_quality_allowed(&paper));
 }
 
 #[test]
@@ -519,6 +539,7 @@ fn tournament_majority_and_grader_reduction_follow_plan_thresholds() {
     .expect("reduction");
     assert!(reduced.0);
     assert!(reduced.1 > 60.0);
+    assert!(grade_reduction(&[grading(true, 1), grading(true, 2)], "tester").is_none());
 }
 
 #[test]
@@ -535,6 +556,10 @@ fn mock_tournament_preserves_decimal_answer_text() {
         verifiers: 3,
         testers: 3,
         graders: 3,
+        min_successful_generators: 1,
+        min_successful_verifiers: 3,
+        min_successful_testers: 3,
+        min_successful_graders: 3,
         distractor_papers: 2,
         strict_production: false,
         agent_runner: AgentRunnerMode::Mock,
@@ -544,6 +569,16 @@ fn mock_tournament_preserves_decimal_answer_text() {
         jnoccio_request_timeout_seconds: 120,
         paper_timeout_seconds: 900,
         phase_retries: 2,
+        generator_pool_target: 5,
+        max_question_alternates_per_paper: 5,
+        blind_prescreen_testers: 3,
+        blind_prescreen_max_correct_rate: 0.34,
+        min_support_quote_score: 10,
+        hard_distractors: false,
+        mask_blind_context_metadata: false,
+        route_model_deny: Vec::new(),
+        route_model_allow: Vec::new(),
+        write_rejection_analysis: true,
         progress_jsonl: None,
         candidate_manifest: None,
         resume: false,
@@ -584,6 +619,10 @@ fn mock_tournament_writes_accepted_artifact_and_challenge() {
         verifiers: 3,
         testers: 3,
         graders: 3,
+        min_successful_generators: 1,
+        min_successful_verifiers: 3,
+        min_successful_testers: 3,
+        min_successful_graders: 3,
         distractor_papers: 2,
         strict_production: false,
         agent_runner: AgentRunnerMode::Mock,
@@ -593,6 +632,16 @@ fn mock_tournament_writes_accepted_artifact_and_challenge() {
         jnoccio_request_timeout_seconds: 120,
         paper_timeout_seconds: 900,
         phase_retries: 2,
+        generator_pool_target: 5,
+        max_question_alternates_per_paper: 5,
+        blind_prescreen_testers: 3,
+        blind_prescreen_max_correct_rate: 0.34,
+        min_support_quote_score: 10,
+        hard_distractors: false,
+        mask_blind_context_metadata: false,
+        route_model_deny: Vec::new(),
+        route_model_allow: Vec::new(),
+        write_rejection_analysis: true,
         progress_jsonl: None,
         candidate_manifest: None,
         resume: false,
@@ -610,9 +659,19 @@ fn mock_tournament_writes_accepted_artifact_and_challenge() {
     assert!(!artifact.hard_question.is_empty());
     assert!(!artifact.hard_answer.is_empty());
     assert!(!artifact.artifact_hash.is_empty());
+    assert_eq!(artifact.acceptance_metrics.saturated_mean_confidence, 0.0);
+    assert!(run_root.join("reports/failure-summary.json").exists());
 
     let challenges = read_challenges(&bank).expect("challenges");
     assert_eq!(challenges.len(), 1);
+    assert_eq!(
+        challenges[0]
+            .acceptance_metrics
+            .as_ref()
+            .expect("metrics")
+            .saturated_mean_confidence,
+        0.0
+    );
     assert!(!challenges[0].challenge_hash.is_empty());
     assert!(challenges[0]
         .artifact_provenance

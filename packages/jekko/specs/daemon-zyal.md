@@ -80,7 +80,7 @@ Supported literals:
 
 - `audit.mode`: `advisory`, `guarded`, `standard`, `ratchet`, `release`
 - `task_source`: `repair_plan`, `findings`, `agent_fix_queue`, `repair_queue_jsonl`
-- `selection.order`: `quick_wins_first`, `severity_first`, `random`
+- `selection.order`: `quick_wins_first`, `blocker_first`, `random`
 - risk values: `low`, `medium`, `high`, `critical`
 - `verification.audit_delta`: `no_new_findings`, `no_score_drop`, `target_fingerprint_removed`, `none`
 

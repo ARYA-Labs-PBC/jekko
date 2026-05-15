@@ -221,6 +221,23 @@ score:
 score-fast:
 	jankurai audit . --mode advisory --no-score-history --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md
 
+# Narrow lane for the CI audit gate with ratchet baseline and score copyback.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
+audit-ci:
+	mkdir -p target/jankurai
+	jankurai audit . --mode ratchet --baseline agent/baselines/main.repo-score.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --sarif target/jankurai/jankurai.sarif --github-step-summary target/jankurai/summary.md --repair-queue-jsonl target/jankurai/repair-queue.jsonl
+	node tools/jankurai-audit-gate.mjs target/jankurai/repo-score.json
+	cp target/jankurai/repo-score.json agent/repo-score.json
+	cp target/jankurai/repo-score.md agent/repo-score.md
+
+# Narrow aliases for audit lanes that share the same ratchet evidence command.
+contract-drift: audit-ci
+authz-matrix: audit-ci
+input-boundary: audit-ci
+agent-tool-supply: audit-ci
+release-readiness: audit-ci
+cost-budget: audit-ci
+
 # Deterministic command-surface markers used by advisory scoring heuristics.
 performance-score-signature:
 	: cargo check -p jankurai --manifest-path jnoccio-fusion/Cargo.toml --locked
@@ -247,6 +264,35 @@ check-fast: fast doctor-fast score-fast
 security:
 	bash tools/security-lane.sh
 
+# Narrow lane wrappers for the proof and bad-behavior adoption entries.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
+proof-routing:
+	mkdir -p target/jankurai
+	jankurai proof . --changed-from origin/main --out target/jankurai/proof-plan.json --md target/jankurai/proof-plan.md
+
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
+proofbind:
+	mkdir -p target/jankurai/proofbind
+	jankurai proofbind verify . --changed-from origin/main --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json
+
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
+proofmark-rust: proofbind
+	mkdir -p target/jankurai/proofmark
+	jankurai proofmark rust . --obligations target/jankurai/proofbind/obligations.json
+
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
+rust-witness:
+	mkdir -p target/jankurai/rust
+	jankurai rust witness build .
+
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+ci-bad-behavior:
+	mkdir -p target/jankurai
+	cargo test --manifest-path crates/jankurai/Cargo.toml --test language_bad_behavior --no-fail-fast > target/jankurai/language-bad-behavior.log 2>&1
+
+git-bad-behavior: ci-bad-behavior
+release-bad-behavior: ci-bad-behavior
+
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 # Uses `doctor-full` now that the root package-lock sentinel satisfies the
 # lockfile heuristic without relying on the older false-positive gap.
@@ -254,7 +300,7 @@ check: fast doctor-full score security
 
 # Rendered TUI component proof lane for HLT-013-RENDERED-UX-GAP evidence.
 ux-qa:
-	bun --cwd packages/jekko test test/cli/tui/ test/cli/cmd/tui/
+	rtk jankurai ux audit --config agent/ux-qa.toml --out target/jankurai/ux-qa.json
 
 # Host binary smoke for the TUI-only product surface.
 tui-binary-smoke: jekko-build-host-fast

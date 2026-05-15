@@ -7,18 +7,21 @@ import { useKeybind } from "@tui/context/keybind"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { PromptRef } from "@tui/component/prompt"
 import { useLocal } from "@tui/context/local"
-import { Locale } from "@/util/locale"
-import { SessionRetry } from "@/session/retry"
-import { DialogGoUpsell } from "../../component/dialog-go-upsell"
 import { useRoute, useRouteData } from "@tui/context/route"
 import { useProject } from "@tui/context/project"
 import { useSync } from "@tui/context/sync"
 import { useEvent } from "@tui/context/event"
 import { useTheme } from "@tui/context/theme"
 import { setZyalFlashSource, textHasZyalSentinel } from "@tui/context/zyal-flash"
-import { GO_UPSELL_DONT_SHOW, GO_UPSELL_LAST_SEEN_AT, GO_UPSELL_WINDOW, toBottom, emptyPromptParts, scrollToMessage } from "./session-helpers"
-import { UI } from "@/cli/ui"
-import { registerSessionCommands } from "./session-commands"
+import {
+  bindSessionCommands,
+  bindSessionExitMessage,
+  bindSessionLoadEffect,
+  bindSessionKeyboardExit,
+  bindSessionPartSwitchHandler,
+  bindSessionScrollKeybinds,
+  bindSessionUpsellHandler,
+} from "./session-body-core-support"
 import { context } from "./context"
 import { useTuiConfig } from "../../context/tui-config"
 import { usePromptRef } from "../../context/prompt"
@@ -26,10 +29,10 @@ import { useKV } from "../../context/kv.tsx"
 import * as Model from "../../util/model"
 import { getScrollAcceleration } from "../../util/scroll"
 import { useToast } from "../../ui/toast"
-import { errorMessage } from "@/util/error"
 import { useSDK } from "@tui/context/sdk"
 import { useEditorContext } from "@tui/context/editor"
 import { useSessionDaemonPolling } from "./daemon-poll"
+import { scrollToMessage, toBottom } from "./session-helpers"
 
 export type SessionBodyStateOptions = {
   /**
@@ -45,7 +48,7 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
   const routeData = useRouteData("session")
   const { navigate } = useRoute()
   // Build a synthetic route view so callers that pass an explicit sessionID
-  // (e.g. the shell route) get a stable {sessionID} surface and the legacy
+  // (e.g. the shell route) get a stable {sessionID} surface and existing
   // session-route callers see the live route store untouched.
   const route = options.sessionID
     ? ({
@@ -165,44 +168,15 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
     },
   } as unknown as ScrollBoxRenderable
 
-  createEffect(() => {
-    const sessionID = route.sessionID
-    void (async () => {
-      const previousWorkspace = project.workspace.current()
-      const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
-      if (!result.data) {
-        toast.show({
-          message: `Session not found: ${sessionID}`,
-          variant: "error",
-          duration: 5000,
-        })
-        navigate({ type: "shell" })
-        return
-      }
-
-      if (result.data.workspaceID !== previousWorkspace) {
-        project.workspace.set(result.data.workspaceID)
-
-        // Sync all the data for this workspace. Note that this
-        // workspace may not exist anymore which is why this is not
-        // fatal. If it doesn't we still want to show the session
-        // (which will be non-interactive)
-        try {
-          await sync.bootstrap({ fatal: false })
-        } catch {}
-      }
-      editor.reconnect(result.data.directory)
-      await sync.session.sync(sessionID)
-      if (route.sessionID === sessionID && scrollRef.current) scrollRef.current.scrollBy(100_000)
-    })().catch((error) => {
-      if (route.sessionID !== sessionID) return
-      toast.show({
-        message: errorMessage(error),
-        variant: "error",
-        duration: 5000,
-      })
-      navigate({ type: "shell" })
-    })
+  bindSessionLoadEffect({
+    routeSessionID: () => route.sessionID,
+    project,
+    sdk,
+    toast,
+    navigate,
+    sync,
+    editor,
+    scrollRef,
   })
 
   useSessionDaemonPolling({
@@ -216,36 +190,14 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
 
   let lastSwitch: string | undefined = undefined
   const local = useLocal()
-  event.on("message.part.updated", (evt: any) => {
-    const part = evt.properties.part
-    if (part.type !== "tool") return
-    if (part.sessionID !== route.sessionID) return
-    if (part.state.status !== "completed") return
-    if (part.id === lastSwitch) return
-
-    if (part.tool === "plan_exit") {
-      local.agent.set("build")
-      lastSwitch = part.id
-    } else if (part.tool === "plan_enter") {
-      local.agent.set("plan")
-      lastSwitch = part.id
-    }
+  bindSessionPartSwitchHandler({
+    event,
+    routeSessionID: () => route.sessionID,
+    local,
   })
 
   const exit = useExit()
-
-  createEffect(() => {
-    const title = Locale.truncate(session()?.title ?? "", 50)
-    const dim = UI.Style.TEXT_DIM
-    const reset = UI.Style.TEXT_NORMAL
-    const bold = UI.Style.TEXT_NORMAL_BOLD
-    return exit.message.set([
-      ``,
-      `  ${dim}Session${reset}  ${bold}${title}${reset}`,
-      `  ${dim}Resume${reset}   ${bold}jekko -s ${session()?.id}${reset}`,
-      ``,
-    ].join("\n"))
-  })
+  bindSessionExitMessage({ exit, session })
 
   const keybind = useKeybind()
   const renderer = useRenderer()
@@ -257,39 +209,41 @@ export function createSessionBodyState(options: SessionBodyStateOptions = {}) {
     promptRef.set(r)
   }
 
-  useKeyboard((evt: any) => {
-    if (!session()?.parentID) return
-    if (keybind.match("app_exit", evt)) {
-      void exit()
-    }
+  bindSessionKeyboardExit(useKeyboard, keybind, exit, () => !!session()?.parentID)
+  bindSessionScrollKeybinds(keybind, scrollRef)
+  bindSessionCommands(command, {
+    route,
+    sdk,
+    sync,
+    session,
+    messages,
+    prompt,
+    scroll: scrollProxy,
+    toast,
+    sidebarVisible,
+    setSidebar,
+    setSidebarOpen,
+    conceal,
+    setConceal,
+    showTimestamps,
+    setTimestamps,
+    showThinking,
+    setShowThinking,
+    showDetails,
+    setShowDetails,
+    setShowScrollbar,
+    showGenericToolOutput,
+    setShowGenericToolOutput,
+    navigate,
+    showAssistantMetadata,
+    renderer,
+    scrollToMessage,
   })
-
-  keybind.on("feed.scroll.pageUp", () => {
-    if (!scrollRef.current) return
-    scrollRef.current.scrollBy(-scrollRef.current.height)
-  })
-  keybind.on("feed.scroll.pageDown", () => {
-    if (!scrollRef.current) return
-    scrollRef.current.scrollBy(scrollRef.current.height)
-  })
-  keybind.on("feed.scroll.top", () => {
-    scrollRef.current?.scrollTo(0)
-  })
-  keybind.on("feed.scroll.bottom", () => {
-    scrollRef.current?.scrollTo(scrollRef.current.scrollHeight)
-  })
-
-  registerSessionCommands(command, { route, sdk, sync, session, messages, prompt, scroll: scrollProxy, toast, sidebarVisible, setSidebar, setSidebarOpen, conceal, setConceal, showTimestamps, setTimestamps, showThinking, setShowThinking, showDetails, setShowDetails, setShowScrollbar, showGenericToolOutput, setShowGenericToolOutput, toBottom, emptyPromptParts, navigate, showAssistantMetadata, renderer, scrollToMessage })
-
-  event.on("session.status", (evt: any) => {
-    if (evt.properties.sessionID !== route.sessionID) return
-    if (evt.properties.status.type !== "retry") return
-    if (evt.properties.status.message !== SessionRetry.GO_UPSELL_MESSAGE) return
-    if (dialog.stack.length > 0) return
-    const seen = kv.get(GO_UPSELL_LAST_SEEN_AT)
-    if (typeof seen === "number" && Date.now() - seen < GO_UPSELL_WINDOW) return
-    if (kv.get(GO_UPSELL_DONT_SHOW)) return
-    void DialogGoUpsell.show(dialog).then((dontShowAgain: any) => { if (dontShowAgain) kv.set(GO_UPSELL_DONT_SHOW, true); kv.set(GO_UPSELL_LAST_SEEN_AT, Date.now()) })
+  bindSessionUpsellHandler({
+    event,
+    routeSessionID: () => route.sessionID,
+    kv,
+    dialog,
   })
 
   return {

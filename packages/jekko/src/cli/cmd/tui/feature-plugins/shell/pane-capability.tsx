@@ -12,13 +12,13 @@
  *   • Decision row (PASS / FAIL / advisory)
  *   • Conformance level (HL3 -> L3)
  *   • Standard version row
- *   • Mission gaps section (top 3 blockers or hard_rules fallback)
+ *   • Mission gaps section (top 3 blockers or hard_rules secondary list)
  *   • Empty state when the score file is missing or unparseable
  *
  * The pane re-reads on file changes (debounced 300ms) and on SIGUSR2 — see
  * `context/capability.ts` for the watch implementation.
  */
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createMemo, createSignal, For, onCleanup, onMount } from "solid-js"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@jekko-ai/plugin/tui"
 import {
   formatCapabilityAge,
@@ -54,9 +54,9 @@ function gapsFor(state: CapabilityState, limit: number): string[] {
   if (state.blockers.length > 0) {
     return state.blockers.slice(0, limit)
   }
-  // No blockers means the audit passed. Fall back to listing the hard rules
-  // with the lowest cap (i.e. most punishing) as a "what could go wrong"
-  // teaser. The pane stays useful even on a clean repo.
+  // No blockers means the audit passed. Use the hard rules with the lowest
+  // cap (i.e. most punishing) as a "what could go wrong" teaser. The pane
+  // stays useful even on a clean repo.
   return state.hardRules
     .slice()
     .sort((a, b) => a.max_score - b.max_score)
@@ -172,30 +172,30 @@ function SectionHeader(props: { api: TuiPluginApi; label: string; width: number 
 function MissionGaps(props: { api: TuiPluginApi; state: CapabilityState; width: number }) {
   const theme = () => props.api.theme.current
   const gaps = createMemo(() => gapsFor(props.state, 3))
-
-  return (
-    <Show
-      when={gaps().length > 0}
-      fallback={<text fg={theme().textMuted}>{truncate("No outstanding gaps.", props.width)}</text>}
-    >
-      <For each={gaps()}>
-        {(gap) => (
-          <text>
-            <span style={{ fg: theme().accent }}>▸ </span>
-            <span style={{ fg: theme().text }}>{truncate(gap, props.width - 2)}</span>
-          </text>
-        )}
-      </For>
-    </Show>
+  const gapList = gaps()
+  return gapList.length > 0 ? (
+    <For each={gapList}>
+      {(gap) => (
+        <text>
+          <span style={{ fg: theme().accent }}>▸ </span>
+          <span style={{ fg: theme().text }}>{truncate(gap, props.width - 2)}</span>
+        </text>
+      )}
+    </For>
+  ) : (
+    <text fg={theme().textMuted}>{truncate("No outstanding gaps.", props.width)}</text>
   )
 }
 
-function EmptyState(props: { api: TuiPluginApi; width: number }) {
+function EmptyState(props: { api: TuiPluginApi; width: number; message: string | undefined }) {
   const theme = () => props.api.theme.current
+  const message = createMemo(
+    () => props.message || "Jankurai score unavailable. Run `jankurai init` or refresh the audit.",
+  )
   return (
     <box flexDirection="column" gap={1}>
       <text fg={theme().textMuted}>
-        {truncate("Jankurai not installed · run `jankurai init`", props.width)}
+        {truncate(message(), props.width)}
       </text>
     </box>
   )
@@ -241,23 +241,27 @@ function PaneCapability(props: { api: TuiPluginApi; contentWidth: number }) {
           <b>{truncate(`Repo-Intel · updated ${ageText()}`, paneWidth())}</b>
         </text>
         <text fg={theme().borderSubtle}>{divider()}</text>
-        <Show when={!hasError()} fallback={<EmptyState api={props.api} width={paneWidth()} />}>
-          <box flexDirection="column" paddingTop={1}>
-            <Sparkline api={props.api} score={state().score} width={paneWidth()} />
-          </box>
-          <box flexDirection="column" paddingTop={1}>
-            <FindingsTable api={props.api} state={state()} />
-          </box>
-          <box flexDirection="column" paddingTop={1}>
-            <DecisionRow api={props.api} state={state()} />
-            <ConformanceRow api={props.api} state={state()} />
-            <StandardRow api={props.api} state={state()} />
-          </box>
-          <box flexDirection="column" paddingTop={1}>
-            <SectionHeader api={props.api} label="Mission gaps" width={paneWidth()} />
-            <MissionGaps api={props.api} state={state()} width={paneWidth()} />
-          </box>
-        </Show>
+        {!hasError() ? (
+          <>
+            <box flexDirection="column" paddingTop={1}>
+              <Sparkline api={props.api} score={state().score} width={paneWidth()} />
+            </box>
+            <box flexDirection="column" paddingTop={1}>
+              <FindingsTable api={props.api} state={state()} />
+            </box>
+            <box flexDirection="column" paddingTop={1}>
+              <DecisionRow api={props.api} state={state()} />
+              <ConformanceRow api={props.api} state={state()} />
+              <StandardRow api={props.api} state={state()} />
+            </box>
+            <box flexDirection="column" paddingTop={1}>
+              <SectionHeader api={props.api} label="Mission gaps" width={paneWidth()} />
+              <MissionGaps api={props.api} state={state()} width={paneWidth()} />
+            </box>
+          </>
+        ) : (
+          <EmptyState api={props.api} width={paneWidth()} message={state().error} />
+        )}
       </box>
     </scrollbox>
   )
@@ -272,8 +276,9 @@ const tui: TuiPlugin = async (api) => {
     order: 92,
     slots: {
       shell_left_active_pane(_ctx, props) {
-        if (props.active_pane !== "capability") return null
-        return <PaneCapability api={api} contentWidth={props.left_content_width ?? DEFAULT_PANE_WIDTH} />
+        return props.active_pane === "capability" ? (
+          <PaneCapability api={api} contentWidth={props.left_content_width ?? DEFAULT_PANE_WIDTH} />
+        ) : null
       },
     },
   })

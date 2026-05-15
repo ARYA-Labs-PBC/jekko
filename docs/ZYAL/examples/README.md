@@ -1,6 +1,6 @@
 # ZYAL Powerful Examples
 
-Thirty-four flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
+Thirty-seven flagship runbooks that show what ZYAL v2.6 makes possible. Each is a complete `<<<ZYAL v1:daemon>>>` block — paste any of them into a trusted Jekko prompt to preview the runtime plan, then explicitly arm to execute.
 
 | File | Demonstrates | Power blocks |
 |---|---|---|
@@ -30,6 +30,9 @@ Thirty-four flagship runbooks that show what ZYAL v2.6 makes possible. Each is a
 | [`24-semantic-feature-maker-simple.zyal`](24-semantic-feature-maker-simple.zyal) | Single-worker feature recommendation with atlas evidence, first slice, and rollback | `repo_intelligence`, `evidence_graph`, `workflow`, `approvals`, `evidence`, `rollback` |
 | [`25-semantic-feature-maker-advanced.zyal`](25-semantic-feature-maker-advanced.zyal) | Weighted feature triage with dispatch, research taint quarantine, Jankurai proof routing, and review gates | `repo_intelligence`, `dispatch`, `experiments`, `research`, `taint`, `jankurai`, `workflow`, `approvals` |
 | [`26-semantic-feature-maker-insane.zyal`](26-semantic-feature-maker-insane.zyal) | Full-power feature maker with fleet, memory, sandbox, security, observability, and critic review | `repo_intelligence`, `dispatch`, `fleet`, `experiments`, `research`, `memory`, `workflow`, `approvals`, `sandbox`, `security`, `observability`, `taint`, `jankurai` |
+| [`27-jankurai-port-simple.zyal`](27-jankurai-port-simple.zyal) | Single-worker Jankurai forever loop that bootstraps or switches to `jankurai_port`, commits green waves locally, and stays conservative | `jankurai`, `fleet`, `checkpoint`, `observability`, `done` |
+| [`28-jankurai-port-advanced.zyal`](28-jankurai-port-advanced.zyal) | Ten-worker Jankurai porting loop with path locks, shared memory, incubator routing, and reviewer-backed promotion | `jankurai`, `fleet`, `memory`, `incubator`, `checkpoint`, `observability`, `approvals` |
+| [`29-jankurai-port-ultra.zyal`](29-jankurai-port-ultra.zyal) | Twenty-worker Jankurai porting loop with dispatch, research, memory, taint quarantine, approvals, and reviewer gates | `dispatch`, `research`, `memory`, `taint`, `incubator`, `approvals`, `evidence`, `budgets`, `observability` |
 | [`memory-benchmark/prompt-scoring.zyal`](memory-benchmark/prompt-scoring.zyal) | Judge-population prompt scoring for the tracked memory benchmark corpus | `fan_out`, `memory`, `evidence`, `security`, `observability` |
 | [`memory-benchmark/autoresearch-basic.zyal`](memory-benchmark/autoresearch-basic.zyal) | Basic sandboxed AutoResearch memory benchmark with four workers and best-verified-patch reduction | `fan_out`, `experiments`, `memory`, `sandbox`, `observability` |
 | [`memory-benchmark/executable-benchmark.zyal`](memory-benchmark/executable-benchmark.zyal) | Deterministic Rust harness scoring for baseline, candidate, and reference memory systems | `fan_out`, `experiments`, `evidence`, `sandbox`, `observability` |

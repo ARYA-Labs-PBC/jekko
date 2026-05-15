@@ -31,30 +31,19 @@ impl Default for GateFindings {
 }
 
 pub fn apply_hard_gates(mut score: f32, gates: &GateFindings) -> f32 {
-    if gates.unsafe_tool_exec > 0 {
-        score = score.min(50.0);
-    }
-    if gates.privacy_leaks > 0 {
-        score = score.min(60.0);
-    }
-    if gates.citation_issues > 0 {
-        score = score.min(70.0);
-    }
-    if gates.future_leaks > 0 {
-        score = score.min(75.0);
-    }
-    if !gates.deterministic {
-        score = score.min(80.0);
-    }
-    if gates.compounding_regression <= -3.0 {
-        score = score.min(85.0);
-    }
-    if gates.hardening_regression <= -3.0 {
-        score = score.min(85.0);
-    }
-    if !gates.knowledge_non_degradation {
-        score = score.min(80.0);
-    }
+    let cap = [
+        (gates.unsafe_tool_exec > 0).then_some(50.0),
+        (gates.privacy_leaks > 0).then_some(60.0),
+        (gates.citation_issues > 0).then_some(70.0),
+        (gates.future_leaks > 0).then_some(75.0),
+        (!gates.deterministic || !gates.knowledge_non_degradation).then_some(80.0),
+        (gates.compounding_regression <= -3.0 || gates.hardening_regression <= -3.0)
+            .then_some(85.0),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(f32::INFINITY, f32::min);
+    score = score.min(cap);
     score
 }
 

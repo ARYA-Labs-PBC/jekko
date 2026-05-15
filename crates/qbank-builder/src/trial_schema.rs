@@ -35,11 +35,19 @@ pub struct AgentCallReceipt {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentFailure {
+    #[serde(default = "default_failure_category")]
+    pub category: String,
     pub phase: String,
     pub agent_name: String,
     pub error: String,
+    #[serde(default)]
+    pub fatal_for_acceptance: bool,
     pub route_metadata: Option<RouteMetadata>,
     pub raw_output_hash: Option<String>,
+}
+
+fn default_failure_category() -> String {
+    "parse_schema".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -56,6 +64,8 @@ pub struct GeneratorAgentOutput {
     pub answer: String,
     pub difficulty_rationale: String,
     pub expected_failure_mode: String,
+    #[serde(default)]
+    pub required_key_points: Vec<String>,
     pub support: Vec<SupportQuote>,
     pub confidence: u8,
 }
@@ -117,6 +127,22 @@ pub struct GradingTrial {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CandidateAttemptReceipt {
+    pub candidate_index: usize,
+    pub support_quote_id: String,
+    pub question: String,
+    pub support_quote_hash: String,
+    pub support_quote_score: i32,
+    pub stem_leakage_score: f64,
+    pub distractor_hashes: Vec<String>,
+    pub prescreen_trials: Vec<TestingTrial>,
+    pub prescreen_grading_trials: Vec<GradingTrial>,
+    pub rejection_reasons: Vec<String>,
+    pub rejection_category: Option<String>,
+    pub accepted_for_full_tournament: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PaperTournamentArtifact {
     pub schema_version: String,
     pub paper_hash: String,
@@ -143,6 +169,16 @@ pub struct FinalPaperChallengeArtifact {
     pub testing_trials: Vec<TestingTrial>,
     pub grading_trials: Vec<GradingTrial>,
     pub failures: Vec<AgentFailure>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_attempts: Vec<CandidateAttemptReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_candidate_index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper_rejection_category: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejection_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub production_errors: Vec<String>,
     pub acceptance_metrics: AcceptanceMetrics,
     pub artifact_hash: String,
 }

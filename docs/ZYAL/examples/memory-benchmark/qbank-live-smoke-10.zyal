@@ -22,6 +22,21 @@ loop:
   continue_on: [compaction, max_steps]
   pause_on: [checkpoint_failed, no_progress]
 
+retry:
+  default:
+    max_attempts: 2
+    backoff: exponential
+    initial_delay: 2s
+    max_delay: 30s
+    jitter: true
+  overrides:
+    agent_calls:
+      retries: 2
+      retry_on: [http_status, timeout, route_metadata, parse_schema]
+    shell_checks:
+      max_attempts: 2
+      retry_on: [exit_nonzero, timeout]
+
 stop:
   all:
     - shell:
@@ -78,7 +93,7 @@ research:
     domains: [biology, medicine]
     queries: ["OPEN_ACCESS:y HAS_FT:y SRC:PMC"]
     open_access: required
-    max_papers: 25
+    max_papers: 150
     output_root: target/qbank-live-bank-10/papers
     raw_receipts: target/qbank-live-run-10/discovery
   full_text:
@@ -108,8 +123,8 @@ research:
       max_blind_correct_rate_for_hard: 0.50
       reject_if_ambiguous: true
   agent_trials:
-    question_generators: 3
-    answerers: 3
+    question_generators: 5
+    answerers: 5
     model_profile: builder
   audit:
     critics: 2
@@ -145,20 +160,21 @@ fan_out:
       mkdir -p target/qbank-live-run-10/reports target/qbank-live-bank-10 &&
       curl -fsS http://127.0.0.1:4317/v1/jnoccio/status > target/qbank-live-run-10/reports/jnoccio-status-before.json &&
       curl -fsS http://127.0.0.1:4317/v1/jnoccio/metrics > target/qbank-live-run-10/reports/jnoccio-metrics-before.json &&
-      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover-full-text --provider europe-pmc --limit 25 --min-written 10 --max-search-pages 20 --query 'OPEN_ACCESS:y HAS_FT:y SRC:PMC' --run-root target/qbank-live-run-10 --bank target/qbank-live-bank-10 &&
-      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- build-paper-tournament --bank target/qbank-live-bank-10 --run-root target/qbank-live-run-10 --target-accepted 10 --candidate-papers 25 --candidate-manifest target/qbank-live-run-10/reports/candidate-manifest.json --progress-jsonl target/qbank-live-run-10/reports/live-progress.jsonl --jnoccio-request-timeout-seconds 600 --paper-timeout-seconds 1800 --resume --generators 3 --verifiers 3 --testers 3 --graders 3 --distractor-papers 4 --agent-runner jnoccio --jnoccio-base-url http://127.0.0.1:4317 --jnoccio-model jnoccio/jnoccio-fusion --jnoccio-max-output-tokens 4096 --phase-retries 2 --strict-production &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover-full-text --provider europe-pmc --limit 300 --min-written 180 --max-search-pages 80 --query 'OPEN_ACCESS:y HAS_FT:y SRC:PMC' --run-root target/qbank-live-run-10 --bank target/qbank-live-bank-10 &&
+      cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- build-paper-tournament --bank target/qbank-live-bank-10 --run-root target/qbank-live-run-10 --target-accepted 10 --candidate-papers 250 --candidate-manifest target/qbank-live-run-10/reports/candidate-manifest.json --progress-jsonl target/qbank-live-run-10/reports/live-progress.jsonl --jnoccio-request-timeout-seconds 900 --paper-timeout-seconds 3600 --resume --generators 5 --verifiers 5 --testers 5 --graders 5 --min-successful-generators 1 --min-successful-verifiers 3 --min-successful-testers 3 --min-successful-graders 3 --distractor-papers 8 --generator-pool-target 5 --max-question-alternates-per-paper 5 --blind-prescreen-testers 3 --blind-prescreen-max-correct-rate 0.34 --min-support-quote-score 10 --hard-distractors --mask-blind-context-metadata --write-rejection-analysis --agent-runner jnoccio --jnoccio-base-url http://127.0.0.1:4317 --jnoccio-model jnoccio/jnoccio-fusion --jnoccio-max-output-tokens 4096 --phase-retries 3 --strict-production &&
       curl -fsS http://127.0.0.1:4317/v1/jnoccio/status > target/qbank-live-run-10/reports/jnoccio-status-after.json &&
       curl -fsS http://127.0.0.1:4317/v1/jnoccio/metrics > target/qbank-live-run-10/reports/jnoccio-metrics-after.json
   worker:
     agent: build
     isolation: same_session
-    timeout: 45m
+    timeout: 12h
     max_parallel: 4
   reduce:
     strategy: custom_shell
     command: >
       mkdir -p target/qbank-live-run-10/reports &&
       test -s target/qbank-live-run-10/reports/jnoccio-preflight.json &&
+      test -s target/qbank-live-run-10/reports/failure-summary.json &&
       cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- audit-paper-tournament --bank target/qbank-live-bank-10 --run-root target/qbank-live-run-10 > target/qbank-live-run-10/reports/paper-tournament-audit.stdout.json &&
       cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- publish --strict-production --min-accepted 10 --bank target/qbank-live-bank-10 &&
       cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank target/qbank-live-bank-10 --min-accepted 10 --top-n 10 > target/qbank-live-run-10/reports/qbank-validate.json &&
@@ -174,7 +190,7 @@ experiments:
       agent: build
       model: builder
       isolation: same_session
-      timeout: 45m
+      timeout: 12h
       budget: { max_iterations: 3, max_diff_lines: 500, max_cost_usd: 10.00 }
   max_parallel: 1
   scoring:
@@ -221,7 +237,7 @@ done:
 checkpoint:
   verify:
     - command: "cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- audit-paper-tournament --bank target/qbank-live-bank-10 --run-root target/qbank-live-run-10"
-      timeout: 5m
+      timeout: 30m
       assert: { exit_code: 0 }
     - command: "cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin qbank_validate -- --bank target/qbank-live-bank-10 --min-accepted 10 --top-n 10"
       timeout: 5m

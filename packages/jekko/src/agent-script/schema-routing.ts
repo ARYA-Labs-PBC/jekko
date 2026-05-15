@@ -131,10 +131,13 @@ export type ZyalRetryBackoff = Schema.Schema.Type<typeof ZyalRetryBackoff>
 
 export const ZyalRetryPolicy = Schema.Struct({
   max_attempts: Schema.optional(Schema.Number),
+  retries: Schema.optional(Schema.Number),
   backoff: Schema.optional(ZyalRetryBackoff),
   initial_delay: Schema.optional(Schema.String),
   max_delay: Schema.optional(Schema.String),
   jitter: Schema.optional(Schema.Boolean),
+  retry_on: Schema.optional(Schema.Array(Schema.String)),
+  do_not_retry: Schema.optional(Schema.Array(Schema.String)),
 })
 export type ZyalRetryPolicy = Schema.Schema.Type<typeof ZyalRetryPolicy>
 
@@ -142,6 +145,7 @@ export const ZyalRetry = Schema.Struct({
   default: Schema.optional(ZyalRetryPolicy),
   overrides: Schema.optional(Schema.Struct({
     shell_checks: Schema.optional(ZyalRetryPolicy),
+    agent_calls: Schema.optional(ZyalRetryPolicy),
     checkpoint: Schema.optional(ZyalRetryPolicy),
     worker_spawn: Schema.optional(ZyalRetryPolicy),
     stop_evaluation: Schema.optional(ZyalRetryPolicy),

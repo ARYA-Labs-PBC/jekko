@@ -11,9 +11,21 @@ export type PassReceipt = {
   risk_delta?: number
   kind?: string
   title?: string
+  block?: boolean
+  severity?: string
+  gaps?: { id: string; severity?: string; notes?: string }[]
 }
 
 export function passInstruction(pass: ZyalIncubatorPass) {
+  const criticalReviewerBlock =
+    pass.type === "critical_reviewer"
+      ? [
+          "",
+          "This is a critical reviewer pass. Return structured fields for block, severity, and gaps.",
+          "Set block=true when any checklist gap should stop promotion.",
+          "Set gaps to the checklist items that still need work.",
+        ]
+      : []
   return [
     "<zyal-incubator-pass-instructions>",
     `Pass ID: ${pass.id}`,
@@ -26,6 +38,7 @@ export function passInstruction(pass: ZyalIncubatorPass) {
     "",
     "Return a concise pass receipt with summary, claims, evidence, uncertainty, blockers, and recommended_next.",
     "Do not include private chain-of-thought.",
+    ...criticalReviewerBlock,
     "</zyal-incubator-pass-instructions>",
   ].join("\n")
 }
@@ -47,6 +60,8 @@ export function memoryKindForPass(passType: string, receipt?: PassReceipt) {
       return "prototype_evidence"
     case "promotion_review":
       return "risk_review"
+    case "critical_reviewer":
+      return "critical_reviewer"
     case "compress":
       return "compressed_summary"
     default:
@@ -71,6 +86,9 @@ export function normalizeReceipt(
       risk_delta: typeof record.risk_delta === "number" ? record.risk_delta : undefined,
       kind: typeof record.kind === "string" ? record.kind : undefined,
       title: typeof record.title === "string" ? record.title : undefined,
+      block: typeof record.block === "boolean" ? record.block : undefined,
+      severity: typeof record.severity === "string" ? record.severity : undefined,
+      gaps: Array.isArray(record.gaps) ? (record.gaps as PassReceipt["gaps"]) : undefined,
     }
   }
   return {

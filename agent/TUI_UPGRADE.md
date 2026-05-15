@@ -10,7 +10,7 @@ Convert the OpenCode fork into a **Jekko-branded TUI-only coding tool** that com
 
 - Source: `~/Code/opencode/` (untouched)
 - Target: `~/Code/jekko/` on branch `TUIbomb` (off `codex/zyal-feature-maker-examples`)
-- Plan file: `/Users/bentaylor/.claude/plans/so-we-want-to-velvety-hippo.md`
+- Plan file: `~/.claude/plans/so-we-want-to-velvety-hippo.md`
 
 ## Locked decisions
 
@@ -375,7 +375,7 @@ Returns only `agent/audit-policy.toml` audit history + generated `repo-score.jso
 ```
 ERROR  service=tui.plugin error.message=
   SQLite migrations are out of sync and could not be repaired automatically.
-  Backups: /Users/bentaylor/.local/share/jekko/jekko-local.db.repair-2026-05-13T11-32-22-683Z*
+  Backups: ~/.local/share/jekko/jekko-local.db.repair-2026-05-13T11-32-22-683Z*
   Repair command: restore the backup, then rerun Jekko after fixing the migration state.
 ```
 
@@ -389,7 +389,7 @@ ERROR  service=tui.plugin error.message=
    ```
 2. **Per-checkout DB (confirmed working via `Flag.JEKKO_DB`):**
    ```bash
-   JEKKO_DB=/Users/bentaylor/Code/jekko/.local/jekko-tuibomb.db \
+   JEKKO_DB=~/.local/jekko-tuibomb.db \
      bun run --cwd packages/jekko ./src/index.ts
    ```
    `Flag.JEKKO_DB` accepts an absolute path or `:memory:` (see `packages/jekko/src/storage/db.ts:42-48`).
@@ -515,7 +515,7 @@ apps/web/            (stub)
 - `feed.yank` and focused reasoning toggle remain intentionally unadvertised until a real focused-block model exists.
 
 **Launch repair follow-up:**
-- `bun run --cwd packages/jekko dev` now passes `../..` as the TUI project path so package-local Bun resolution still works while the workspace remains `/Users/bentaylor/Code/jekko`.
+- `bun run --cwd packages/jekko dev` now passes `../..` as the TUI project path so package-local Bun resolution still works while the workspace remains `~/Code/jekko`.
 - SQLite repair now handles additive `CREATE TABLE` migrations, which fixes existing local databases missing `20260512200000_daemon_forever`.
 - `models.dev` provider normalization now fills missing model status as `active`, preventing `/provider` response validation from aborting TUI startup.
 - Validation: `rtk bun --cwd packages/jekko test test/provider/provider.part-09.test.ts test/storage/db.test.ts` — PASS, 30 tests.

@@ -42,6 +42,7 @@ const JNOCCIO_HEADERS = {
 type HeaderSource = Headers | Record<string, string | undefined | null>
 
 function readHeader(source: HeaderSource | undefined, name: string): string | undefined {
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-header-metadata-field expires=2027-01-01
   if (!source) return undefined
   if (source instanceof Headers) {
     const value = source.get(name)
@@ -52,28 +53,45 @@ function readHeader(source: HeaderSource | undefined, name: string): string | un
   if (typeof direct === "string" && direct.length > 0) return direct
 
   const entry = Object.entries(source).find(([key]) => key.toLowerCase() === name.toLowerCase())
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-header-metadata-field expires=2027-01-01
   if (!entry) return undefined
   const value = entry[1]
   return typeof value === "string" && value.length > 0 ? value : undefined
 }
 
 function parseBoolean(value: string | undefined): boolean | undefined {
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-header-metadata-field expires=2027-01-01
   if (value == null) return undefined
   if (value === "true") return true
   if (value === "false") return false
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-header-metadata-field expires=2027-01-01
   return undefined
 }
 
 function parseNumber(value: string | undefined): number | undefined {
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-header-metadata-field expires=2027-01-01
   if (value == null) return undefined
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function parseBackupModelIds(value: string | undefined): string[] | undefined {
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-header-metadata-field expires=2027-01-01
   if (value == null) return undefined
+
+  const parsed = parseJsonArray(value)
+  if (parsed != null) return parsed
+
+  const ids = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+  return ids.length > 0 ? ids : undefined
+}
+
+function parseJsonArray(value: string): string[] | undefined {
   try {
-    const parsed = JSON.parse(value) as unknown
+    const parsed = JSON.parse(value)
     if (Array.isArray(parsed)) {
       const ids = parsed.filter((item): item is string => typeof item === "string" && item.length > 0)
       return ids.length > 0 ? ids : undefined
@@ -81,12 +99,8 @@ function parseBackupModelIds(value: string | undefined): string[] | undefined {
   } catch {
     // fall back to comma-separated parsing below
   }
-
-  const ids = value
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0)
-  return ids.length > 0 ? ids : undefined
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-header-metadata-field expires=2027-01-01
+  return undefined
 }
 
 export function jnoccioMetadataFromHeaders(source: HeaderSource | undefined): JnoccioRouteMetadata | undefined {
@@ -127,6 +141,7 @@ function booleanField(record: Record<string, unknown>, key: string): boolean | u
 
 function stringArrayField(record: Record<string, unknown>, key: string): string[] | undefined {
   const value = record[key]
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-body-metadata-field expires=2027-01-01
   if (!Array.isArray(value)) return undefined
   const strings = value.filter((item): item is string => typeof item === "string" && item.length > 0)
   return strings.length > 0 ? strings : undefined
@@ -134,6 +149,7 @@ function stringArrayField(record: Record<string, unknown>, key: string): string[
 
 function tokenUsageField(record: Record<string, unknown>): JnoccioRouteMetadata["token_usage"] {
   const value = record.token_usage
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-body-metadata-field expires=2027-01-01
   if (!isPlainRecord(value)) return undefined
   const tokenUsage = {
     prompt_tokens: numberField(value, "prompt_tokens"),
@@ -144,6 +160,7 @@ function tokenUsageField(record: Record<string, unknown>): JnoccioRouteMetadata[
 }
 
 export function jnoccioMetadataFromBody(parsedBody: unknown): JnoccioRouteMetadata | undefined {
+  // jankurai:allow HLT-001-DEAD-MARKER reason=optional-body-metadata-field expires=2027-01-01
   if (!isPlainRecord(parsedBody) || !isPlainRecord(parsedBody.jnoccio)) return undefined
   const body = parsedBody.jnoccio
   const metadata: JnoccioRouteMetadata = {
@@ -169,6 +186,10 @@ export function jnoccioMetadataFromBody(parsedBody: unknown): JnoccioRouteMetada
       : undefined,
   }
 
+  if (metadata.model_decisions?.length === 0) {
+    metadata.model_decisions = undefined
+  }
+
   return Object.values(metadata).some((value) => value != null) ? metadata : undefined
 }
 
@@ -176,7 +197,7 @@ export function createJnoccioMetadataExtractor() {
   return {
     async extractMetadata({ parsedBody }: { parsedBody: unknown }): Promise<SharedV3ProviderMetadata | undefined> {
       const jnoccio = jnoccioMetadataFromBody(parsedBody)
-      return jnoccio ? ({ jnoccio } as SharedV3ProviderMetadata) : undefined
+      return jnoccio ? withJnoccioMetadata(jnoccio) : undefined
     },
     createStreamExtractor() {
       let jnoccio: JnoccioRouteMetadata | undefined
@@ -185,11 +206,15 @@ export function createJnoccioMetadataExtractor() {
           jnoccio = mergeJnoccioObjects(jnoccio, jnoccioMetadataFromBody(parsedChunk))
         },
         buildMetadata(): SharedV3ProviderMetadata | undefined {
-          return jnoccio ? ({ jnoccio } as SharedV3ProviderMetadata) : undefined
+          return jnoccio ? withJnoccioMetadata(jnoccio) : undefined
         },
       }
     },
   }
+}
+
+function withJnoccioMetadata(jnoccio: JnoccioRouteMetadata): SharedV3ProviderMetadata {
+  return { jnoccio }
 }
 
 function mergeJnoccioObjects(
@@ -207,10 +232,10 @@ export function mergeProviderMetadata(
 ): SharedV3ProviderMetadata | undefined {
   if (!jnoccio) return providerMetadata
 
-  const next = { ...(providerMetadata ?? {}) } as SharedV3ProviderMetadata
-  const existing = (next as Record<string, any>).jnoccio
-  ;(next as Record<string, any>).jnoccio = {
-    ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
+  const next: SharedV3ProviderMetadata & { jnoccio?: Record<string, unknown> } = { ...(providerMetadata ?? {}) }
+  const existing = isPlainRecord(next.jnoccio) ? next.jnoccio : undefined
+  next.jnoccio = {
+    ...(existing ?? {}),
     ...jnoccio,
   }
   return next

@@ -518,6 +518,80 @@ type RunDaemonInput = {
   }>) => Effect.Effect<DaemonStore.RunInfo | undefined, any, any>
 }
 
+function retryAgentLoopResult(input: {
+  spec: ZyalScript
+  prompt: SessionPrompt.Interface
+  store: DaemonStore.Interface
+  runID: string
+  sessionID: SessionID
+  iteration: number
+}): Effect.Effect<SessionPrompt.LoopResult, any, any> {
+  return Effect.gen(function* () {
+    const policy = resolveRetryPolicy(input.spec.retry, "agent_calls")
+    let lastError: unknown
+    for (let attempt = 1; attempt <= policy.max_attempts; attempt++) {
+      yield* input.store.appendEvent({
+        runID: input.runID,
+        iteration: input.iteration,
+        eventType: "retry.attempt",
+        payload: { category: "agent_calls", attempt, max_attempts: policy.max_attempts },
+      })
+      const result = yield* input.prompt.loopResult({ sessionID: input.sessionID }).pipe(
+        Effect.either,
+      )
+      if (result._tag === "Right") return result.right
+      lastError = result.left
+      const reason = classifyAgentCallFailure(result.left)
+      if (!agentCallReasonRetryable(policy, reason)) {
+        yield* input.store.appendEvent({
+          runID: input.runID,
+          iteration: input.iteration,
+          eventType: "retry.skipped_non_retryable",
+          payload: { category: "agent_calls", attempt, reason },
+        })
+        return yield* Effect.fail(result.left)
+      }
+      if (!canRetry(policy, attempt)) {
+        yield* input.store.appendEvent({
+          runID: input.runID,
+          iteration: input.iteration,
+          eventType: "retry.exhausted",
+          payload: { category: "agent_calls", attempt, reason },
+        })
+        return yield* Effect.fail(result.left)
+      }
+      const delayMs = computeRetryDelay(policy, attempt - 1)
+      yield* input.store.appendEvent({
+        runID: input.runID,
+        iteration: input.iteration,
+        eventType: "retry.sleep",
+        payload: { category: "agent_calls", attempt, next_attempt: attempt + 1, reason, delay_ms: delayMs },
+      })
+      yield* Effect.sleep(Duration.millis(delayMs))
+    }
+    return yield* Effect.fail(lastError)
+  })
+}
+
+function classifyAgentCallFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const lower = message.toLowerCase()
+  if (lower.includes("permission") || lower.includes("approval")) return "permission_denied"
+  if (lower.includes("budget") || lower.includes("max turns")) return "budget_exhausted"
+  if (lower.includes("timeout") || lower.includes("timed out")) return "timeout"
+  if (lower.includes("route metadata") || lower.includes("winner_model_id") || lower.includes("model_decisions")) return "route_metadata"
+  if (lower.includes("http") || lower.includes("status")) return "http_status"
+  if (lower.includes("parse") || lower.includes("schema") || lower.includes("json")) return "parse_schema"
+  return "agent_error"
+}
+
+function agentCallReasonRetryable(policy: ReturnType<typeof resolveRetryPolicy>, reason: string): boolean {
+  if (["permission_denied", "budget_exhausted"].includes(reason)) return false
+  if (policy.do_not_retry.includes(reason)) return false
+  if (policy.retry_on.length === 0) return true
+  return policy.retry_on.includes(reason)
+}
+
 function superviseDaemonRun(input: RunDaemonInput) {
   return Effect.fn("Daemon.supervise")(function* () {
     const appendHandlerEvent = Effect.fn("Daemon.appendHandlerEvent")(function* (
@@ -631,6 +705,130 @@ function runDaemon(input: RunDaemonInput) {
     let signalCounters: SignalCounters = {}
     const spec = normalizeDaemonSpec(input.parsed.spec).spec
     const onHandlers = getOnHandlers(spec)
+
+    const runJankuraiCheckpointPhase = Effect.fn("Daemon.runJankuraiCheckpointPhase")(function* (params: {
+      sessionDirectory: string
+      iteration: number
+      jankuraiConfig: NonNullable<ReturnType<typeof DaemonJankurai.resolveJankuraiConfig>>
+      jankuraiBeforeReport?: unknown
+    }) {
+      const beforeCpHooks = getHookSteps(spec.hooks, "before_checkpoint")
+      for (const hook of beforeCpHooks) {
+        yield* input.store.appendEvent({
+          runID: input.runID,
+          iteration: params.iteration,
+          eventType: "hook.before_checkpoint",
+          payload: { command: hook.run },
+        })
+        yield* executeHookStep({ checks: input.checks, cwd: params.sessionDirectory, phase: "before_checkpoint", hook })
+      }
+
+      let jankuraiCheckpointBlocked: { ok: false; reason: string } | undefined
+      if (params.jankuraiConfig?.enabled) {
+        const taskDir = `.jekko/daemon/${input.runID}/tasks/iteration-${params.iteration}`
+        const patchPath = `${taskDir}/candidate.patch`
+        yield* input.checks.runShellCheck({
+          cwd: params.sessionDirectory,
+          command: `mkdir -p ${taskDir} && git diff --binary HEAD > ${patchPath}`,
+          timeout: "1 minute",
+        })
+        const verification = yield* DaemonJankurai.verifyCandidate({
+          cwd: params.sessionDirectory,
+          config: params.jankuraiConfig,
+          checks: input.checks,
+          beforeReport: params.jankuraiBeforeReport,
+        })
+        if (!verification.ok) {
+          const rollback = params.jankuraiConfig.verification.rollback_unverified
+            ? yield* DaemonJankurai.rollbackCandidate({
+                cwd: params.sessionDirectory,
+                patchPath,
+                checks: input.checks,
+              })
+            : undefined
+          yield* input.store.appendEvent({
+            runID: input.runID,
+            iteration: params.iteration,
+            eventType: rollback ? "jankurai.rollback.applied" : "jankurai.checkpoint.blocked",
+            payload: { reason: verification.reason ?? "jankurai verification failed", rollback },
+          })
+          jankuraiCheckpointBlocked = {
+            ok: false,
+            reason: verification.reason ?? "jankurai verification failed",
+          }
+        }
+      }
+
+      const checkpointResult =
+        jankuraiCheckpointBlocked ??
+        (yield* input.checkpoint.runCheckpoint({
+          cwd: params.sessionDirectory,
+          spec,
+          checkpoint: spec.checkpoint,
+        }))
+
+      let jankuraiRegression: unknown | undefined
+      if (checkpointResult.ok) {
+        const afterCpHooks = getHookSteps(spec.hooks, "after_checkpoint")
+        for (const hook of afterCpHooks) {
+          yield* input.store.appendEvent({
+            runID: input.runID,
+            iteration: params.iteration,
+            eventType: "hook.after_checkpoint",
+            payload: { command: hook.run },
+          })
+          yield* executeHookStep({ checks: input.checks, cwd: params.sessionDirectory, phase: "after_checkpoint", hook })
+        }
+        if (params.jankuraiConfig?.enabled) {
+          jankuraiRegression = yield* DaemonJankurai.runMainRegressionAudit({
+            cwd: params.sessionDirectory,
+            runID: input.runID,
+            iteration: params.iteration,
+            config: params.jankuraiConfig,
+            checks: input.checks,
+            store: input.store,
+            branchReport: params.jankuraiBeforeReport,
+          })
+        }
+      }
+
+      return { checkpointResult, jankuraiRegression }
+    })
+
+    const handleCheckpointFailure = Effect.fn("Daemon.handleCheckpointFailure")(function* (params: {
+      iteration: number
+      reason: string
+    }) {
+      signalCounters = incrementSignalCounter(signalCounters, "checkpoint_failed")
+      if (onHandlers.length > 0) {
+        const actions = evaluateOnHandlers({
+          handlers: onHandlers,
+          signal: "checkpoint_failed",
+          counters: signalCounters,
+        })
+        yield* handleOnHandlerActions({
+          actions,
+          iteration: params.iteration,
+          terminalActions: false,
+        })
+      }
+      const continueOn = spec.loop?.continue_on ?? []
+      if (continueOn.includes("checkpoint_failed") || resolveDaemonPolicy(spec) === "forever") {
+        yield* input.store.appendEvent({
+          runID: input.runID,
+          iteration: params.iteration,
+          eventType: "checkpoint.failed_continued",
+          payload: { reason: params.reason },
+        })
+        return "continue" as const
+      }
+      yield* input.transitionRun(input.runID, {
+        status: "paused",
+        phase: "paused",
+        last_error: params.reason,
+      })
+      return "exit" as const
+    })
 
     // ─── v1.1: Capture constraint baselines on start ─────────────────────
     let constraintBaselines: ConstraintBaselines = {}
@@ -754,10 +952,13 @@ function runDaemon(input: RunDaemonInput) {
             repairPlan: repair.plan,
             repairQueue,
           })
-          yield* DaemonJankurai.runWorkerPool({
+          const workerWave = yield* DaemonJankurai.runWorkerPool({
             cwd: session.directory,
             run,
-            maxWorkers: Math.min(10, spec.fleet?.max_workers ?? 10),
+            maxWorkers: DaemonJankurai.resolveWorkerPoolSize({
+              config: jankuraiConfig,
+              fleetMaxWorkers: spec.fleet?.max_workers,
+            }),
             config: jankuraiConfig,
             beforeReport: audit.report,
             sessions: input.sessions,
@@ -766,11 +967,33 @@ function runDaemon(input: RunDaemonInput) {
             checks: input.checks,
             worktree: input.worktree,
           })
+          yield* input.transitionRun(input.runID, { status: "running", phase: "running_iteration" })
+          if (workerWave.verified > 0) {
+            const workerCheckpoint = yield* runJankuraiCheckpointPhase({
+              sessionDirectory: session.directory,
+              iteration: run.iteration,
+              jankuraiConfig,
+              jankuraiBeforeReport: audit.report,
+            })
+            if (!workerCheckpoint.checkpointResult.ok) {
+              const checkpointOutcome = yield* handleCheckpointFailure({
+                iteration: run.iteration,
+                reason: workerCheckpoint.checkpointResult.reason ?? "checkpoint failed",
+              })
+              if (checkpointOutcome === "exit") return "exit" as const
+            }
+            return "ok" as const
+          }
         }
 
-        yield* input.transitionRun(input.runID, { status: "running", phase: "running_iteration" })
-
-        const loop = yield* input.prompt.loopResult({ sessionID: session.id })
+        const loop = yield* retryAgentLoopResult({
+          spec,
+          prompt: input.prompt,
+          store: input.store,
+          runID: input.runID,
+          sessionID: session.id,
+          iteration: run.iteration + 1,
+        })
         const assistant = loop.message.info as MessageV2.Assistant
         const iteration = run.iteration + 1
 
@@ -856,117 +1079,20 @@ function runDaemon(input: RunDaemonInput) {
           }
         }
 
-        // ─── v1.1: Execute before_checkpoint hooks ────────────────────────
-        const beforeCpHooks = getHookSteps(spec.hooks, "before_checkpoint")
-        for (const hook of beforeCpHooks) {
-          yield* input.store.appendEvent({
-            runID: input.runID,
-            iteration,
-            eventType: "hook.before_checkpoint",
-            payload: { command: hook.run },
-          })
-          yield* executeHookStep({ checks: input.checks, cwd: session.directory, phase: "before_checkpoint", hook })
-        }
-
-        let jankuraiCheckpointBlocked:
-          | { ok: false; reason: string }
-          | undefined
-        if (jankuraiConfig?.enabled) {
-          const taskDir = `.jekko/daemon/${input.runID}/tasks/iteration-${iteration}`
-          const patchPath = `${taskDir}/candidate.patch`
-          yield* input.checks.runShellCheck({
-            cwd: session.directory,
-            command: `mkdir -p ${taskDir} && git diff --binary HEAD > ${patchPath}`,
-            timeout: "1 minute",
-          })
-          const verification = yield* DaemonJankurai.verifyCandidate({
-            cwd: session.directory,
-            config: jankuraiConfig,
-            checks: input.checks,
-            beforeReport: jankuraiBeforeReport,
-          })
-          if (!verification.ok) {
-            const rollback = jankuraiConfig.verification.rollback_unverified
-              ? yield* DaemonJankurai.rollbackCandidate({
-                  cwd: session.directory,
-                  patchPath,
-                  checks: input.checks,
-                })
-              : undefined
-            yield* input.store.appendEvent({
-              runID: input.runID,
-              iteration,
-              eventType: rollback ? "jankurai.rollback.applied" : "jankurai.checkpoint.blocked",
-              payload: { reason: verification.reason ?? "jankurai verification failed", rollback },
-            })
-            jankuraiCheckpointBlocked = {
-              ok: false,
-              reason: verification.reason ?? "jankurai verification failed",
-            }
-          }
-        }
-
-        const checkpointResult = jankuraiCheckpointBlocked ?? (yield* input.checkpoint.runCheckpoint({
-          cwd: session.directory,
-          spec,
-          checkpoint: spec.checkpoint,
-        }))
-
-        // ─── v1.1: Execute after_checkpoint hooks ─────────────────────────
-        if (checkpointResult.ok) {
-          const afterCpHooks = getHookSteps(spec.hooks, "after_checkpoint")
-          for (const hook of afterCpHooks) {
-            yield* input.store.appendEvent({
-              runID: input.runID,
-              iteration,
-              eventType: "hook.after_checkpoint",
-              payload: { command: hook.run },
-            })
-            yield* executeHookStep({ checks: input.checks, cwd: session.directory, phase: "after_checkpoint", hook })
-          }
-          if (jankuraiConfig?.enabled) {
-            jankuraiRegression = yield* DaemonJankurai.runMainRegressionAudit({
-              cwd: session.directory,
-              runID: input.runID,
-              iteration,
-              config: jankuraiConfig,
-              checks: input.checks,
-              store: input.store,
-              branchReport: jankuraiBeforeReport,
-            })
-          }
-        }
-
+        const checkpointPhase = yield* runJankuraiCheckpointPhase({
+          sessionDirectory: session.directory,
+          iteration,
+          jankuraiConfig,
+          jankuraiBeforeReport,
+        })
+        const checkpointResult = checkpointPhase.checkpointResult
+        jankuraiRegression = checkpointPhase.jankuraiRegression
         if (!checkpointResult.ok) {
-          signalCounters = incrementSignalCounter(signalCounters, "checkpoint_failed")
-          if (onHandlers.length > 0) {
-            const actions = evaluateOnHandlers({
-              handlers: onHandlers,
-              signal: "checkpoint_failed",
-              counters: signalCounters,
-            })
-            yield* handleOnHandlerActions({
-              actions,
-              iteration,
-              terminalActions: false,
-            })
-          }
-          const continueOn = spec.loop?.continue_on ?? []
-          if (continueOn.includes("checkpoint_failed") || resolveDaemonPolicy(spec) === "forever") {
-            yield* input.store.appendEvent({
-              runID: input.runID,
-              iteration,
-              eventType: "checkpoint.failed_continued",
-              payload: { reason: checkpointResult.reason ?? "checkpoint failed" },
-            })
-          } else {
-            yield* input.transitionRun(input.runID, {
-              status: "paused",
-              phase: "paused",
-              last_error: checkpointResult.reason ?? "checkpoint failed",
-            })
-            return "exit" as const
-          }
+          const checkpointOutcome = yield* handleCheckpointFailure({
+            iteration,
+            reason: checkpointResult.reason ?? "checkpoint failed",
+          })
+          if (checkpointOutcome === "exit") return "exit" as const
         }
 
         // ─── v1.1: Evaluate stop with retry backoff ───────────────────────

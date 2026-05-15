@@ -1,4 +1,6 @@
 // jankurai:allow HLT-000-SCORE-DIMENSION reason=examples-file-contains-parallel-zyal-templates-by-design expires=2027-01-01
+import { readFileSync } from "fs"
+import path from "path"
 import { ZYAL_RUNTIME_SENTINEL_VERSION } from "./version"
 
 export type ZyalExample = {
@@ -14,6 +16,17 @@ function wrap(id: string, body: string) {
 
 function example(id: string, title: string, description: string, body: string): ZyalExample {
   return { id, title, description, text: wrap(id, body) }
+}
+
+function readDocExample(file: string) {
+  const full = path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples", file)
+  const text = readFileSync(full, "utf8")
+  const start = text.indexOf(">>>")
+  const end = text.indexOf("<<<END_ZYAL")
+  if (start < 0 || end < 0 || end <= start) {
+    throw new Error(`Invalid ZYAL example file: ${file}`)
+  }
+  return text.slice(start + 3, end).trim()
 }
 
 export const ZYAL_EXAMPLES: Record<string, ZyalExample> = {
@@ -62,6 +75,27 @@ permissions:
 ui:
   theme: jekko-gold
   banner: forever`,
+  ),
+
+  "jankurai-port-simple": example(
+    "jankurai-port-simple",
+    "Jankurai port simple",
+    "Single-worker Jankurai forever loop that bootstraps or switches to `jankurai_port`, commits green waves locally, and stays conservative.",
+    readDocExample("27-jankurai-port-simple.zyal"),
+  ),
+
+  "jankurai-port-advanced": example(
+    "jankurai-port-advanced",
+    "Jankurai port advanced",
+    "Ten-worker Jankurai porting loop with path locks, shared memory, incubator routing, and reviewer-backed promotion.",
+    readDocExample("28-jankurai-port-advanced.zyal"),
+  ),
+
+  "jankurai-port-ultra": example(
+    "jankurai-port-ultra",
+    "Jankurai port ultra",
+    "Twenty-worker Jankurai porting loop with dispatch, research, memory, taint quarantine, approvals, and reviewer gates.",
+    readDocExample("29-jankurai-port-ultra.zyal"),
   ),
 
   "until-file-contains-done": example(

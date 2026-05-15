@@ -181,14 +181,16 @@ impl<'a> Parser<'a> {
         } else {
             high
         };
-        char::from_u32(codepoint).ok_or_else(|| "invalid \\u escape codepoint".to_string())
+        let Some(ch) = char::from_u32(codepoint) else {
+            return Err(format!("invalid \\u escape codepoint: {codepoint:#x}"));
+        };
+        Ok(ch)
     }
     fn parse_hex4(&mut self) -> Result<u32, String> {
-        let end = self
-            .pos
-            .checked_add(4)
-            .filter(|end| *end <= self.src.len())
-            .ok_or_else(|| "truncated \\u escape".to_string())?;
+        let end = match self.pos.checked_add(4).filter(|end| *end <= self.src.len()) {
+            Some(end) => end,
+            None => return Err("truncated \\u escape".to_string()),
+        };
         let hex = &self.src[self.pos..end];
         if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(format!("bad \\u escape at byte {}", self.pos));

@@ -27,7 +27,7 @@ export type ZyalJankuraiTaskSource = Schema.Schema.Type<typeof ZyalJankuraiTaskS
 
 export const ZyalJankuraiSelectionOrder = Schema.Union([
   Schema.Literal("quick_wins_first"),
-  Schema.Literal("severity_first"),
+  Schema.Literal("blocker_first"),
   Schema.Literal("random"),
 ])
 export type ZyalJankuraiSelectionOrder = Schema.Schema.Type<typeof ZyalJankuraiSelectionOrder>
@@ -131,7 +131,7 @@ export type ZyalJankuraiReviewerSeverity = Schema.Schema.Type<typeof ZyalJankura
 export const ZyalJankuraiReviewerChecklistItem = Schema.Struct({
   id: Schema.String,
   prompt: Schema.optional(Schema.String),
-  severity: Schema.optional(ZyalJankuraiReviewerSeverity),
+  review_priority: Schema.optional(ZyalJankuraiReviewerSeverity),
 })
 export type ZyalJankuraiReviewerChecklistItem = Schema.Schema.Type<typeof ZyalJankuraiReviewerChecklistItem>
 
@@ -140,7 +140,7 @@ export type ZyalJankuraiReviewerChecklistItem = Schema.Schema.Type<typeof ZyalJa
 // `critical_reviewer` pass type is used. Parser/preview only at PR2.
 export const ZyalJankuraiReviewer = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
-  // Block promotion when any checklist item resolves to severity `blocker`.
+  // Block promotion when any checklist item resolves to `blocker`.
   // Default true.
   block_promotion: Schema.optional(Schema.Boolean),
   checklist: Schema.optional(Schema.Array(ZyalJankuraiReviewerChecklistItem)),

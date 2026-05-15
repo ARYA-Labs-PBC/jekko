@@ -64,6 +64,17 @@ describe("daemon retry", () => {
     expect(policy.backoff).toBe("none")
   })
 
+  test("resolveRetryPolicy resolves retries as attempts after the first call", () => {
+    const retry: ZyalRetry = {
+      overrides: {
+        agent_calls: { retries: 2, retry_on: ["http_status"] },
+      },
+    }
+    const policy = resolveRetryPolicy(retry, "agent_calls")
+    expect(policy.max_attempts).toBe(3)
+    expect(policy.retry_on).toEqual(["http_status"])
+  })
+
   test("computeRetryDelay with exponential backoff", () => {
     const policy = resolveRetryPolicy(
       { default: { backoff: "exponential", initial_delay: "1s", max_delay: "60s", jitter: false } },

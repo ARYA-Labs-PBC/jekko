@@ -55,6 +55,7 @@ export type Info = Schema.Schema.Type<typeof Info>
 
 export const CreateInput = Schema.Struct({
   name: Schema.optional(Schema.String),
+  branchPrefix: Schema.optional(Schema.String),
   startCommand: Schema.optional(
     Schema.String.annotate({ description: "Additional startup script to run after the project's start command" }),
   ),
@@ -148,7 +149,7 @@ function failedRemoves(...chunks: string[]) {
 // ---------------------------------------------------------------------------
 
 export interface Interface {
-  readonly makeWorktreeInfo: (name?: string) => Effect.Effect<Info>
+  readonly makeWorktreeInfo: (name?: string, branchPrefix?: string) => Effect.Effect<Info>
   readonly createFromInfo: (info: Info, startCommand?: string) => Effect.Effect<void>
   readonly create: (input?: CreateInput) => Effect.Effect<Info>
   readonly remove: (input: RemoveInput) => Effect.Effect<boolean>
@@ -190,11 +191,11 @@ export const layer: Layer.Layer<
     })
 
     const MAX_NAME_ATTEMPTS = 26
-    const candidate = Effect.fn("Worktree.candidate")(function* (root: string, base?: string) {
+    const candidate = Effect.fn("Worktree.candidate")(function* (root: string, base?: string, branchPrefix?: string) {
       const ctx = yield* InstanceState.context
       for (const attempt of Array.from({ length: MAX_NAME_ATTEMPTS }, (_, i) => i)) {
         const name = base ? (attempt === 0 ? base : `${base}-${Slug.create()}`) : Slug.create()
-        const branch = `jekko/${name}`
+        const branch = `${(branchPrefix ?? "jekko").replace(/\/+$/, "")}/${name}`
         const directory = pathSvc.join(root, name)
 
         if (yield* fs.exists(directory).pipe(Effect.orDie)) continue
@@ -208,7 +209,7 @@ export const layer: Layer.Layer<
       throw new NameGenerationFailedError({ message: "Failed to generate a unique worktree name" })
     })
 
-    const makeWorktreeInfo = Effect.fn("Worktree.makeWorktreeInfo")(function* (name?: string) {
+    const makeWorktreeInfo = Effect.fn("Worktree.makeWorktreeInfo")(function* (name?: string, branchPrefix?: string) {
       const ctx = yield* InstanceState.context
       if (ctx.project.vcs !== "git") {
         return yield* Effect.fail(new NotGitError({ message: "Worktrees are only supported for git projects" }))
@@ -218,7 +219,7 @@ export const layer: Layer.Layer<
       yield* fs.makeDirectory(root, { recursive: true }).pipe(Effect.orDie)
 
       const base = name ? slugify(name) : ""
-      return yield* candidate(root, base || undefined)
+      return yield* candidate(root, base || undefined, branchPrefix)
     })
 
     const setup = Effect.fnUntraced(function* (info: Info) {
@@ -292,7 +293,7 @@ export const layer: Layer.Layer<
     })
 
     const create = Effect.fn("Worktree.create")(function* (input?: CreateInput) {
-      const info = yield* makeWorktreeInfo(input?.name)
+      const info = yield* makeWorktreeInfo(input?.name, input?.branchPrefix)
       yield* createFromInfo(info, input?.startCommand)
       return info
     })

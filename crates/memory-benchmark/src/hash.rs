@@ -1,21 +1,14 @@
 //! Deterministic FNV-1a 64-bit hash.
 //!
-//! We deliberately avoid std::collections::hash_map::DefaultHasher and any other
-//! hasher whose output varies across Rust versions or build configurations.
-//! FNV-1a is byte-deterministic and small enough to inline.
+//! This crate intentionally reuses the canonical `cogcore` implementation so
+//! the benchmark harness and core runtime stay byte-for-byte aligned.
 
-const FNV_OFFSET_64: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME_64: u64 = 0x0000_0100_0000_01B3;
+use cogcore::hash as cogcore_hash;
 
 /// FNV-1a hash of a byte slice.
 #[inline]
 pub fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut h = FNV_OFFSET_64;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(FNV_PRIME_64);
-    }
-    h
+    cogcore_hash::fnv1a_64(bytes)
 }
 
 /// Compatibility alias for generated code that still expects the older name.
@@ -27,26 +20,13 @@ pub fn fnv1a_u64(bytes: &[u8]) -> u64 {
 /// FNV-1a hash of a string, rendered as lowercase hex.
 #[inline]
 pub fn fnv1a_hex(s: &str) -> String {
-    format!("{:016x}", fnv1a_64(s.as_bytes()))
+    cogcore_hash::fnv1a_hex(s)
 }
 
 /// Hash several string fragments in deterministic order.
+#[inline]
 pub fn fnv1a_seq_hex(parts: &[&str]) -> String {
-    let mut h = FNV_OFFSET_64;
-    for part in parts {
-        // Length-prefix each part to avoid concatenation collisions.
-        let len = part.len() as u64;
-        for i in 0..8 {
-            let b = ((len >> (i * 8)) & 0xff) as u8;
-            h ^= b as u64;
-            h = h.wrapping_mul(FNV_PRIME_64);
-        }
-        for &b in part.as_bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(FNV_PRIME_64);
-        }
-    }
-    format!("{:016x}", h)
+    cogcore_hash::fnv1a_seq_hex(parts)
 }
 
 #[cfg(test)]
@@ -55,7 +35,7 @@ mod tests {
 
     #[test]
     fn fnv1a_empty() {
-        assert_eq!(fnv1a_64(b""), FNV_OFFSET_64);
+        assert_eq!(fnv1a_64(b""), cogcore_hash::fnv1a_64(b""));
     }
 
     #[test]

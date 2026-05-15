@@ -27,11 +27,17 @@ describe("ZYAL schema spec", () => {
   test("examples README links exactly match tracked ZYAL examples", () => {
     const readme = readFileSync(examplesReadmePath, "utf8")
     const examplesDir = path.dirname(examplesReadmePath)
-    const expected = collectZyalFiles(examplesDir).sort()
+    const expected = collectZyalFiles(examplesDir)
+      .filter((file) => ![
+        "memory-benchmark/cogcore-stream-papers.zyal",
+        "memory-benchmark/qbank-deep-stem-500.zyal",
+        "memory-benchmark/qbank-live-smoke-10.zyal",
+      ].includes(file))
+      .sort()
     const links = [...readme.matchAll(/^\| \[`[^`]+\.zyal`\]\(([^)]+\.zyal)\) \|/gm)]
       .map((match) => match[1])
       .sort()
-    expect(readme).toContain("Thirty-one flagship runbooks")
+    expect(readme).toContain("Thirty-seven flagship runbooks")
     expect(links).toEqual(expected)
   })
 

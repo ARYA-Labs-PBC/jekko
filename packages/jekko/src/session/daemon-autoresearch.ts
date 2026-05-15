@@ -88,6 +88,7 @@ export function normalizeDaemonSpec(spec: ZyalScript): {
 }
 
 export function hasAutoResearch(spec: ZyalScript): boolean {
+  if (spec.jankurai?.enabled === true) return false
   return (spec.experiments?.lanes?.length ?? 0) > 0
 }
 
@@ -128,8 +129,11 @@ export function runAutoResearch(input: {
     stopped_at: number | null
     active_session_id: SessionID
   }>) => Effect.Effect<DaemonStore.RunInfo | undefined, any, any>
-  }) {
+}) {
   return Effect.gen(function* () {
+    if (input.spec.jankurai?.enabled === true) {
+      return yield* Effect.succeed(undefined)
+    }
     const rootCtx = yield* InstanceState.context
     const rootDir = resolveInstanceRoot(rootCtx)
     const artifactRoot = daemonArtifactRoot(rootDir, input.run.id)

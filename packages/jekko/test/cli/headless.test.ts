@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import * as Server from "@/server/server"
-import { parseHeadlessArgs, planHeadlessSteps, runHeadlessFile } from "./headless"
+import { parseHeadlessArgs, planHeadlessSteps, runHeadlessFile } from "../../src/cli/headless"
 import { Effect } from "effect"
 import { parseZyal } from "@/agent-script/parser"
 import { tmpdir as fixtureTmpdir } from "../../test/fixture/fixture"
@@ -120,7 +120,7 @@ describe("headless ZYAL CLI", () => {
             throw new Error(`Unexpected request path: ${url.pathname}`)
           },
         },
-      } as any)
+      } as unknown as ReturnType<typeof Server.Default>)
 
       try {
         const receipt = await runHeadlessFile(file, {
@@ -133,11 +133,98 @@ describe("headless ZYAL CLI", () => {
         expect(receipt.daemon_run_id).toBe(runID)
         expect(receipt.daemon_status).toBe("satisfied")
         expect(receipt.worker_spec_present).toBe(true)
-        expect(receipt.dev_only_fallback_present).toBe(false)
+        expect(receipt.dev_only_smoke_present).toBe(false)
         expect(receipt.jnoccio_metrics_before?.total_tokens).toBe(625267206)
         expect(receipt.jnoccio_metrics_after?.total_tokens).toBe(625267234)
         expect((receipt.jnoccio_metrics_after?.total_tokens ?? 0) > (receipt.jnoccio_metrics_before?.total_tokens ?? 0)).toBe(true)
         expect(await readFile(path.join(artifactRoot, "reports", "lanes", "lane-one", "report.json"), "utf8")).toContain("lane-one")
+      } finally {
+        defaultSpy.mockRestore()
+      }
+    } finally {
+      metricsServer.stop()
+    }
+  })
+
+  test("treats malformed Jnoccio metrics payloads as absent", async () => {
+    const tmp = await fixtureTmpdir({ git: true })
+    const dir = tmp.path
+    const file = path.join(dir, "daemon.zyal")
+    const metricsServer = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/v1/jnoccio/metrics") {
+          return jsonResponse({
+            totals: {
+              calls: "bad",
+              prompt_tokens: "bad",
+              completion_tokens: "bad",
+              total_tokens: "bad",
+            },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+    try {
+      await writeFile(file, makeDaemonZyal(metricsServer.url.origin))
+
+      const runID = "daemon-smoke-run"
+      const sessionID = "daemon-smoke-session"
+      const artifactRoot = path.join(dir, ".jekko", "daemon", runID)
+      let polls = 0
+      const defaultSpy = spyOn(Server, "Default").mockReturnValue({
+        app: {
+          fetch: async (input: Request) => {
+            const url = new URL(input.url)
+            if (url.pathname === "/daemon/preview") {
+              return jsonResponse({ spec: { job: { name: "Headless daemon smoke" } } })
+            }
+            if (url.pathname === "/session") {
+              return jsonResponse({ id: sessionID })
+            }
+            if (url.pathname === `/session/${sessionID}/daemon/start`) {
+              await mkdir(path.join(artifactRoot, "reports", "lanes", "lane-one"), { recursive: true })
+              await writeFile(
+                path.join(artifactRoot, "ledger.jsonl"),
+                `${JSON.stringify({
+                  event_type: "autoresearch.started",
+                  payload_json: { lane_count: 1, max_parallel: 1 },
+                })}\n`,
+              )
+              await writeFile(path.join(artifactRoot, "STATE.md"), "# running\n")
+              await writeFile(
+                path.join(artifactRoot, "reports", "lanes", "lane-one", "report.json"),
+                `${JSON.stringify({ lane_id: "lane-one", total_tokens: 46 }, null, 2)}\n`,
+              )
+              return jsonResponse({ id: runID })
+            }
+            if (url.pathname === `/daemon/${runID}`) {
+              polls += 1
+              return jsonResponse({
+                id: runID,
+                status: polls === 1 ? "running" : "satisfied",
+                phase: polls === 1 ? "running" : "terminal",
+                iteration: polls - 1,
+              })
+            }
+            throw new Error(`Unexpected request path: ${url.pathname}`)
+          },
+        },
+      } as unknown as ReturnType<typeof Server.Default>)
+
+      try {
+        const receipt = await runHeadlessFile(file, {
+          cwd: dir,
+          print: () => {},
+        })
+
+        expect(receipt.mode).toBe("daemon")
+        expect(receipt.status).toBe("passed")
+        expect(receipt.jnoccio_metrics_before).toBeUndefined()
+        expect(receipt.jnoccio_metrics_after).toBeUndefined()
       } finally {
         defaultSpy.mockRestore()
       }

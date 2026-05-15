@@ -35,6 +35,8 @@ Install the Jekko config fragment when needed:
 ./scripts/install-jekko-config.sh
 ```
 
+The seeded install bundle lives in `~/.config/jekko/jnoccio-fusion/` and is safe to edit directly. `server.jsonc` carries the user-facing defaults and comments, while `models.json` stays as the model registry copy used by the loader. The knobs most users change are `routing.fusion_sample_rate`, `routing.fast_backup_count`, `routing.event_retention_rows`, `routing.minute_bucket_retention_days`, `runtime.spawned_worker_threads`, `scaling.max_instances`, `scaling.spawn_batch_limit`, and the operational `bind`, `database`, `receipts_dir`, and optional `core_token` fields.
+
 Agent MCP snippets live in:
 
 - `agents/codex/AGENTS.md`

@@ -71,6 +71,20 @@ describe("Worktree", () => {
       ),
     )
 
+    it.live("uses a custom branch prefix when provided", () =>
+      provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const svc = yield* Worktree.Service
+            const info = yield* svc.makeWorktreeInfo("port-task", "zyal/jankurai-port")
+
+            expect(info.name).toBe("port-task")
+            expect(info.branch).toBe("zyal/jankurai-port/port-task")
+          }),
+        { git: true },
+      ),
+    )
+
     it.live("slugifies the provided name", () =>
       provideTmpdirInstance(
         () =>

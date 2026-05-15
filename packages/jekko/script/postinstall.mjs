@@ -5,6 +5,7 @@ import path from "path"
 import os from "os"
 import { fileURLToPath } from "url"
 import { createRequire } from "module"
+import { resolveJekkoConfigRoot, seedJnoccioFusionBundle } from "./jnoccio-install-bundle.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
@@ -70,26 +71,25 @@ function findBinary() {
 
 async function main() {
   try {
-    if (os.platform() === "win32") {
-      // On Windows, the .exe is already included in the package and bin field points to it
-      // No postinstall setup needed
-      console.log("Windows detected: binary setup not needed (using packaged .exe)")
-      return
+    if (os.platform() !== "win32") {
+      // On non-Windows platforms, just verify the binary package exists.
+      // Don't replace the wrapper script - it handles binary execution.
+      const { binaryPath } = findBinary()
+      const target = path.join(__dirname, "bin", ".jekko")
+      if (fs.existsSync(target)) fs.unlinkSync(target)
+      try {
+        fs.linkSync(binaryPath, target)
+      } catch {
+        fs.copyFileSync(binaryPath, target)
+      }
+      fs.chmodSync(target, 0o755)
     }
 
-    // On non-Windows platforms, just verify the binary package exists
-    // Don't replace the wrapper script - it handles binary execution
-    const { binaryPath } = findBinary()
-    const target = path.join(__dirname, "bin", ".jekko")
-    if (fs.existsSync(target)) fs.unlinkSync(target)
-    try {
-      fs.linkSync(binaryPath, target)
-    } catch {
-      fs.copyFileSync(binaryPath, target)
-    }
-    fs.chmodSync(target, 0o755)
+    seedJnoccioFusionBundle({
+      configRoot: resolveJekkoConfigRoot(),
+    })
   } catch (error) {
-    console.error("Failed to setup jekko binary:", error.message)
+    console.error("Failed to complete jekko postinstall:", error.message)
     process.exit(1)
   }
 }

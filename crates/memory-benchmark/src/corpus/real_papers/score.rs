@@ -76,6 +76,8 @@ fn fixture_paper_from_challenge(challenge: &PaperChallenge) -> PaperRecord {
         dedupe_keys: Vec::new(),
         source_ids: Vec::new(),
         source_url: None,
+        retrieval_receipts: Vec::new(),
+        review_receipts: Vec::new(),
         retrieval_kinds: Vec::new(),
         sections: challenge
             .support

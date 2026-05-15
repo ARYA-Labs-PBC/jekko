@@ -37,12 +37,26 @@ pub fn validate_generator_output(
     require_text("answer", &output.answer)?;
     require_text("difficulty_rationale", &output.difficulty_rationale)?;
     require_text("expected_failure_mode", &output.expected_failure_mode)?;
-    validate_confidence(output.confidence)?;
+    validate_agent_confidence(output.confidence)?;
     if output.support.is_empty() {
         return Err("generator support is empty".to_string());
     }
     for support in &output.support {
         validate_support_quote(support, paper)?;
+    }
+    if output.required_key_points.len() < 3 || output.required_key_points.len() > 8 {
+        return Err("required_key_points must contain 3..=8 items".to_string());
+    }
+    let support_quote = output
+        .support
+        .first()
+        .map(|support| support.quote.as_str())
+        .unwrap_or("");
+    for point in &output.required_key_points {
+        require_text("required_key_points[]", point)?;
+        if !support_quote.contains(point.trim()) {
+            return Err("required_key_points[] must be exact support quote substrings".to_string());
+        }
     }
     Ok(())
 }
@@ -50,18 +64,18 @@ pub fn validate_generator_output(
 pub fn validate_verification_output(output: &VerificationAgentOutput) -> Result<(), String> {
     require_text("answer", &output.answer)?;
     require_text("reason", &output.reason)?;
-    validate_confidence(output.confidence)
+    validate_agent_confidence(output.confidence)
 }
 
 pub fn validate_testing_output(output: &TestingAgentOutput) -> Result<(), String> {
     require_text("answer", &output.answer)?;
     require_text("reasoning_summary", &output.reasoning_summary)?;
-    validate_confidence(output.confidence)
+    validate_agent_confidence(output.confidence)
 }
 
 pub fn validate_grading_output(output: &GradingAgentOutput) -> Result<(), String> {
     require_text("reason", &output.reason)?;
-    validate_confidence(output.score_0_100)
+    validate_score_0_100(output.score_0_100)
 }
 
 fn fenced_json(input: &str) -> Option<&str> {
@@ -156,10 +170,18 @@ fn require_text(label: &str, value: &str) -> Result<(), String> {
     }
 }
 
-fn validate_confidence(confidence: u8) -> Result<(), String> {
-    if confidence <= 100 {
+fn validate_agent_confidence(confidence: u8) -> Result<(), String> {
+    if (1..=100).contains(&confidence) {
         Ok(())
     } else {
-        Err("confidence outside 0..=100".to_string())
+        Err("confidence outside 1..=100".to_string())
+    }
+}
+
+fn validate_score_0_100(score: u8) -> Result<(), String> {
+    if score <= 100 {
+        Ok(())
+    } else {
+        Err("score outside 0..=100".to_string())
     }
 }

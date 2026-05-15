@@ -10,17 +10,22 @@
 //! cogcore stays zero-dep here.
 
 pub mod equation;
+mod paper_support;
+mod paper_json_parse;
+mod paper_json;
+mod paper_json_support;
 pub mod paper;
 pub mod theorem;
 
 pub use equation::EqAtom;
-pub use paper::{parse_jsonl_event, IngestedPaper, PaperSection, RuleBackend, SourceSpec};
+pub use paper_json::parse_jsonl_event;
+pub use paper::{IngestedPaper, PaperSection, RuleBackend, SourceSpec};
 pub use theorem::TheoremRef;
 
 use crate::core::StoredEvent;
 
 /// Pluggable extractor. Production cogcore uses `RuleBackend`. Tests may
-/// stub with a fixture backend. ZYAL-mediated LLM backends sit at this
+/// use a fixture backend. ZYAL-mediated LLM backends sit at this
 /// layer in Phase 7+.
 pub trait IngestBackend {
     /// Convert one paper into a stream of events. Implementations must be

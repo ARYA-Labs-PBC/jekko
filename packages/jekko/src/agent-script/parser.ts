@@ -436,16 +436,16 @@ function assertZyalNestedKeys(input: Record<string, unknown>) {
     assertKeys("retry", rt, ["default", "overrides"])
     if (rt.default !== undefined) {
       assertKeys("retry.default", expectRecord(rt.default, "retry.default"), [
-        "max_attempts", "backoff", "initial_delay", "max_delay", "jitter",
+        "max_attempts", "retries", "backoff", "initial_delay", "max_delay", "jitter", "retry_on", "do_not_retry",
       ])
     }
     if (rt.overrides !== undefined) {
       const overrides = expectRecord(rt.overrides, "retry.overrides")
-      assertKeys("retry.overrides", overrides, ["shell_checks", "checkpoint", "worker_spawn", "stop_evaluation"])
-      for (const key of ["shell_checks", "checkpoint", "worker_spawn", "stop_evaluation"] as const) {
+      assertKeys("retry.overrides", overrides, ["shell_checks", "agent_calls", "checkpoint", "worker_spawn", "stop_evaluation"])
+      for (const key of ["shell_checks", "agent_calls", "checkpoint", "worker_spawn", "stop_evaluation"] as const) {
         if (overrides[key] !== undefined) {
           assertKeys(`retry.overrides.${key}`, expectRecord(overrides[key], `retry.overrides.${key}`), [
-            "max_attempts", "backoff", "initial_delay", "max_delay", "jitter",
+            "max_attempts", "retries", "backoff", "initial_delay", "max_delay", "jitter", "retry_on", "do_not_retry",
           ])
         }
       }
@@ -1353,6 +1353,12 @@ function validateZyalSemantics(spec: ZyalScript) {
       if (!policy) return
       if (policy.max_attempts !== undefined) {
         requirePositiveInteger(policy.max_attempts, `${path}.max_attempts`)
+      }
+      if (policy.retries !== undefined) {
+        requirePositiveInteger(policy.retries, `${path}.retries`)
+      }
+      if (policy.max_attempts !== undefined && policy.retries !== undefined) {
+        throw new ZyalParseError(`${path} cannot set both max_attempts and retries`)
       }
     }
     validateRetryPolicy(spec.retry.default, "retry.default")

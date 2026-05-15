@@ -61,6 +61,8 @@ fn answer_key_is_not_observed_as_memory_event() {
             dedupe_keys: Vec::new(),
             source_ids: Vec::new(),
             source_url: None,
+            retrieval_receipts: Vec::new(),
+            review_receipts: Vec::new(),
             retrieval_kinds: Vec::new(),
             sections: vec![PaperSection {
                 section_id: "s1".to_string(),
@@ -284,6 +286,50 @@ fn fixture_challenge(hash: &str, difficulty: f32, blind: f32) -> PaperChallenge 
         acceptance_metrics: None,
         artifact_provenance: None,
     }
+}
+
+#[test]
+fn paper_review_receipts_parse_without_polluting_retrieval_kinds() {
+    let root = temp_qbank_dir("review-receipts-roundtrip");
+    std::fs::create_dir_all(&root).expect("create temp dir");
+    let path = root.join("paper.json");
+    std::fs::write(
+        &path,
+        r#"{
+  "publication_hash": "paper-review",
+  "title": "Review Receipt Fixture",
+  "license": { "spdx": "CC-BY-4.0", "redistributable": true },
+  "sections": [
+    { "section_id": "s1", "title": "Result", "text": "alpha", "section_hash": "h1" }
+  ],
+  "retrieval_receipts": [
+    { "kind": "discover_full_text", "provider": "fixture" }
+  ],
+  "review_receipts": [
+    {
+      "kind": "review_receipt",
+      "replay_command": "bash ops/ci/jankurai.sh",
+      "raw_ci_log_path": "target/jankurai/receipts/paper-review.log"
+    }
+  ]
+}"#,
+    )
+    .expect("write paper");
+
+    let paper = super::parse::read_paper(&path).expect("parse paper");
+    assert_eq!(paper.retrieval_receipts.len(), 1);
+    assert_eq!(paper.review_receipts.len(), 1);
+    assert_eq!(paper.retrieval_kinds, vec!["discover_full_text"]);
+
+    let bank_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/real-paper-bank");
+    let bank_paper = super::parse::load_paper(
+        &bank_root,
+        "290e6358b80d1c67be2b42f01f73f532be663cd2d01f2fff8c4f85339b31623d",
+    )
+    .expect("load target bank paper");
+    assert!(!bank_paper.review_receipts.is_empty());
+
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 fn temp_qbank_dir(name: &str) -> std::path::PathBuf {

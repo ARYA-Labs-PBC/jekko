@@ -3,6 +3,7 @@ import { spawn } from "child_process"
 import fs from "fs"
 import path from "path"
 import * as Log from "@jekko-ai/core/util/log"
+import { Global } from "@jekko-ai/core/global"
 import { ensureJnoccioRpcToken } from "./jnoccio-token"
 
 const JNOCCIO_FUSION_PORT = 4317
@@ -56,11 +57,25 @@ function findBinary(repoRoot: string): string | undefined {
   return undefined
 }
 
+function resolveInstalledJnoccioConfigPath(): string | undefined {
+  const bundleDir = path.join(Global.Path.config, "jnoccio-fusion")
+  const candidates = [path.join(bundleDir, "server.jsonc"), path.join(bundleDir, "server.json")]
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  // jankurai:allow HLT-001-DEAD-MARKER reason=functional-optional-returns-by-design expires=2027-01-01
+  return undefined
+}
+
+export function resolveJnoccioFusionConfigPath(repoRoot: string): string {
+  return resolveInstalledJnoccioConfigPath() ?? path.join(repoRoot, "jnoccio-fusion", "config", "server.json")
+}
+
 /**
  * Spawns the jnoccio-fusion server as a detached background process.
  * The process survives jekko exit.
  */
-function spawnServer(binaryPath: string, cwd: string): boolean {
+function spawnServer(binaryPath: string, cwd: string, configPath: string): boolean {
   try {
     const logFile = path.join(cwd, "state", "server.log")
 
@@ -83,7 +98,7 @@ function spawnServer(binaryPath: string, cwd: string): boolean {
     const out = fs.openSync(logFile, "a")
     const err = fs.openSync(logFile, "a")
 
-    const child = spawn(binaryPath, [], {
+    const child = spawn(binaryPath, ["--config", configPath], {
       cwd,
       detached: true,
       stdio: ["ignore", out, err],
@@ -101,6 +116,7 @@ function spawnServer(binaryPath: string, cwd: string): boolean {
       pid: child.pid,
       binary: binaryPath,
       cwd,
+      configPath,
       logFile,
       rpcAuthEnabled: true,
       compatVersion: compatVersion.kind === "found" ? compatVersion.version : "none",
@@ -150,8 +166,9 @@ export async function ensureJnoccioFusionServer(repoRoot: string): Promise<void>
       return
     }
 
-    log.info("starting jnoccio-fusion server", { binary: binaryPath })
-    const spawned = spawnServer(binaryPath, fusionRoot)
+    const configPath = resolveJnoccioFusionConfigPath(repoRoot)
+    log.info("starting jnoccio-fusion server", { binary: binaryPath, configPath })
+    const spawned = spawnServer(binaryPath, fusionRoot, configPath)
     if (!spawned) return
 
     // Wait for the server to become reachable
@@ -241,7 +258,7 @@ function readInstalledAppVersion(): VersionLookup {
       const { execSync } = require("child_process") as typeof import("child_process")
       const version = execSync(
         `defaults read "${path.dirname(plist).replace(/\/Contents$/, "")}" CFBundleShortVersionString`,
-        { encoding: "utf8", timeout: 2000 }
+        { encoding: "utf8", timeout: 2000 },
       ).trim()
       if (version && /^\d+\.\d+/.test(version)) {
         log.info("discovered openhuman version from installed app", { version, source: plist })

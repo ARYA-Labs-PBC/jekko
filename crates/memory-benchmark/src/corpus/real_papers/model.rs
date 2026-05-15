@@ -1,3 +1,4 @@
+use crate::json::Json;
 use crate::qbank_hash::sha256_hex;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,8 @@ pub struct PaperRecord {
     pub dedupe_keys: Vec<String>,
     pub source_ids: Vec<String>,
     pub source_url: Option<String>,
+    pub retrieval_receipts: Vec<Json>,
+    pub review_receipts: Vec<Json>,
     pub retrieval_kinds: Vec<String>,
     pub sections: Vec<PaperSection>,
 }

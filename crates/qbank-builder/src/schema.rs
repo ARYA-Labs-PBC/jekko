@@ -1,0 +1,12 @@
+pub const PAPER_SCHEMA_VERSION: &str = "opencode-paper-v1";
+pub const CHALLENGE_SCHEMA_VERSION: &str = "opencode-qbank-challenge-v1";
+pub const PRODUCTION_CHALLENGE_SCHEMA_VERSION: &str = "opencode-qbank-challenge-v3";
+pub const PRODUCTION_MANIFEST_SCHEMA_VERSION: &str = "opencode-qbank-manifest-v3";
+pub const PAPER_TOURNAMENT_SCHEMA_VERSION: &str = "opencode-paper-tournament-v1";
+pub const FINAL_PAPER_CHALLENGE_SCHEMA_VERSION: &str = "opencode-paper-challenge-final-v1";
+pub const QBANK_REDUCER_VERSION: &str = "qbank-paper-tournament-rust-v1";
+pub const MIN_SUCCESSFUL_GENERATORS: usize = 1;
+pub const MIN_SUCCESSFUL_VERIFIERS: usize = 3;
+pub const MIN_SUCCESSFUL_TESTERS: usize = 3;
+pub const MIN_SUCCESSFUL_GRADERS: usize = 3;
+pub const HARD_MAX_TESTER_CORRECT_RATE: f64 = 0.50;

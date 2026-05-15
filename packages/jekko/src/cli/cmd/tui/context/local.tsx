@@ -13,6 +13,8 @@ import { createLocalModel } from "./local-model"
 
 export type ShellPane = "jnoccio" | "capability" | "history"
 const SHELL_PANE_VALUES: readonly ShellPane[] = ["jnoccio", "capability", "history"] as const
+const AUTO_PROVIDER_ID = "auto"
+const SMART_MODEL_ID = "smart"
 
 export function parseModel(model: string) {
   const [providerID, ...rest] = model.split("/")
@@ -20,6 +22,10 @@ export function parseModel(model: string) {
     providerID: providerID,
     modelID: rest.join("/"),
   }
+}
+
+function isAutoSmartModel(model: { providerID: string; modelID: string }) {
+  return model.providerID === AUTO_PROVIDER_ID && model.modelID === SMART_MODEL_ID
 }
 
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
@@ -31,15 +37,14 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const kv = useKV()
 
     function getModelInfo(model: { providerID: string; modelID: string }) {
-      if (model.providerID === "auto" && model.modelID === "smart") return undefined
       const provider = sync.data.provider.find((x) => x.id === model.providerID)
-      return provider?.models[model.modelID]
+      return provider?.models[model.modelID] ?? null
     }
 
     function isModelValid(model: { providerID: string; modelID: string }) {
-      if (model.providerID === "auto" && model.modelID === "smart") return true
+      if (isAutoSmartModel(model)) return true
       const info = getModelInfo(model)
-      return !!info && info.status !== "locked"
+      return info !== null && info.status !== "locked"
     }
 
     function getFirstValidModel(...modelFns: (() => { providerID: string; modelID: string } | undefined)[]) {

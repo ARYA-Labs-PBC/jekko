@@ -13,7 +13,7 @@ const MEMORY_REQUIREMENTS: Record<string, string[]> = {
   problem_statement: ["problem_statement", "scout"],
   current_best_plan: ["current_best_plan", "synthesis", "strengthen"],
   verification_strategy: ["verification_strategy", "promotion_review"],
-  risk_review: ["risk_review", "critic", "critical_objection"],
+  risk_review: ["risk_review", "critic", "critical_objection", "critical_reviewer"],
 }
 
 export function evaluatePromotion(input: {
@@ -49,10 +49,20 @@ export function missingRequirements(requirements: readonly string[], memories: D
 
 export function unresolvedCriticalObjections(memories: DaemonStore.TaskMemoryInfo[]) {
   return memories.filter((item) => {
-    if (!["critical_objection", "critic"].includes(item.kind)) return false
+    if (!["critical_objection", "critic", "critical_reviewer"].includes(item.kind)) return false
     const payload = item.payload_json as Record<string, unknown> | null
     if (payload?.resolved === true) return false
     if (payload?.severity === "low") return false
+    if (item.kind === "critical_reviewer") {
+      if (payload?.block === false) return false
+      if (payload?.block === true) return true
+      if (payload?.severity === "info") return false
+      const gaps = Array.isArray(payload?.gaps) ? payload?.gaps : []
+      if (gaps.some((gap) => typeof gap === "object" && gap !== null && (gap as Record<string, unknown>).severity === "blocker")) {
+        return true
+      }
+      return payload?.block !== false
+    }
     return true
   }).length
 }

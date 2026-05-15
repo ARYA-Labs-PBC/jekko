@@ -1,0 +1,308 @@
+I studied the uploaded tree and prepared a full engineering report here: [Download the detailed report](sandbox:/mnt/data/jekko_model_routing_engineering_report.md).
+
+## Core recommendation
+
+You’re right to dislike the current setup. The code is still built around **user-selected provider/model state**, while the product you want is **key-file-first, auto-routed, free-safe, paid-opt-in**.
+
+The new default should be:
+
+```text
+User pastes keys → Jekko detects providers → Jekko routes automatically → user never picks a model
+```
+
+Normal users should only touch:
+
+```text
+~/.config/jekko/keys.env
+~/.config/jekko/model-policy.jsonc
+```
+
+`keys.env` is the central secret file:
+
+```dotenv
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GOOGLE_GENERATIVE_AI_API_KEY=
+JEKKO_API_KEY=
+
+# Developer/protected router entitlement
+JEKKO_DEVELOPER_KEY=
+```
+
+`model-policy.jsonc` is the non-secret paid-model opt-in:
+
+```jsonc
+{
+  "$schema": "https://jekko.ai/model-policy.json",
+
+  // Paid models are never used unless listed here.
+  "paid_models": [],
+
+  // Optional hard deny list.
+  "never_models": [],
+
+  "routing": {
+    "mode": "auto",
+    "optimize": "cost",
+    "prefer_free": true
+  }
+}
+```
+
+Free/public models should be eligible automatically. Paid models should be used only when explicitly listed.
+
+## What I found in the current system
+
+The current architecture makes provider/model selection visible in many places:
+
+| Area            | Current behavior                                                         |
+| --------------- | ------------------------------------------------------------------------ |
+| TUI             | `Ctrl+M`, `/models`, model picker, recents, favorites, variants          |
+| Provider setup  | `Connect provider`, API key prompt, OAuth prompt                         |
+| Config          | `model`, `small_model`, `provider.*.options.apiKey`, whitelist/blacklist |
+| Runtime         | Chooses config model, recent model, then first unlocked provider         |
+| Session history | Stores concrete provider/model on each user message                      |
+| ACP             | Exposes selectable model list to external clients                        |
+
+The most important source files are:
+
+```text
+packages/jekko/src/provider/provider-runtime.ts
+packages/jekko/src/provider/provider-schema.ts
+packages/jekko/src/session/llm.ts
+packages/jekko/src/session/prompt.ts
+packages/jekko/src/config/config-schema.ts
+packages/jekko/src/config/provider.ts
+packages/jekko/src/auth/index.ts
+packages/jekko/src/cli/cmd/tui/context/local-model.ts
+packages/jekko/src/cli/cmd/tui/component/dialog-model.tsx
+packages/jekko/src/cli/cmd/tui/component/dialog-provider.tsx
+packages/jekko/src/cli/cmd/tui/app-commands-agent.tsx
+packages/jekko/src/cli/cmd/tui/app-commands-provider.tsx
+packages/jekko/src/acp/default-model.ts
+packages/jekko/src/acp/agent.ts
+```
+
+One good existing behavior should be preserved: `provider-runtime.ts` already has special logic for the `jekko` provider that removes paid models when no key is present and uses `apiKey: "public"` for free/public access. The new router should build on that.
+
+## Target architecture
+
+Add a virtual default model:
+
+```ts
+{ providerID: "auto", modelID: "smart" }
+```
+
+The TUI and ACP should show this as:
+
+```text
+Auto
+Jekko Smart
+Auto · Free-first
+Auto · Paid allowed
+```
+
+Then `session/llm.ts` should resolve `auto/smart` to a concrete provider/model immediately before the LLM call.
+
+This is the best insertion point because `session/llm.ts` already receives the selected model, loads the provider SDK, applies provider transforms, and calls `streamText`.
+
+## The critical data-model change
+
+Do **not** only store the resolved concrete model in session history.
+
+Right now, the system stores concrete model state and then `lastModel()` reuses it. A naive auto-router would work on the first turn, then become sticky on the second turn because the last resolved model becomes the next requested model.
+
+You need separate fields:
+
+```ts
+requestedModel: {
+  providerID: "auto",
+  modelID: "smart"
+}
+
+resolvedModel: {
+  providerID: "openai",
+  modelID: "..."
+}
+```
+
+or equivalent.
+
+Without that split, auto-routing silently disables itself after one response.
+
+## New files to add
+
+| File                                                            | Purpose                                                                                      |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `packages/jekko/src/config/keys.ts`                             | Parse `~/.config/jekko/keys.env`, normalize aliases, enforce `0600`, expose redacted status. |
+| `packages/jekko/src/config/model-policy.ts`                     | Load `model-policy.jsonc`, paid allowlist, denylist, routing prefs.                          |
+| `packages/jekko/src/provider/router/types.ts`                   | Router request/decision/candidate types.                                                     |
+| `packages/jekko/src/provider/router/candidates.ts`              | Build eligible model candidates from providers, keys, policy, capabilities.                  |
+| `packages/jekko/src/provider/router/scoring.ts`                 | Basic free-safe cost/token scoring.                                                          |
+| `packages/jekko/src/provider/router/entitlement.ts`             | Basic vs developer/protected entitlement.                                                    |
+| `packages/jekko/src/provider/router/protected-loader.ts`        | Adapter to protected Jnoccio router code or Jnoccio Fusion RPC.                              |
+| `packages/jekko/src/provider/router/index.ts`                   | `ModelRouter.Service`.                                                                       |
+| `packages/jekko/src/cli/cmd/keys.ts`                            | `jekko keys init`, `jekko keys status`, `jekko keys path`.                                   |
+| `packages/jekko/src/cli/cmd/tui/component/dialog-key-setup.tsx` | Replacement for normal provider-connect UX.                                                  |
+
+## Existing files to modify
+
+### Runtime
+
+| File                              | Required change                                                                                                                                                                  |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider/provider-runtime.ts`    | Load key-file credentials, tag provider source as `keyfile`, preserve public Jekko free logic, add/accept `auto/smart`, stop defaulting from recent `model.json` in normal mode. |
+| `provider/provider-schema.ts`     | Add `source: "keyfile"` and helpers like `isFreeModel`, `isPaidModel`, `modelRef`.                                                                                               |
+| `provider/provider-schema-dev.ts` | Either add route methods or keep routing in separate `ModelRouter.Service`; I recommend separate.                                                                                |
+| `provider/models.ts`              | Keep models.dev as cost/capability source; do not hardcode pricing.                                                                                                              |
+
+### Session/LLM
+
+| File                         | Required change                                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session/llm.ts`             | Inject `ModelRouter.Service`; resolve `auto/smart` before `provider.getLanguage`; record route decision.                                    |
+| `session/prompt.ts`          | Store requested model as `auto/smart`; route title/summary/compaction through router purposes instead of provider-specific `getSmallModel`. |
+| Message/session schema files | Add requested vs resolved model metadata. These files were not included in the uploaded tar, but the full repo will need this.              |
+
+### Config and secrets
+
+| File                           | Required change                                                                          |
+| ------------------------------ | ---------------------------------------------------------------------------------------- |
+| `config/config-schema.ts`      | Keep `model` and `small_model` as legacy/advanced; do not document them as normal setup. |
+| `config/provider.ts`           | Mark `options.apiKey`, whitelist, blacklist as legacy/advanced.                          |
+| `auth/index.ts` / `v2/auth.ts` | Keep OAuth tokens; treat API-key storage as legacy. Prefer `keys.env`.                   |
+| `config/keybinds.ts`           | Rename/hide model/provider selection keybinds in normal mode.                            |
+
+The uploaded tree references `../env`, but the env module itself was not in the archive. In the full repo, patch `Env.Service` so `env.all()` returns key-file values plus `process.env`, with `process.env` winning. If that module cannot be changed cleanly, inject `KeyFile.Service` directly into `provider-runtime.ts`.
+
+### TUI
+
+| File                                    | Required change                                                                    |
+| --------------------------------------- | ---------------------------------------------------------------------------------- |
+| `context/local-model-resolution.ts`     | Add `auto` default source; ignore config/recent/provider fallback in normal mode.  |
+| `context/local-model.ts`                | Return `auto/smart`; stop persisting recents/favorites/variants in normal mode.    |
+| `context/local.tsx`                     | Treat `auto/smart` as valid.                                                       |
+| `component/prompt/index.tsx`            | Send `auto/smart`; display `Auto`, not concrete model.                             |
+| `component/dialog-model.tsx`            | Hide behind advanced flag or replace with route-status UI.                         |
+| `component/dialog-provider.tsx`         | Replace API-key prompt with key-file setup/status.                                 |
+| `component/dialog-provider-options.tsx` | Show detected providers; do not make users connect manually.                       |
+| `app-commands-agent.tsx`                | Hide `Switch model`, model cycles, favorite cycles, variant cycles in normal mode. |
+| `app-commands-provider.tsx`             | Replace `Connect provider` with `Setup keys` or `Model routing status`.            |
+
+### CLI / ACP / server
+
+| File                                                  | Required change                                                                  |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `cli/cmd/models.ts`                                   | Keep as diagnostic; add route eligibility/free/paid/policy info.                 |
+| `cli/cmd/providers/list.ts`                           | Show redacted key-file/process-env/auth status.                                  |
+| `cli/cmd/providers/login.ts`                          | Keep for OAuth; API-key login should write/instruct `keys.env`, not `auth.json`. |
+| `acp/default-model.ts`                                | Return `auto/smart` by default.                                                  |
+| `acp/agent.ts`                                        | Expose one normal model option: `Auto`. Make concrete model selection advanced.  |
+| `server/routes/instance/provider.ts`                  | Add redacted key status and route status.                                        |
+| `server/routes/instance/httpapi/groups/provider.ts`   | Mirror new key/status endpoints.                                                 |
+| `server/routes/instance/httpapi/handlers/provider.ts` | Add handlers.                                                                    |
+
+## Free vs developer behavior
+
+### Free/basic mode
+
+Without a developer key:
+
+```text
+- Free/public Jekko models are eligible.
+- One paid-key provider can be used.
+- Extra keys may be present but are not used for multi-provider balancing.
+- Paid models require model-policy allowlist.
+- Best free capable model wins when available.
+```
+
+### Developer/protected mode
+
+With a valid developer key:
+
+```text
+- Unlimited provider keys may participate.
+- Full balancing/failover/health/quota logic comes from protected code.
+- Public repo only builds candidates and calls protected router.
+- Paid model allowlist still controls spending unless product policy says otherwise.
+```
+
+## Codex/Gemini/OpenAI/Claude handling
+
+The current tree’s Codex support is not a simple `keys.env` API-key provider. It is implemented through the OpenAI auth/plugin path. So:
+
+```text
+OpenAI API key       → keys.env / OPENAI_API_KEY
+Gemini API key       → keys.env / GOOGLE_GENERATIVE_AI_API_KEY
+Claude API key       → keys.env / ANTHROPIC_API_KEY
+Codex / ChatGPT auth → keep OAuth/plugin flow, advanced setup
+```
+
+Once Codex OAuth exists, the router can include it as a candidate source, but the system should not pretend a pasted API key “connects Codex.”
+
+## Safe deletion
+
+Safe to delete immediately:
+
+```bash
+find . -name '._*' -delete
+```
+
+The archive contains many macOS AppleDouble sidecar files, including:
+
+```text
+._MODEL_SELECTION_ARCHITECTURE.md
+._PROVIDER_RUNTIME.md
+._JNOCCIO_SERVER.md
+packages/jekko/src/**/._*.ts
+packages/jekko/src/**/._*.tsx
+packages/jekko/test/**/._*
+```
+
+Do **not** hard-delete these yet; hide them behind advanced/developer mode first:
+
+```text
+component/dialog-model.tsx
+component/dialog-provider.tsx
+component/dialog-provider-methods.tsx
+component/dialog-provider-options.tsx
+cli/cmd/models.ts
+cli/cmd/providers/login.ts
+cli/cmd/providers-auth.ts
+```
+
+Later deletion candidates after migration:
+
+```text
+- recent/favorite model persistence in local-model.ts
+- Global.Path.state/model.json usage
+- normal-mode Switch model/model-cycle/favorite-cycle commands
+- API-key prompt path inside DialogProvider.ApiMethod
+- docs teaching normal users to set config.model or provider.*.options.apiKey
+```
+
+Must not be deleted:
+
+```text
+provider/provider-runtime.ts
+provider/models.ts
+provider transform files
+plugin/codex.ts
+plugin/github-copilot/*
+util/jnoccio-*
+Jnoccio unlock/server/dashboard code
+```
+
+## Recommended implementation phases
+
+1. **Cleanup:** delete `._*`, add secret redaction tests.
+2. **Key file + model policy:** add `keys.env` parser, policy loader, `jekko keys status`.
+3. **Basic router:** add `ModelRouter.Service`, `auto/smart`, free-first and one-provider basic routing.
+4. **Session fix:** split requested vs resolved model so auto-routing does not become sticky.
+5. **TUI simplification:** show `Auto`; replace provider/model dialogs with key/status UI.
+6. **ACP/server:** expose Auto and route-status endpoints.
+7. **Protected Jnoccio router:** load protected code or call Jnoccio Fusion RPC when developer key is valid.
+8. **Migration/deprecation:** migrate API keys out of config/auth API-key storage, then hide or delete manual selection paths after compatibility period.
+
+Bottom line: make `auto/smart` the only normal model, make `keys.env` the only normal secret setup, make `model-policy.jsonc` the paid safety valve, and keep the unlimited paid Jnoccio router behind protected code.
+

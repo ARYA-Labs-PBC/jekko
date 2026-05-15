@@ -80,8 +80,9 @@ const tui: TuiPlugin = async (api) => {
     order: 91,
     slots: {
       shell_left_active_pane(_ctx, props) {
-        if (props.active_pane !== "jnoccio") return null
-        return <PaneJnoccio api={api} contentWidth={props.left_content_width ?? DEFAULT_PANE_WIDTH} />
+        return props.active_pane === "jnoccio" ? (
+          <PaneJnoccio api={api} contentWidth={props.left_content_width ?? DEFAULT_PANE_WIDTH} />
+        ) : null
       },
     },
   })

@@ -15,51 +15,19 @@
  * The watcher is started imperatively via `startCapabilityWatch(directory)`
  * (see pane-capability.tsx onMount) — the same pattern jankurai-score.ts
  * uses — so the repo root can come from `props.api.state.path.directory`
- * with a `process.cwd()` fallback.
+ * with `process.cwd()` as the default.
  */
 import fs from "fs"
 import path from "path"
 import { createStore } from "solid-js/store"
-
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
-export type CapabilityDecision = "pass" | "fail" | "advisory" | "unknown"
-
-export type CapabilityState = {
-  score: number
-  conformanceClaimed: string
-  conformanceObserved: string
-  decision: CapabilityDecision
-  hardFindings: number
-  softFindings: number
-  capsApplied: number
-  blockers: string[]
-  hardRules: { id: string; max_score: number }[]
-  generatedAt: number | undefined // ms since epoch
-  standard: string
-  standardVersion: string
-  loaded: boolean
-  error: string | undefined
-}
-
-const EMPTY: CapabilityState = {
-  score: 0,
-  conformanceClaimed: "",
-  conformanceObserved: "",
-  decision: "unknown",
-  hardFindings: 0,
-  softFindings: 0,
-  capsApplied: 0,
-  blockers: [],
-  hardRules: [],
-  generatedAt: undefined,
-  standard: "",
-  standardVersion: "",
-  loaded: false,
-  error: undefined,
-}
+import {
+  EMPTY,
+  type CapabilityDecision,
+  type CapabilityParseResult,
+  type CapabilityState,
+} from "./capability-types"
+import { formatCapabilityAge, formatConformanceLevel } from "./capability-format"
+export { formatCapabilityAge, formatConformanceLevel } from "./capability-format"
 
 // ---------------------------------------------------------------------------
 // Reactive store + accessor
@@ -83,21 +51,36 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+function malformed(message: string, repairHint: string): CapabilityParseResult {
+  return { ok: false, message, repairHint }
+}
+
 /**
- * Map the raw `repo-score.json` shape to CapabilityState. Returns `undefined`
- * when the JSON is malformed in a way that prevents us from rendering at all
- * (e.g. score is not a number). Missing optional fields fall back to sane
- * defaults.
+ * Map the raw `repo-score.json` shape to CapabilityState. Structural failures
+ * return a typed diagnostic so the pane can render a concrete repair message.
  */
-export function parseCapabilityJson(raw: string): CapabilityState | undefined {
+export function parseCapabilityJson(raw: string): CapabilityParseResult {
   let obj: unknown
   try {
     obj = JSON.parse(raw)
   } catch {
-    return undefined
+    return malformed(
+      "agent/repo-score.json is not valid JSON",
+      "Regenerate it with `rtk jankurai audit . --mode advisory --json agent/repo-score.json --md agent/repo-score.md`.",
+    )
   }
-  if (!isPlainObject(obj)) return undefined
-  if (typeof obj.score !== "number") return undefined
+  if (!isPlainObject(obj)) {
+    return malformed(
+      "agent/repo-score.json must contain a JSON object",
+      "Regenerate the audit output from the repository root.",
+    )
+  }
+  if (typeof obj.score !== "number") {
+    return malformed(
+      "agent/repo-score.json is missing numeric score",
+      "Run the Jankurai audit command to refresh the score schema.",
+    )
+  }
 
   const decision = isPlainObject(obj.decision) ? obj.decision : {}
 
@@ -140,22 +123,25 @@ export function parseCapabilityJson(raw: string): CapabilityState | undefined {
   }
 
   return {
-    score: obj.score,
-    conformanceClaimed:
-      typeof obj.claimed_conformance_level === "string" ? obj.claimed_conformance_level : "",
-    conformanceObserved:
-      typeof obj.observed_conformance_level === "string" ? obj.observed_conformance_level : "",
-    decision: decisionNorm,
-    hardFindings: typeof decision.hard_findings === "number" ? decision.hard_findings : 0,
-    softFindings: typeof decision.soft_findings === "number" ? decision.soft_findings : 0,
-    capsApplied,
-    blockers,
-    hardRules,
-    generatedAt,
-    standard: typeof obj.standard === "string" ? obj.standard : "",
-    standardVersion: typeof obj.standard_version === "string" ? obj.standard_version : "",
-    loaded: true,
-    error: undefined,
+    ok: true,
+    state: {
+      score: obj.score,
+      conformanceClaimed:
+        typeof obj.claimed_conformance_level === "string" ? obj.claimed_conformance_level : "",
+      conformanceObserved:
+        typeof obj.observed_conformance_level === "string" ? obj.observed_conformance_level : "",
+      decision: decisionNorm,
+      hardFindings: typeof decision.hard_findings === "number" ? decision.hard_findings : 0,
+      softFindings: typeof decision.soft_findings === "number" ? decision.soft_findings : 0,
+      capsApplied,
+      blockers,
+      hardRules,
+      generatedAt,
+      standard: typeof obj.standard === "string" ? obj.standard : "",
+      standardVersion: typeof obj.standard_version === "string" ? obj.standard_version : "",
+      loaded: true,
+      error: undefined,
+    },
   }
 }
 
@@ -191,11 +177,11 @@ function readAndUpdate(scorePath: string) {
     return
   }
   const parsed = parseCapabilityJson(raw)
-  if (!parsed) {
-    applyError("agent/repo-score.json is malformed")
+  if (!parsed.ok) {
+    applyError(`${parsed.message}. ${parsed.repairHint}`)
     return
   }
-  applyState(parsed)
+  applyState(parsed.state)
 }
 
 function debouncedRead(p: string) {
@@ -310,33 +296,4 @@ export function stopCapabilityWatch() {
   clearSigusr2()
   activePath = undefined
   setStore({ ...EMPTY })
-}
-
-// ---------------------------------------------------------------------------
-// Formatting helpers (exported for unit testing / reuse)
-// ---------------------------------------------------------------------------
-
-/**
- * Render an epoch-ms timestamp as "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago".
- * Returns "just now" for ages under a minute and "—" when `generatedAt` is
- * undefined.
- */
-export function formatCapabilityAge(generatedAtMs: number | undefined, nowMs: number): string {
-  if (!generatedAtMs) return "—"
-  const ageSec = Math.max(0, Math.floor((nowMs - generatedAtMs) / 1000))
-  if (ageSec < 60) return "just now"
-  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`
-  if (ageSec < 86400) return `${Math.floor(ageSec / 3600)}h ago`
-  return `${Math.floor(ageSec / 86400)}d ago`
-}
-
-/**
- * Strip the "HL" prefix from a conformance level (e.g. "HL3" -> "L3"). When
- * the input doesn't start with "HL" the original value is returned
- * unchanged. Empty/missing input falls back to "—".
- */
-export function formatConformanceLevel(level: string): string {
-  if (!level) return "—"
-  if (level.startsWith("HL")) return "L" + level.slice(2)
-  return level
 }

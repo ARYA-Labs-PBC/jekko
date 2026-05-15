@@ -11,7 +11,7 @@
  * When no session exists yet, render a centered hint instead of the
  * full session pipeline.
  */
-import { createEffect, createMemo, createSignal, Show } from "solid-js"
+import { createEffect, createMemo, createSignal } from "solid-js"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@jekko-ai/plugin/tui"
 import { useSync } from "@tui/context/sync"
 import { SessionBody } from "@tui/routes/session"
@@ -41,10 +41,9 @@ function ActivityFeedView(props: { api: TuiPluginApi; centerContentWidth?: numbe
   })
 
   const waitingOnStartupPrompt = createMemo(() => Boolean(args.prompt && !autoSubmitted() && !shellSessionID()))
-  const activeSessionID = createMemo<string | undefined>(() => {
-    if (waitingOnStartupPrompt()) return undefined
-    return shellSessionID() ?? latestSessionID()
-  })
+  const activeSessionID = createMemo<string | null | undefined>(() =>
+    waitingOnStartupPrompt() ? null : shellSessionID() ?? latestSessionID(),
+  )
 
   createEffect(() => {
     if (!args.prompt || autoSubmitted()) return
@@ -56,29 +55,25 @@ function ActivityFeedView(props: { api: TuiPluginApi; centerContentWidth?: numbe
     setTimeout(() => ref.submit(), 0)
   })
 
-  return (
-    <Show
-      when={activeSessionID()}
-      fallback={
-        <box flexGrow={1} minHeight={0} flexDirection="column" justifyContent="flex-end" paddingBottom={1}>
-          <box flexGrow={1} minHeight={0} flexDirection="column" alignItems="center" justifyContent="center">
-            <ShellEmptyHero
-              version={props.api.app.version}
-              width={props.centerContentWidth ?? 48}
-              mode={props.api.theme.mode()}
-            />
-          </box>
-          <Prompt
-            ref={setPromptRef}
-            navigateOnNewSession={false}
-            onSessionCreated={setShellSessionID}
-            onSubmit={() => {}}
-          />
-        </box>
-      }
-    >
-      {(sessionID) => <SessionBody sessionID={sessionID()} />}
-    </Show>
+  const sessionID = activeSessionID()
+  return sessionID ? (
+    <SessionBody sessionID={sessionID} />
+  ) : (
+    <box flexGrow={1} minHeight={0} flexDirection="column" justifyContent="flex-end" paddingBottom={1}>
+      <box flexGrow={1} minHeight={0} flexDirection="column" alignItems="center" justifyContent="center">
+        <ShellEmptyHero
+          version={props.api.app.version}
+          width={props.centerContentWidth ?? 48}
+          mode={props.api.theme.mode()}
+        />
+      </box>
+      <Prompt
+        ref={setPromptRef}
+        navigateOnNewSession={false}
+        onSessionCreated={setShellSessionID}
+        onSubmit={() => {}}
+      />
+    </box>
   )
 }
 

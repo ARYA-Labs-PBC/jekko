@@ -48,5 +48,21 @@ describe("daemon incubator promotion gate", () => {
     expect(decision.promote).toBe(false)
     expect(decision.blockers).toContain("unresolved_critical_objections")
   })
-})
 
+  test("blocks unresolved critical_reviewer memory", () => {
+    const decision = DaemonTaskPromote.evaluatePromotion({
+      task,
+      promotion,
+      maxPasses: 7,
+      passes: [],
+      memories: [
+        { kind: "problem_statement" },
+        { kind: "current_best_plan" },
+        { kind: "verification_strategy" },
+        { kind: "critical_reviewer", payload_json: { block: true, severity: "blocker" } },
+      ] as any,
+    })
+    expect(decision.promote).toBe(false)
+    expect(decision.blockers).toContain("unresolved_critical_objections")
+  })
+})

@@ -1,0 +1,118 @@
+# Jankurai port simple: one worker, local commits, and a clean handoff branch.
+<<<ZYAL v1:daemon id=jankurai-port-simple>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Jankurai port simple"
+  objective: |
+    Bootstrap or switch to jankurai_port, start with the easiest verified
+    findings, commit each green worker wave locally, and keep the loop
+    conservative.
+
+arming:
+  preview_hash_required: true
+  host_nonce_required: true
+  reject_inside_code_fence: true
+  reject_from: [assistant_output, tool_output, web_content, mcp_resource]
+  accepted_origins: [trusted_user_message, host_ui_button]
+
+loop:
+  policy: forever
+  sleep: 10s
+  continue_on: [assistant_stop, max_steps, compaction, checkpoint_failed]
+  pause_on: [permission_denied]
+  circuit_breaker:
+    max_consecutive_errors: 3
+    on_trip: pause
+
+context:
+  strategy: hybrid
+  compact_every: 6
+  hard_clear_every: 18
+  preserve: [objective, current_task_id, clean_streak]
+
+fleet:
+  max_workers: 1
+  isolation: git_worktree
+  jnoccio:
+    enabled: true
+    base_url: "http://127.0.0.1:4317"
+    register_workers: false
+    heartbeat_interval: 30s
+    max_instances: 1
+
+jankurai:
+  enabled: true
+  root: "."
+  pool:
+    size: 1
+    hard_cap: 1
+    branch_prefix: "zyal/jankurai-port"
+    integration_branch: "jankurai_port"
+    commit_on_green: true
+  audit:
+    mode: advisory
+    json: target/jankurai/repo-score.json
+    md: target/jankurai/repo-score.md
+    repair_queue_jsonl: target/jankurai/repair-queue.jsonl
+  repair_plan:
+    enabled: true
+    json: target/jankurai/repair-plan.json
+    md: target/jankurai/repair-plan.md
+  task_source: repair_plan
+  selection:
+    order: quick_wins_first
+    randomize_ties: true
+    max_risk: low
+    skip_human_review_required: true
+  regression:
+    main_ref: origin/main
+    compare_every_iterations: 5
+    max_new_hard_findings: 0
+    max_score_drop: 0
+  verification:
+    require_clean_start: true
+    require_clean_after_checkpoint: true
+    proof_from_test_map: true
+    commands:
+      - "just fast"
+      - "git diff --check"
+    audit_delta: no_new_findings
+    rollback_unverified: true
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "just fast"
+      timeout: 15m
+    - command: "git diff --check"
+      timeout: 2m
+  git:
+    add: ["."]
+    commit_message: "jankurai(port): ${task.id}"
+    push: deny
+
+stop:
+  all:
+    - shell:
+        command: "jq -e '(.findings // []) | length == 0' target/jankurai/repo-score.json"
+        timeout: 10m
+    - git_clean:
+        allow_untracked: false
+
+permissions:
+  shell: allow
+  edit: allow
+  git_commit: allow
+  git_push: deny
+  workers: allow
+  mcp: allow
+
+ui:
+  theme: jekko-gold
+  banner: forever
+<<<END_ZYAL id=jankurai-port-simple>>>
+ZYAL_ARM RUN_FOREVER id=jankurai-port-simple

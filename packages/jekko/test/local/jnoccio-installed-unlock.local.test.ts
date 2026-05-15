@@ -74,6 +74,22 @@ async function getJson(url: string, route: string, directory: string) {
   })
 }
 
+async function waitForPath(filepath: string, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (
+      await fsp
+        .stat(filepath)
+        .then(() => true)
+        .catch(() => false)
+    ) {
+      return
+    }
+    await Bun.sleep(250)
+  }
+  throw new Error(`timed out waiting for ${filepath}`)
+}
+
 function installedServerEnv(input: { clone: string; root: string; secretCachePath: string }) {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
@@ -120,6 +136,41 @@ describe("installed Jnoccio unlock smoke", () => {
 
       const { clone, cloneParent } = await cloneRepo("jnoccio-installed-unlock-", tempDirs)
       const secretCachePath = path.join(cloneParent, "installed-jekko.unlock")
+      const bundleDir = path.join(cloneParent, "xdg", "config", "jekko", "jnoccio-fusion")
+      await fsp.mkdir(bundleDir, { recursive: true })
+      await fsp.copyFile(
+        path.join(clone, "jnoccio-fusion", "config", "models.json"),
+        path.join(bundleDir, "models.json"),
+      )
+      await fsp.writeFile(
+        path.join(bundleDir, "server.jsonc"),
+        JSON.stringify(
+          {
+            bind: "127.0.0.1:4317",
+            env_file: ".env.jnoccio",
+            models_file: "jnoccio-fusion/models.json",
+            database: "jnoccio-fusion/state/seeded.sqlite",
+            receipts_dir: "jnoccio-fusion/receipts",
+            model: "jnoccio/jnoccio-fusion",
+            provider: "jnoccio",
+            routing: {
+              fusion_sample_rate: 0.25,
+              fast_backup_count: 2,
+              event_retention_rows: 50000,
+              minute_bucket_retention_days: 30,
+            },
+            runtime: {
+              spawned_worker_threads: 2,
+            },
+            scaling: {
+              max_instances: 20,
+              spawn_batch_limit: 5,
+            },
+          },
+          null,
+          2,
+        ),
+      )
       expect(isJnoccioFusionUnlocked(clone)).toBe(false)
 
       let proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined
@@ -154,6 +205,7 @@ describe("installed Jnoccio unlock smoke", () => {
             const body = (await providers.json()) as Provider.ListResult
             expect(body.connected).toContain("jnoccio")
             expect(body.default.jnoccio).toBe("jnoccio-fusion")
+            await waitForPath(path.join(bundleDir, "state", "seeded.sqlite"))
           },
         )
       } finally {

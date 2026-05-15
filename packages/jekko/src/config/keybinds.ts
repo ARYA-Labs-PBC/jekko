@@ -131,7 +131,7 @@ const KeybindsSchema = Schema.Struct({
   // the triggering key off the ParsedKey arg. Bindings without "_" use the
   // dotted-namespace style intentionally — the dotted names form the public
   // surface for new shell/feed wiring while the older snake_case bindings
-  // remain available for legacy callers.
+  // remain available for existing callers.
   // Note: `gg`/`G` here bind the single-key chords `g` and `shift+g`; the
   // feed component is expected to layer a gg-sequence buffer atop the
   // `feed.scroll.top` event when it wants the classic vim behavior.

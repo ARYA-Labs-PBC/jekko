@@ -20,15 +20,15 @@
  *   │ … show N more  ⏎                                        │
  *   └─────────────────────────────────────────────────────────┘
  *
- * TODO (v1 punt): Quick-jump number keys (1..9) were deferred. The keybind
- * system has no surface-scoping primitive yet, and the digits 1/2/3 collide
- * with the Phase 7 tab switcher. Once `useKeybind` grows focus scoping (or we
- * add an internal focus signal here), wire `1`..`9` to `route.navigate(...)`
- * for the nth session in the rendered list. For now, users open the full
- * picker via the trailing "… show N more  ⏎" affordance.
+ * Quick-jump number keys (1..9) are reserved for future focus-scoped
+ * routing. The keybind system has no surface-scoping primitive yet, and the
+ * digits 1/2/3 collide with the Phase 7 tab switcher. Once `useKeybind`
+ * grows focus scoping (or we add an internal focus signal here), wire `1`..`9`
+ * to `route.navigate(...)` for the nth session in the rendered list. For now,
+ * users open the full picker via the trailing "… show N more  ⏎" affordance.
  */
 import type { TuiPlugin, TuiPluginModule } from "@jekko-ai/plugin/tui"
-import { createMemo, For, Show } from "solid-js"
+import { createMemo, For } from "solid-js"
 import { useTheme } from "@tui/context/theme"
 import { useSync } from "@tui/context/sync"
 import { useRoute } from "@tui/context/route"
@@ -91,9 +91,8 @@ function PaneHistory(props: { contentWidth: number }) {
   const sync = useSync()
   const route = useRoute()
   const dialog = useDialog()
-  // useKeybind is grabbed here so Phase 7+ focus-scoped quick-jump can hook in
-  // without re-wiring imports. Currently unused — see TODO at the top.
-  void useKeybind
+  const keybind = useKeybind()
+  void keybind
 
   const sessions = createMemo<SessionEntry[]>(() => sync.data.session ?? [])
   const totalCount = createMemo(() => sessions().length)
@@ -102,16 +101,15 @@ function PaneHistory(props: { contentWidth: number }) {
     sessions().toSorted((a, b) => b.time.updated - a.time.updated),
   )
 
-  /** Active session id: current route's session, or fallback to most-recently-updated. */
+  /** Active session id: current route's session, or default to most-recently-updated. */
   const activeId = createMemo<string | undefined>(() => {
     if (route.data.type === "session") return route.data.sessionID
     return sortedByUpdated()[0]?.id
   })
 
-  const activeSession = createMemo<SessionEntry | undefined>(() => {
+  const activeSession = createMemo<SessionEntry | null>(() => {
     const id = activeId()
-    if (!id) return undefined
-    return sessions().find((s) => s.id === id)
+    return id ? (sessions().find((s) => s.id === id) ?? null) : null
   })
 
   /**
@@ -195,11 +193,11 @@ function PaneHistory(props: { contentWidth: number }) {
     return (
       <box flexDirection="row" justifyContent="space-between" flexShrink={0} paddingLeft={props.row.isFork ? 4 : 2}>
         <box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
-          <Show when={props.row.isFork}>
+          {props.row.isFork ? (
             <text fg={theme.borderSubtle} wrapMode="none">
               └─
             </text>
-          </Show>
+          ) : null}
           <text fg={theme.text} wrapMode="none">
             {truncate(props.row.session.title, titleWidth)}
           </text>
@@ -224,59 +222,57 @@ function PaneHistory(props: { contentWidth: number }) {
       </text>
 
       {/* 3. Active session row */}
-      <Show when={activeSession()}>
-        {(s) => (
-          <box flexDirection="row" justifyContent="space-between" flexShrink={0} paddingTop={1}>
-            <box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
-              <text fg={theme.accent} wrapMode="none">
-                ●
-              </text>
-              <text fg={theme.text} wrapMode="none">
-                <b>{truncate(s().title, Math.max(4, paneWidth() - 7))}</b>
-              </text>
-            </box>
-            <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>
-              now
+      {activeSession() ? (
+        <box flexDirection="row" justifyContent="space-between" flexShrink={0} paddingTop={1}>
+          <box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
+            <text fg={theme.accent} wrapMode="none">
+              ●
+            </text>
+            <text fg={theme.text} wrapMode="none">
+              <b>{truncate(activeSession()!.title, Math.max(4, paneWidth() - 7))}</b>
             </text>
           </box>
-        )}
-      </Show>
+          <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>
+            now
+          </text>
+        </box>
+      ) : null}
 
       {/* 4. Today group */}
-      <Show when={todayRows().length > 0}>
+      {todayRows().length > 0 ? (
         <box flexDirection="column" paddingTop={1} flexShrink={0}>
           <For each={todayRows()}>{(row) => <GroupRow row={row} />}</For>
         </box>
-      </Show>
+      ) : null}
 
       {/* 5. Yesterday group */}
-      <Show when={yesterdayRows().length > 0}>
+      {yesterdayRows().length > 0 ? (
         <box flexDirection="column" paddingTop={1} flexShrink={0}>
           <text fg={theme.textMuted} wrapMode="none">
             ─ Yesterday ─
           </text>
           <For each={yesterdayRows()}>{(row) => <GroupRow row={row} />}</For>
         </box>
-      </Show>
+      ) : null}
 
       {/* 6. Older group */}
-      <Show when={olderRows().length > 0}>
+      {olderRows().length > 0 ? (
         <box flexDirection="column" paddingTop={1} flexShrink={0}>
           <text fg={theme.textMuted} wrapMode="none">
             ─ Older ─
           </text>
           <For each={olderRows()}>{(row) => <GroupRow row={row} />}</For>
         </box>
-      </Show>
+      ) : null}
 
       {/* 7. Overflow affordance — opens the full session picker dialog. */}
-      <Show when={overflowCount() > 0}>
+      {overflowCount() > 0 ? (
         <box flexShrink={0} paddingTop={1} onMouseDown={openSessionList}>
           <text fg={theme.textMuted} wrapMode="none">
             {truncate(`… show ${overflowCount()} more  ⏎`, paneWidth())}
           </text>
         </box>
-      </Show>
+      ) : null}
     </box>
   )
 }
@@ -286,8 +282,9 @@ const tui: TuiPlugin = async (api) => {
     order: 93,
     slots: {
       shell_left_active_pane(_ctx, props) {
-        if (props.active_pane !== "history") return null
-        return <PaneHistory contentWidth={props.left_content_width ?? DEFAULT_PANE_WIDTH} />
+        return props.active_pane === "history" ? (
+          <PaneHistory contentWidth={props.left_content_width ?? DEFAULT_PANE_WIDTH} />
+        ) : null
       },
     },
   })

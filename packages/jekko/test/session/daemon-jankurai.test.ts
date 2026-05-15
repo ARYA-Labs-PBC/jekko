@@ -39,6 +39,22 @@ function spec() {
   })
 }
 
+function specWithPool() {
+  return Schema.decodeUnknownSync(ZyalScriptSchema)({
+    ...spec(),
+    jankurai: {
+      ...(spec() as any).jankurai,
+      pool: {
+        size: 30,
+        hard_cap: 20,
+        branch_prefix: "zyal/jankurai-port",
+        integration_branch: "jankurai_port",
+        commit_on_green: true,
+      },
+    },
+  })
+}
+
 function report() {
   return {
     score: 80,
@@ -298,6 +314,64 @@ describe("session.daemon-jankurai", () => {
     expect(comparison.ok).toBe(false)
     expect(comparison.new_hard_findings).toEqual(["new"])
     expect(comparison.score_drop).toBe(2)
+    yield* Effect.void
+  }))
+
+  it.effect("resolves pool size with fleet and hard caps", Effect.gen(function* () {
+    const config = DaemonJankurai.resolveJankuraiConfig(specWithPool())!
+    expect(DaemonJankurai.resolveWorkerPoolSize({ config, fleetMaxWorkers: 8 })).toBe(8)
+    expect(DaemonJankurai.resolveWorkerPoolSize({ config, fleetMaxWorkers: 30 })).toBe(20)
+    yield* Effect.void
+  }))
+
+  it.effect("bootstraps jankurai_port when the branch is missing", Effect.gen(function* () {
+    const commands: string[] = []
+    const checks = {
+      runShellCheck: (input: { command: string }) =>
+        Effect.sync(() => {
+          commands.push(input.command)
+          if (input.command.includes("show-ref")) {
+            return { exitCode: 1, stdout: "", stderr: "", truncated: false, matched: false }
+          }
+          return { exitCode: 0, stdout: "", stderr: "", truncated: false, matched: true }
+        }),
+      gitClean: () => Effect.succeed({ clean: true, dirty: [] }),
+      evaluateJsonPath: () => Effect.succeed(undefined),
+    } as any
+
+    const result = yield* DaemonJankurai.preflight({
+      cwd: "/tmp/jankurai",
+      spec: specWithPool(),
+      checks,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(commands.some((command) => command.includes("git show-ref --verify --quiet 'refs/heads/jankurai_port'"))).toBe(true)
+    expect(commands.some((command) => command.includes("git switch -c 'jankurai_port'"))).toBe(true)
+    yield* Effect.void
+  }))
+
+  it.effect("rejects a dirty worktree before integration branch bootstrap", Effect.gen(function* () {
+    const commands: string[] = []
+    const checks = {
+      runShellCheck: (input: { command: string }) =>
+        Effect.sync(() => {
+          commands.push(input.command)
+          return { exitCode: 0, stdout: "", stderr: "", truncated: false, matched: true }
+        }),
+      gitClean: () => Effect.succeed({ clean: false, dirty: ["packages/jekko/src/dirty.ts"] }),
+      evaluateJsonPath: () => Effect.succeed(undefined),
+    } as any
+
+    const result = yield* DaemonJankurai.preflight({
+      cwd: "/tmp/jankurai",
+      spec: specWithPool(),
+      checks,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain("clean start")
+    expect(commands.length).toBe(0)
     yield* Effect.void
   }))
 })

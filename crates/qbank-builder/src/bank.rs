@@ -1,11 +1,20 @@
 use super::{
-    sha256_hex, AcceptanceRecord, ChallengeRecord, ContextPack, ModelDecision, ModelTrial,
-    PaperRecord, RouteMetadata, MIN_SUCCESSFUL_TESTERS, MIN_SUCCESSFUL_VERIFIERS,
-    PRODUCTION_CHALLENGE_SCHEMA_VERSION,
+    AcceptanceRecord, ChallengeRecord, ContextPack, PaperRecord, MIN_SUCCESSFUL_TESTERS,
+    MIN_SUCCESSFUL_VERIFIERS, PRODUCTION_CHALLENGE_SCHEMA_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+
+#[path = "bank_io.rs"]
+mod bank_io;
+
+#[path = "bank_validation.rs"]
+mod bank_validation;
+
+pub use bank_io::{
+    bank_subdir, challenge_sort_key, collect_json_files, ensure_bank_layout, manifest_hash,
+    read_challenges, read_json, read_papers, sorted_challenges, write_json_pretty,
+};
+use bank_validation::{validate_model_trial, validate_route_metadata, validate_token_usage};
 
 pub fn token_estimate(text: &str) -> u64 {
     ((text.chars().count() as u64) + 3) / 4
@@ -110,11 +119,12 @@ pub fn production_bank_errors(
     let max_domain_share =
         domain_counts.values().copied().max().unwrap_or(0) as f64 / accepted as f64;
     if min_required_accepted >= 10 && accepted >= 10 && max_domain_share > 0.35 {
-        let worst_domain = domain_counts
-            .iter()
-            .max_by_key(|(_, count)| *count)
-            .map(|(domain, _)| (*domain).to_string())
-            .unwrap_or_default();
+        let worst_domain =
+            if let Some((domain, _)) = domain_counts.iter().max_by_key(|(_, count)| *count) {
+                (*domain).to_string()
+            } else {
+                String::new()
+            };
         errors.push(format!(
             "domain {worst_domain} exceeds 35% share ({:.1}%)",
             max_domain_share * 100.0
@@ -189,6 +199,21 @@ pub fn production_acceptance_errors(challenge: &ChallengeRecord) -> Vec<String> 
         Some(metrics) => {
             if metrics.saturated_mean_confidence > 0.55 {
                 errors.push("saturated mean confidence above 0.55".to_string());
+            }
+            let recomputed = if challenge.saturated_blind_trials.is_empty() {
+                1.0
+            } else {
+                challenge
+                    .saturated_blind_trials
+                    .iter()
+                    .map(|trial| trial.confidence)
+                    .sum::<f64>()
+                    / challenge.saturated_blind_trials.len() as f64
+            };
+            if (metrics.saturated_mean_confidence - recomputed).abs() > 0.000_001 {
+                errors.push(
+                    "saturated mean confidence does not match calibrated blind trials".to_string(),
+                );
             }
         }
         None => errors.push("missing acceptance metrics".to_string()),
@@ -293,342 +318,4 @@ pub fn production_acceptance_errors(challenge: &ChallengeRecord) -> Vec<String> 
         errors.push("fixture marker in challenge".to_string());
     }
     errors
-}
-
-fn validate_model_trial(field: &str, index: usize, trial: &ModelTrial, errors: &mut Vec<String>) {
-    if trial.agent_id.trim().is_empty() {
-        errors.push(format!("{field}[{index}] missing agent_id"));
-    }
-    if trial.prompt_hash.trim().is_empty() {
-        errors.push(format!("{field}[{index}] missing prompt hash"));
-    }
-    if trial.context_hash.trim().is_empty() {
-        errors.push(format!("{field}[{index}] missing context hash"));
-    }
-    if !(0.0..=1.0).contains(&trial.confidence) {
-        errors.push(format!("{field}[{index}] confidence outside [0,1]"));
-    }
-    validate_route_metadata(
-        &format!("{field}[{index}].route_metadata"),
-        &trial.route_metadata,
-        errors,
-    );
-    validate_token_usage(
-        &format!("{field}[{index}].token_usage"),
-        trial.token_usage.prompt_tokens,
-        trial.token_usage.completion_tokens,
-        trial.token_usage.total_tokens,
-        errors,
-    );
-}
-
-fn validate_route_metadata(label: &str, route: &RouteMetadata, errors: &mut Vec<String>) {
-    if route.request_id.trim().is_empty() {
-        errors.push(format!("{label} missing request_id"));
-    }
-    if looks_fabricated_request_id(&route.request_id) {
-        errors.push(format!("{label} request_id looks fabricated"));
-    }
-    if route.provider.trim().is_empty() {
-        errors.push(format!("{label} missing provider"));
-    }
-    if route.model.trim().is_empty() {
-        errors.push(format!("{label} missing model"));
-    }
-    if route
-        .route_mode
-        .as_deref()
-        .map(str::trim)
-        .map(str::is_empty)
-        .unwrap_or(false)
-    {
-        errors.push(format!("{label} has empty route_mode"));
-    }
-    if let Some(confidence) = route.route_confidence {
-        if !(0.0..=1.0).contains(&confidence) {
-            errors.push(format!("{label} route_confidence outside [0,1]"));
-        }
-    } else {
-        errors.push(format!("{label} missing route_confidence"));
-    }
-    if route.primary_model_id.is_none() {
-        errors.push(format!("{label} missing primary_model_id"));
-    }
-    if route.backup_model_ids.is_empty() {
-        errors.push(format!("{label} missing backup_model_ids"));
-    }
-    if route.route_mode.as_deref() == Some("fusion")
-        && route
-            .fusion_model_id
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-    {
-        errors.push(format!("{label} fusion route missing fusion_model_id"));
-    }
-    if route.winner_model_id.is_none() {
-        errors.push(format!("{label} missing winner_model_id"));
-    }
-    if route.prompt_hash.as_deref().unwrap_or("").trim().is_empty() {
-        errors.push(format!("{label} missing prompt_hash"));
-    }
-    if route
-        .context_hash
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .is_empty()
-    {
-        errors.push(format!("{label} missing context_hash"));
-    }
-    if route
-        .receipts_hash
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .is_empty()
-    {
-        errors.push(format!("{label} missing receipts_hash"));
-    }
-    if route
-        .model_decisions_hash
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .is_empty()
-    {
-        errors.push(format!("{label} missing model_decisions_hash"));
-    }
-    if route.model_decisions.is_empty() {
-        errors.push(format!("{label} missing model_decisions"));
-    } else {
-        validate_model_decisions(
-            label,
-            &route.model_decisions,
-            route.model_decisions_hash.as_deref(),
-            errors,
-        );
-    }
-    if route.token_usage.is_none() {
-        errors.push(format!("{label} missing token_usage"));
-    } else if let Some(usage) = route.token_usage.as_ref() {
-        validate_token_usage(
-            &format!("{label}.token_usage"),
-            usage.prompt_tokens,
-            usage.completion_tokens,
-            usage.total_tokens,
-            errors,
-        );
-    }
-}
-
-fn validate_token_usage(
-    label: &str,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    total_tokens: u64,
-    errors: &mut Vec<String>,
-) {
-    if prompt_tokens == 0 || completion_tokens == 0 || total_tokens == 0 {
-        errors.push(format!("{label} missing token usage"));
-    }
-    if total_tokens != prompt_tokens + completion_tokens {
-        errors.push(format!(
-            "{label} total_tokens does not match prompt + completion"
-        ));
-    }
-}
-
-fn validate_model_decisions(
-    label: &str,
-    decisions: &[ModelDecision],
-    expected_hash: Option<&str>,
-    errors: &mut Vec<String>,
-) {
-    let mut selected = 0usize;
-    for (index, decision) in decisions.iter().enumerate() {
-        if decision.model_id.trim().is_empty() {
-            errors.push(format!("{label}.model_decisions[{index}] missing model_id"));
-        }
-        if !decision.configured_score.is_finite() || decision.configured_score < 0.0 {
-            errors.push(format!(
-                "{label}.model_decisions[{index}] invalid configured_score"
-            ));
-        }
-        if !decision.selection_score.is_finite() || decision.selection_score < 0.0 {
-            errors.push(format!(
-                "{label}.model_decisions[{index}] invalid selection_score"
-            ));
-        }
-        if decision.status.trim().is_empty() {
-            errors.push(format!("{label}.model_decisions[{index}] missing status"));
-        }
-        if decision
-            .output_hash
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-        {
-            errors.push(format!(
-                "{label}.model_decisions[{index}] missing output_hash"
-            ));
-        }
-        if decision.token_usage.prompt_tokens == 0
-            || decision.token_usage.completion_tokens == 0
-            || decision.token_usage.total_tokens == 0
-        {
-            errors.push(format!(
-                "{label}.model_decisions[{index}] missing token usage"
-            ));
-        }
-        if decision.token_usage.total_tokens
-            != decision.token_usage.prompt_tokens + decision.token_usage.completion_tokens
-        {
-            errors.push(format!(
-                "{label}.model_decisions[{index}] token usage total mismatch"
-            ));
-        }
-        if decision.selected {
-            selected += 1;
-        }
-    }
-    if selected == 0 {
-        errors.push(format!("{label} has no selected model decision"));
-    }
-    if selected > 1 {
-        errors.push(format!("{label} has multiple selected model decisions"));
-    }
-    if let Some(expected_hash) = expected_hash {
-        let computed = match serde_json::to_vec(decisions) {
-            Ok(json) => sha256_hex(&json),
-            Err(err) => {
-                errors.push(format!(
-                    "{label} failed to serialize model_decisions: {err}"
-                ));
-                return;
-            }
-        };
-        if computed != expected_hash {
-            errors.push(format!("{label} model_decisions_hash mismatch"));
-        }
-    }
-}
-
-fn looks_fabricated_request_id(request_id: &str) -> bool {
-    let request_id = request_id.trim();
-    if request_id.is_empty() {
-        return true;
-    }
-    let lower = request_id.to_ascii_lowercase();
-    lower.starts_with("request-")
-        || lower.starts_with("fixture-")
-        || lower.starts_with("mock")
-        || lower.starts_with("deterministic-")
-        || lower.starts_with("seed-")
-        || lower.starts_with("test-")
-}
-
-pub fn challenge_sort_key(
-    challenge: &ChallengeRecord,
-) -> (
-    std::cmp::Reverse<i64>,
-    std::cmp::Reverse<i64>,
-    i64,
-    String,
-    String,
-) {
-    (
-        std::cmp::Reverse((challenge.difficulty_score * 1_000_000.0).round() as i64),
-        std::cmp::Reverse((challenge.acceptance.focused_correct_rate * 1_000_000.0).round() as i64),
-        (challenge.acceptance.blind_correct_rate * 1_000_000.0).round() as i64,
-        challenge.publication_hash.clone(),
-        challenge.challenge_hash.clone(),
-    )
-}
-
-pub fn sorted_challenges(mut challenges: Vec<ChallengeRecord>) -> Vec<ChallengeRecord> {
-    challenges.sort_by_key(challenge_sort_key);
-    challenges
-}
-
-pub fn bank_subdir(bank: &Path, name: &str) -> PathBuf {
-    bank.join(name)
-}
-
-pub fn ensure_bank_layout(bank: &Path) -> Result<(), String> {
-    for dir in ["papers", "challenges", "rejected", "manifests"] {
-        fs::create_dir_all(bank.join(dir)).map_err(|err| format!("create {dir}: {err}"))?;
-    }
-    Ok(())
-}
-
-pub fn write_json_pretty<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| format!("create {}: {err}", parent.display()))?;
-    }
-    let json = serde_json::to_string_pretty(value).map_err(|err| err.to_string())?;
-    fs::write(path, format!("{json}\n")).map_err(|err| format!("write {}: {err}", path.display()))
-}
-
-pub fn read_json<T: for<'de> serde::Deserialize<'de>>(path: &Path) -> Result<T, String> {
-    let text = fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
-    serde_json::from_str(&text).map_err(|err| format!("parse {}: {err}", path.display()))
-}
-
-pub fn read_challenges(root: &Path) -> Result<Vec<ChallengeRecord>, String> {
-    let challenge_root = root.join("challenges");
-    let mut paths = Vec::new();
-    collect_json_files(&challenge_root, &mut paths)?;
-    let mut out = Vec::new();
-    for path in paths {
-        if path.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
-            continue;
-        }
-        out.push(read_json(&path)?);
-    }
-    Ok(out)
-}
-
-pub fn read_papers(root: &Path) -> Result<Vec<PaperRecord>, String> {
-    let paper_root = root.join("papers");
-    let mut paths = Vec::new();
-    collect_json_files(&paper_root, &mut paths)?;
-    let mut out = Vec::new();
-    for path in paths {
-        out.push(read_json(&path)?);
-    }
-    Ok(out)
-}
-
-pub fn collect_json_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    if !root.exists() {
-        return Ok(());
-    }
-    let entries =
-        fs::read_dir(root).map_err(|err| format!("read_dir {}: {err}", root.display()))?;
-    for entry in entries {
-        let path = entry.map_err(|err| err.to_string())?.path();
-        if path.is_dir() {
-            collect_json_files(&path, out)?;
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            out.push(path);
-        }
-    }
-    out.sort();
-    Ok(())
-}
-
-pub fn manifest_hash(paths: &[PathBuf]) -> Result<String, String> {
-    let mut material = String::new();
-    for path in paths {
-        let text =
-            fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
-        material.push_str(&path.display().to_string());
-        material.push('\0');
-        material.push_str(&sha256_hex(text.as_bytes()));
-        material.push('\n');
-    }
-    Ok(sha256_hex(material.as_bytes()))
 }

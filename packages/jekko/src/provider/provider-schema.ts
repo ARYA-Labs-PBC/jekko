@@ -129,7 +129,7 @@ export const Info = Schema.Struct({
     Schema.Struct({
       configured: Schema.Boolean,
       active: Schema.Boolean,
-      source: Schema.Literals(["jekko.env", "process-env", "oauth", "legacy-config", "public"]),
+      source: Schema.Literals(["jekko.env", "process-env", "oauth", "config-file", "public"]),
       envName: optionalOmitUndefined(Schema.String),
       inactiveReason: optionalOmitUndefined(Schema.String),
     }),

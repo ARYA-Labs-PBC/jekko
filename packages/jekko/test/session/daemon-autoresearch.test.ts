@@ -5,6 +5,7 @@ import path from "path"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { resolveInstanceRoot } from "../../src/project/instance-root"
 import {
+  hasAutoResearch,
   normalizeDaemonSpec,
   resolveDaemonModel,
   routeMetadataFromAssistant,
@@ -96,6 +97,12 @@ describe("daemon autoresearch", () => {
     expect(normalized.spec.models.critic.must_use_different_provider).toBe(false)
     expect(normalized.spec.models.critic.must_differ_from_builder).toBe(false)
     expect(normalized.spec.fleet.jnoccio.base_url).toBe("http://127.0.0.1:4317")
+  })
+
+  test("does not claim AutoResearch when jankurai is enabled", () => {
+    const spec = baseSpec()
+    spec.jankurai = { enabled: true } as any
+    expect(hasAutoResearch(spec)).toBe(false)
   })
 
   test("preserves jnoccio request metadata in lane summaries", () => {

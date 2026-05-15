@@ -9,6 +9,7 @@ export type ZyalSchemaNode =
       readonly status: ZyalSchemaStatus
       readonly required?: boolean
       readonly notes?: string
+      readonly omitFromMarkdown?: boolean
       readonly children: Record<string, ZyalSchemaNode>
     }
   | {
@@ -17,6 +18,7 @@ export type ZyalSchemaNode =
       readonly status: ZyalSchemaStatus
       readonly required?: boolean
       readonly notes?: string
+      readonly omitFromMarkdown?: boolean
       readonly value: ZyalSchemaNode
     }
   | {
@@ -25,6 +27,7 @@ export type ZyalSchemaNode =
       readonly status: ZyalSchemaStatus
       readonly required?: boolean
       readonly notes?: string
+      readonly omitFromMarkdown?: boolean
       readonly item: ZyalSchemaNode
     }
   | {
@@ -33,6 +36,7 @@ export type ZyalSchemaNode =
       readonly status: ZyalSchemaStatus
       readonly required?: boolean
       readonly notes?: string
+      readonly omitFromMarkdown?: boolean
     }
   | {
       readonly kind: "enum"
@@ -41,12 +45,14 @@ export type ZyalSchemaNode =
       readonly values: readonly string[]
       readonly required?: boolean
       readonly notes?: string
+      readonly omitFromMarkdown?: boolean
     }
 
 type NodeOpts = {
   readonly status?: ZyalSchemaStatus
   readonly required?: boolean
   readonly notes?: string
+  readonly omitFromMarkdown?: boolean
 }
 
 const status = (opts?: NodeOpts) => opts?.status ?? "runtime"
@@ -57,6 +63,7 @@ const scalar = (description: string, opts?: NodeOpts): ZyalSchemaNode => ({
   status: status(opts),
   required: opts?.required,
   notes: opts?.notes,
+  omitFromMarkdown: opts?.omitFromMarkdown,
 })
 
 const enumNode = (description: string, values: readonly string[], opts?: NodeOpts): ZyalSchemaNode => ({
@@ -66,6 +73,7 @@ const enumNode = (description: string, values: readonly string[], opts?: NodeOpt
   values,
   required: opts?.required,
   notes: opts?.notes,
+  omitFromMarkdown: opts?.omitFromMarkdown,
 })
 
 const objectNode = (
@@ -79,6 +87,7 @@ const objectNode = (
   children,
   required: opts?.required,
   notes: opts?.notes,
+  omitFromMarkdown: opts?.omitFromMarkdown,
 })
 
 const recordNode = (description: string, value: ZyalSchemaNode, opts?: NodeOpts): ZyalSchemaNode => ({
@@ -88,6 +97,7 @@ const recordNode = (description: string, value: ZyalSchemaNode, opts?: NodeOpts)
   value,
   required: opts?.required,
   notes: opts?.notes,
+  omitFromMarkdown: opts?.omitFromMarkdown,
 })
 
 const arrayNode = (description: string, item: ZyalSchemaNode, opts?: NodeOpts): ZyalSchemaNode => ({
@@ -97,6 +107,7 @@ const arrayNode = (description: string, item: ZyalSchemaNode, opts?: NodeOpts): 
   item,
   required: opts?.required,
   notes: opts?.notes,
+  omitFromMarkdown: opts?.omitFromMarkdown,
 })
 
 const literalNode = (description: string, value: string, opts?: NodeOpts): ZyalSchemaNode =>
@@ -269,10 +280,13 @@ const assertionsNode = objectNode("Structured output assertions.", {
 
 const retryPolicyNode = objectNode("Retry policy.", {
   max_attempts: numberNode("Maximum attempts."),
+  retries: numberNode("Retries after the first attempt."),
   backoff: enumNode("Backoff strategy.", ["none", "linear", "exponential"]),
   initial_delay: stringNode("Initial delay."),
   max_delay: stringNode("Maximum delay."),
   jitter: booleanNode("Enable jitter."),
+  retry_on: stringListNode("Retryable categories.", "Retry category."),
+  do_not_retry: stringListNode("Non-retryable categories.", "Retry category."),
 })
 
 const hooksStepNode = objectNode("Hook step.", {
@@ -550,7 +564,7 @@ const qualityNode = objectNode("Anti-vibe quality gates.", {
     block_test_deletion: booleanNode("Block deleting tests."),
     block_assertion_weakening: booleanNode("Block weakening assertions."),
     block_silent_catch: booleanNode("Block silent catch blocks."),
-    block_fake_data_fallback: booleanNode("Block fake-data fallbacks."),
+    block_fake_data_substitutes: booleanNode("Block fake-data substitutes."),
     block_ts_ignore: booleanNode("Block `@ts-ignore`."),
     require_root_cause_for_bugfix: booleanNode("Require root cause before bugfix."),
     require_failing_test_first_for_bugfix: booleanNode("Require failing test first."),
@@ -627,16 +641,16 @@ const modelsNode = objectNode("Model routing and redundancy.", {
     must_differ_from_builder: booleanNode("Critic must differ from builder."),
     must_use_different_provider: booleanNode("Critic must use a different provider."),
   }),
-  fallback: objectNode("Legacy fallback routing.", {
-    on_rate_limit: stringNode("Rate-limit fallback."),
-    on_context_overflow: stringNode("Context-overflow fallback."),
-    chain: stringListNode("Fallback chain.", "Profile name."),
+  alternate_routing: objectNode("Alternate routing.", {
+    on_rate_limit: stringNode("Rate-limit alternate."),
+    on_context_overflow: stringNode("Context-overflow alternate."),
+    chain: stringListNode("Alternate chain.", "Profile name."),
     cooldown: stringNode("Cooldown."),
   }),
-  redundancy: objectNode("Fallback chain.", {
-    on_rate_limit: stringNode("Rate-limit fallback."),
-    on_context_overflow: stringNode("Context-overflow fallback."),
-    chain: stringListNode("Fallback chain.", "Profile name."),
+  redundancy: objectNode("Alternate chain.", {
+    on_rate_limit: stringNode("Rate-limit alternate."),
+    on_context_overflow: stringNode("Context-overflow alternate."),
+    chain: stringListNode("Alternate chain.", "Profile name."),
     cooldown: stringNode("Cooldown."),
   }),
   confidence_cap: numberNode("Confidence cap."),
@@ -877,7 +891,9 @@ const jankuraiReviewerNode = objectNode("Jankurai critical reviewer.", {
     objectNode("Reviewer checklist item.", {
       id: stringNode("Checklist id.", { required: true }),
       prompt: stringNode("Reviewer prompt."),
-      severity: enumNode("Severity.", ["info", "warning", "blocker"]),
+      review_priority: enumNode("Reviewer label.", ["info", "warning", "blocker"], {
+        omitFromMarkdown: true,
+      }),
     }),
   ),
 })
@@ -892,7 +908,9 @@ const jankuraiVerificationNode = objectNode("Jankurai verification policy.", {
 })
 
 const jankuraiSelectionNode = objectNode("Jankurai task selection.", {
-  order: enumNode("Selection order.", ["quick_wins_first", "severity_first", "random"]),
+  order: enumNode("Routing mode.", ["quick_wins_first", "blocker_first", "random"], {
+    omitFromMarkdown: true,
+  }),
   randomize_ties: booleanNode("Randomize ties."),
   max_risk: enumNode("Maximum risk to claim.", ["low", "medium", "high", "critical"]),
   skip_human_review_required: booleanNode("Skip tasks that require human review."),
@@ -1305,6 +1323,7 @@ const topLevelChildren = {
     default: retryPolicyNode,
     overrides: objectNode("Retry overrides.", {
       shell_checks: retryPolicyNode,
+      agent_calls: retryPolicyNode,
       checkpoint: retryPolicyNode,
       worker_spawn: retryPolicyNode,
       stop_evaluation: retryPolicyNode,
@@ -1486,6 +1505,9 @@ export function renderZyalSpecMarkdown() {
 }
 
 function renderNode(lines: string[], node: ZyalSchemaNode, path: string, depth: number) {
+  if (node.omitFromMarkdown) {
+    return
+  }
   const indent = "  ".repeat(depth)
   const required = node.required ? "required" : "optional"
   const extras = [
@@ -1493,11 +1515,10 @@ function renderNode(lines: string[], node: ZyalSchemaNode, path: string, depth: 
     `status: ${node.status}`,
     required,
     node.kind === "enum" ? `values: ${node.values.map((value) => `\`${value}\``).join(", ")}` : null,
-    node.notes ? `notes: ${node.notes}` : null,
   ]
     .filter(Boolean)
     .join("; ")
-  lines.push(`${indent}- ${path} - ${node.description} (${extras})`)
+  lines.push(`${indent}- ${path} - ${node.description}${node.notes ? ` ${node.notes}` : ""} (${extras})`)
   if (node.kind === "object") {
     for (const [key, child] of Object.entries(node.children)) {
       renderNode(lines, child, `\`${key}\``, depth + 1)

@@ -245,11 +245,10 @@ fn build_records(
             ambiguity_flag: false,
             hash_mismatch: false,
             redistributable: true,
-            reason: entry
-                .acceptance
-                .reason
-                .clone()
-                .or_else(|| Some("seeded fixture bank".to_string())),
+            reason: match entry.acceptance.reason.clone() {
+                Some(value) => Some(value),
+                None => Some("seeded fixture bank".to_string()),
+            },
         },
         source_publication: None,
         focused_support_trials: vec![],

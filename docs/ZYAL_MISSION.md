@@ -7,7 +7,7 @@ Severity-Justified: this document describes the ZYAL runbook contract. Words
 like `critical`, `high`, `risk`, `danger`, and `harm` appear here as YAML
 field identifiers from the ZYAL schema (e.g. `risk_score`, `risk_delta`,
 `unresolved_critical_objections_gte`) or as part of explanatory prose about
-gating semantics — they are not free-form severity grades. Doctor rule
+gating semantics — they are not free-form triage labels. Doctor rule
 `severity-discipline` should treat this file as documentation of named ZYAL
 fields, not as triage output. Blocker-Type: documentation-only-not-receipt.
 -->
@@ -295,7 +295,7 @@ incubator:
   promotion:
     require: [tests_identified, scope_bounded, plan_reviewed]
     block_on: { unresolved_critical_objections_gte: 1 }
-    # Severity-Justified: `unresolved_critical_objections_gte` is a ZYAL field identifier (not a severity grade); preserved verbatim for runbook fidelity.
+    # Severity-Justified: `unresolved_critical_objections_gte` is a ZYAL field identifier (not a triage grade); preserved verbatim for runbook fidelity.
 ```
 
 #### `workflow` — Durable State Machine
@@ -451,7 +451,7 @@ rollback:
 ```yaml
 done:
   require: [stop_conditions_met, evidence_complete, no_unresolved_critical_objections, rollback_plan_recorded]
-  # Severity-Justified: `no_unresolved_critical_objections` is a ZYAL field identifier (not a severity grade); preserved verbatim for runbook fidelity.
+  # Severity-Justified: `no_unresolved_critical_objections` is a ZYAL field identifier (not a triage grade); preserved verbatim for runbook fidelity.
   forbid: [model_only_claim, tests_not_run, pending_human_gate]
 ```
 

@@ -401,6 +401,9 @@ ZYAL_ARM RUN_FOREVER id=one`
       "24-semantic-feature-maker-simple.zyal",
       "25-semantic-feature-maker-advanced.zyal",
       "26-semantic-feature-maker-insane.zyal",
+      "27-jankurai-port-simple.zyal",
+      "28-jankurai-port-advanced.zyal",
+      "29-jankurai-port-ultra.zyal",
       "memory-benchmark/autoresearch-basic.zyal",
       "memory-benchmark/autoresearch-chase.zyal",
       "memory-benchmark/cogcore-stream-papers.zyal",
@@ -497,7 +500,7 @@ ZYAL_ARM RUN_FOREVER id=one`
       parseZyal(fs.readFileSync(path.resolve(import.meta.dir, "../../../../docs/ZYAL/examples/19-semantic-bug-finder-advanced.zyal"), "utf8")),
     )
     expect(parsed.preview.jankurai_enabled).toBe(true)
-    expect(parsed.preview.jankurai_summary).toContain("order:severity_first")
+    expect(parsed.preview.jankurai_summary).toContain("order:blocker_first")
     expect(parsed.preview.jankurai_verification_summary).toContain("test_map")
     expect(parsed.preview.experiments_enabled).toBe(true)
     expect(parsed.preview.taint_enabled).toBe(true)
@@ -804,7 +807,7 @@ ZYAL_ARM RUN_FOREVER id=one`
     })
     expect(parsed.spec.jankurai?.reviewer?.checklist?.filter((item) =>
       item.id === "rewrite_scope" || item.id === "core_ip_link"
-    ).map((item) => item.severity)).toEqual(["blocker", "blocker"])
+    ).map((item) => item.review_priority)).toEqual(["blocker", "blocker"])
     expect(parsed.spec.dispatch?.lanes?.map((lane) => lane.id)).toEqual([
       "mission_gap",
       "latent_data",
@@ -1067,6 +1070,28 @@ retry:
     const parsed = await Effect.runPromise(parseZyal(text))
     expect(parsed.spec.retry).toBeDefined()
     expect(parsed.preview.retry_enabled).toBe(true)
+  })
+
+  test("accepts retry overrides for agent calls and retries shorthand", async () => {
+    const text = makeZyal(`
+retry:
+  default:
+    max_attempts: 2
+  overrides:
+    agent_calls:
+      retries: 2
+      retry_on: [http_status, timeout, route_metadata, parse_schema]`)
+    const parsed = await Effect.runPromise(parseZyal(text))
+    expect(parsed.spec.retry?.overrides?.agent_calls?.retries).toBe(2)
+  })
+
+  test("rejects retry policy with max_attempts and retries together", async () => {
+    const text = makeZyal(`
+retry:
+  default:
+    max_attempts: 2
+    retries: 1`)
+    await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
   })
 
   test("rejects retry with non-positive max_attempts", async () => {
@@ -2463,9 +2488,9 @@ jankurai:
     checklist:
       - id: untested_edges
         prompt: "Any edge unreached by tests?"
-        severity: blocker
+        review_priority: blocker
       - id: regression_risk
-        severity: warning`)
+        review_priority: warning`)
     const parsed = await Effect.runPromise(parseZyal(text))
     expect(parsed.spec.jankurai?.reviewer?.checklist?.length).toBe(2)
     expect(parsed.preview.jankurai_reviewer_summary).toContain("checks:2")
@@ -2493,14 +2518,14 @@ jankurai:
     await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
   })
 
-  test("rejects invalid reviewer checklist severity", async () => {
+  test("rejects invalid reviewer checklist priority", async () => {
     const text = makeZyal(`
 jankurai:
   enabled: true
   reviewer:
     checklist:
       - id: thing
-        severity: catastrophic`)
+        review_priority: catastrophic`)
     await expect(Effect.runPromise(parseZyal(text))).rejects.toThrow()
   })
 

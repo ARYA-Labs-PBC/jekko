@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { LanguageModelV3Content, LanguageModelV3StreamPart } from "@ai-sdk/provider"
+import type { LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3Content, LanguageModelV3StreamPart } from "@ai-sdk/provider"
 import {
   createJnoccioMetadataExtractor,
   jnoccioMetadataFromHeaders,
@@ -94,6 +94,40 @@ describe("jnoccio route metadata", () => {
     })
   })
 
+  test("drops malformed header values without throwing", () => {
+    const metadata = jnoccioMetadataFromHeaders(
+      new Headers({
+        "x-jnoccio-backup-model-ids": JSON.stringify(["backup-1", "", 2, "backup-2"]),
+        "x-jnoccio-sampled": "maybe",
+        "x-jnoccio-confidence": "not-a-number",
+      }),
+    )
+
+    expect(metadata).toEqual({
+      backup_model_ids: ["backup-1", "backup-2"],
+    })
+  })
+
+  test("ignores malformed body payloads", async () => {
+    const extractor = createJnoccioMetadataExtractor()
+    const metadata = await extractor.extractMetadata({
+      parsedBody: {
+        jnoccio: {
+          request_id: 123,
+          sampled: "yes",
+          token_usage: {
+            prompt_tokens: "bad",
+            completion_tokens: "bad",
+            total_tokens: "bad",
+          },
+          model_decisions: [null, 1, "bad"],
+        },
+      },
+    })
+
+    expect(metadata).toBeUndefined()
+  })
+
   test("merges jnoccio metadata into doGenerate results", async () => {
     const language = wrapJnoccioLanguageModel({
       specificationVersion: "v3",
@@ -132,9 +166,9 @@ describe("jnoccio route metadata", () => {
       doStream: async () => {
         throw new Error("unexpected stream call")
       },
-    } as any)
+    } as unknown as LanguageModelV3)
 
-    const result = await language.doGenerate({ prompt: [] } as any)
+    const result = await language.doGenerate({ prompt: [] } as LanguageModelV3CallOptions)
     expect(result.providerMetadata).toMatchObject({
       copilot: { reasoningOpaque: "opaque" },
       jnoccio: {
@@ -177,7 +211,7 @@ describe("jnoccio route metadata", () => {
                   model_decisions: [{ model_id: "backup-1", selected: false }],
                 },
               },
-            } as any)
+            } as unknown as LanguageModelV3StreamPart)
             controller.close()
           },
         }),
@@ -195,9 +229,9 @@ describe("jnoccio route metadata", () => {
           }),
         },
       }),
-    } as any)
+    } as unknown as LanguageModelV3)
 
-    const { stream } = await language.doStream({ prompt: [] } as any)
+    const { stream } = await language.doStream({ prompt: [] } as LanguageModelV3CallOptions)
     const parts = await collectStream(stream)
     const finish = parts.find((part) => part.type === "finish") as Extract<
       (typeof parts)[number],

@@ -17,6 +17,13 @@ type JsonRecord = Record<string, unknown>
 export type JankuraiConfig = {
   readonly enabled: boolean
   readonly root: string
+  readonly pool?: {
+    readonly size: number
+    readonly hard_cap: number
+    readonly branch_prefix: string
+    readonly integration_branch?: string
+    readonly commit_on_green: boolean
+  }
   readonly audit: {
     readonly mode: ZyalJankuraiAuditMode
     readonly json: string
@@ -32,7 +39,7 @@ export type JankuraiConfig = {
   }
   readonly task_source: "repair_plan" | "findings" | "agent_fix_queue" | "repair_queue_jsonl"
   readonly selection: {
-    readonly order: "quick_wins_first" | "severity_first" | "random"
+    readonly order: "quick_wins_first" | "blocker_first" | "random"
     readonly randomize_ties: boolean
     readonly max_risk: ZyalJankuraiRisk
     readonly skip_human_review_required: boolean
@@ -133,9 +140,19 @@ export function resolveJankuraiConfig(spec: ZyalScript): JankuraiConfig | undefi
   const block = spec.jankurai
   if (!block) return undefined
   const auditMode = block.audit?.mode ?? "advisory"
+  const pool = block.pool
   return {
     enabled: block.enabled === true,
     root: block.root ?? ".",
+    pool: pool
+      ? {
+          size: Math.max(1, Math.floor(pool.size ?? 5)),
+          hard_cap: Math.max(1, Math.floor(pool.hard_cap ?? 20)),
+          branch_prefix: pool.branch_prefix ?? "zyal/jankurai-port",
+          integration_branch: pool.integration_branch,
+          commit_on_green: pool.commit_on_green ?? true,
+        }
+      : undefined,
     audit: {
       mode: auditMode,
       json: block.audit?.json ?? "target/jankurai/repo-score.json",
@@ -346,7 +363,7 @@ export function preflight(input: {
       root: config.root,
       require_clean_start: config.verification.require_clean_start,
     })
-    if (config.verification.require_clean_start) {
+    if (config.verification.require_clean_start || config.pool?.integration_branch) {
       const clean = yield* input.checks.gitClean({ cwd: input.cwd, allowUntracked: false })
       if (!clean.clean) {
         const reason = `jankurai requires a clean start; dirty paths: ${clean.dirty.join(", ")}`
@@ -354,8 +371,31 @@ export function preflight(input: {
         return { ok: false, enabled: true as const, reason }
       }
     }
+    if (config.pool?.integration_branch) {
+      const branchResult = yield* bootstrapIntegrationBranch({
+        cwd: input.cwd,
+        config,
+        checks: input.checks,
+        store: input.store,
+        runID: input.runID,
+        iteration: input.iteration ?? 0,
+      })
+      if (!branchResult.ok) {
+        return { ok: false, enabled: true as const, reason: branchResult.reason }
+      }
+    }
     return { ok: true, enabled: true as const, config }
   })
+}
+
+export function resolveWorkerPoolSize(input: {
+  config: JankuraiConfig
+  fleetMaxWorkers?: number
+}) {
+  const requested = Math.max(1, Math.floor(input.config.pool?.size ?? input.fleetMaxWorkers ?? 1))
+  const hardCap = Math.max(1, Math.floor(input.config.pool?.hard_cap ?? 20))
+  const fleetCap = Math.max(1, Math.floor(input.fleetMaxWorkers ?? requested))
+  return Math.max(1, Math.min(requested, hardCap, fleetCap, 20))
 }
 
 export function runAudit(input: {
@@ -576,7 +616,10 @@ export function runWorkerTask(input: {
       eventType: "jankurai.worker.started",
       payload: { workerID: input.workerID, taskID: input.task.id },
     })
-    const worktree = yield* input.worktree.create({ name: `jankurai-${input.task.id.slice(-12)}` })
+    const worktree = yield* input.worktree.create({
+      name: `jankurai-${input.run.id.slice(-8)}-${input.workerID.slice(-8)}-${input.task.id.slice(-12)}`,
+      branchPrefix: input.config.pool?.branch_prefix ?? "jekko",
+    })
     try {
       const session = yield* input.sessions.create({
         parentID: SessionID.make(input.run.active_session_id),
@@ -594,9 +637,21 @@ export function runWorkerTask(input: {
         lease_task_id: input.task.id,
         last_heartbeat_at: Date.now(),
       } as any)
+      const memories = yield* input.store.listTaskMemory({ runID: input.run.id, taskID: input.task.id })
       yield* input.prompt.prompt({
         sessionID: session.id,
-        parts: [{ type: "text", text: buildWorkerPrompt(input.task, input.config) } as any],
+        parts: [
+          {
+            type: "text",
+            text: buildWorkerPrompt({
+              task: input.task,
+              config: input.config,
+              memories,
+              beforeReport: input.beforeReport,
+              workerID: input.workerID,
+            }),
+          } as any,
+        ],
       })
       const workerVerification = yield* verifyCandidate({
         cwd: worktree.directory,
@@ -628,6 +683,22 @@ export function runWorkerTask(input: {
           applyCheck?.error ??
           patch.error ??
           "worker patch rejected"
+        yield* input.store.appendTaskMemory({
+          runID: input.run.id,
+          taskID: input.task.id,
+          kind: "risk_review",
+          title: `${input.task.title}: blocked`,
+          summary: reason,
+          payload: {
+            reason,
+            patchPath,
+            workerVerification,
+            primaryClean,
+            applyCheck,
+          },
+          importance: 0.7,
+          confidence: 0.6,
+        })
         yield* input.store.blockTask({
           taskID: input.task.id,
           evidence: { reason, workerVerification, patchPath, worktree: worktree.directory },
@@ -646,6 +717,16 @@ export function runWorkerTask(input: {
         timeout: "1 minute",
       })
       if (!applied.matched) {
+        yield* input.store.appendTaskMemory({
+          runID: input.run.id,
+          taskID: input.task.id,
+          kind: "rollback_known",
+          title: `${input.task.title}: rollback`,
+          summary: applied.error ?? "git apply failed",
+          payload: { patchPath, error: applied.error ?? "git apply failed" },
+          importance: 0.8,
+          confidence: 0.7,
+        })
         yield* input.store.blockTask({ taskID: input.task.id, evidence: { reason: applied.error, patchPath } })
         return { ok: false as const, reason: applied.error ?? "git apply failed", patchPath }
       }
@@ -660,6 +741,21 @@ export function runWorkerTask(input: {
         const rollback = input.config.verification.rollback_unverified
           ? yield* rollbackCandidate({ cwd: input.cwd, patchPath, checks: input.checks })
           : undefined
+        yield* input.store.appendTaskMemory({
+          runID: input.run.id,
+          taskID: input.task.id,
+          kind: primaryVerification.comparison ? "regression_fail" : rollback?.ok ? "rollback_known" : "risk_review",
+          title: `${input.task.title}: verification failed`,
+          summary: primaryVerification.reason ?? "primary verification failed",
+          payload: {
+            reason: primaryVerification.reason,
+            patchPath,
+            rollback,
+            comparison: primaryVerification.comparison,
+          },
+          importance: 0.9,
+          confidence: 0.75,
+        })
         yield* input.store.blockTask({
           taskID: input.task.id,
           evidence: { reason: primaryVerification.reason, patchPath, rollback },
@@ -672,6 +768,22 @@ export function runWorkerTask(input: {
         })
         return { ok: false as const, reason: primaryVerification.reason ?? "primary verification failed", patchPath }
       }
+      yield* input.store.appendTaskMemory({
+        runID: input.run.id,
+        taskID: input.task.id,
+        kind: primaryVerification.comparison ? "regression_pass" : "verification_strategy",
+        title: `${input.task.title}: verified`,
+        summary: primaryVerification.comparison
+          ? `Regression comparison ok: ${primaryVerification.comparison.score_before} -> ${primaryVerification.comparison.score_after}`
+          : `Verified ${patchPath}`,
+        payload: {
+          patchPath,
+          workerVerification,
+          primaryVerification,
+        },
+        importance: 0.85,
+        confidence: 0.8,
+      })
       const artifact = yield* input.store.upsertArtifact({
         id: ulid(),
         run_id: input.run.id,
@@ -723,7 +835,7 @@ export function runWorkerPool(input: {
   worktree: Worktree.Interface
 }) {
   return Effect.gen(function* () {
-    const workerCount = Math.max(1, Math.min(10, Math.floor(input.maxWorkers)))
+    const workerCount = resolveWorkerPoolSize({ config: input.config, fleetMaxWorkers: input.maxWorkers })
     const slots = Array.from({ length: workerCount }, (_, index) => index + 1)
     const results = yield* Effect.forEach(
       slots,
@@ -941,6 +1053,9 @@ export function promptSummaryLines(input: {
       : `Jankurai: no audit report loaded`,
     `Jankurai tasks: queued ${stats.queued}, leased ${stats.leased}, blocked ${stats.blocked}, incubating ${stats.incubating}, done ${stats.done}`,
     `Jankurai workers: active ${activeWorkers}/${input.config.selection.order === "quick_wins_first" ? "quick-wins" : input.config.selection.order}`,
+    input.config.pool
+      ? `Jankurai pool: size ${input.config.pool.size}, hard cap ${input.config.pool.hard_cap}, branch prefix ${input.config.pool.branch_prefix}, commit_on_green ${input.config.pool.commit_on_green ? "on" : "off"}`
+      : `Jankurai pool: (default worker namespace)`,
     input.currentTask ? `Jankurai current task: ${input.currentTask.external_id ?? input.currentTask.id}` : `Jankurai current task: (none)`,
     `Jankurai proof: ${input.config.verification.commands.join("; ") || "(configured audit only)"}`,
     input.regression ? `Jankurai regression: ${JSON.stringify(input.regression)}` : `Jankurai regression: (none)`,
@@ -1054,24 +1169,85 @@ function isHardFinding(finding: JsonRecord) {
   return severity === "high" || severity === "critical"
 }
 
-function buildWorkerPrompt(task: DaemonStore.TaskInfo, config: JankuraiConfig) {
-  const body = asRecord(task.body_json)
+function buildWorkerPrompt(input: {
+  task: DaemonStore.TaskInfo
+  config: JankuraiConfig
+  memories: readonly DaemonStore.TaskMemoryInfo[]
+  beforeReport?: unknown
+  workerID?: string
+}) {
+  const body = asRecord(input.task.body_json)
   const packet = asRecord(body.packet)
   const finding = asRecord(body.finding)
+  const lockedPaths = [...new Set([...stringArray(input.task.locked_paths_json), ...stringArray(body.locked_paths)])]
+  const recentMemories = [...input.memories]
+    .slice(-8)
+    .map((item) => `- ${item.kind}: ${item.title} — ${item.summary}`)
+    .join("\n")
   return [
     `You are a bounded Jankurai repair worker.`,
-    `Task fingerprint: ${task.external_id ?? task.id}`,
+    input.workerID ? `Worker ID: ${input.workerID}` : undefined,
+    `Task fingerprint: ${input.task.external_id ?? input.task.id}`,
     `Rule: ${stringFrom(body.rule_id) ?? stringFrom(packet.rule_id) ?? stringFrom(finding.rule_id) ?? "(unknown)"}`,
     `Allowed paths: ${stringArray(body.allowed_paths).join(", ") || "(none declared)"}`,
     `Forbidden paths: ${stringArray(body.forbidden_paths).join(", ") || "(none declared)"}`,
-    `Locked paths: ${stringArray(body.locked_paths).join(", ") || "(none declared)"}`,
+    `Locked paths: ${lockedPaths.join(", ") || "(none declared)"}`,
     `Proof commands: ${proofCommandsForPacket(packet, finding, config).join("; ") || "(configured verification only)"}`,
+    `Blocked reason: ${stringFrom(input.task.blocked_reason) ?? "(none)"}`,
+    input.beforeReport ? `Regression status: ${JSON.stringify(summarizeReport(input.beforeReport))}` : `Regression status: (none)`,
+    ``,
+    `Recent task memory:`,
+    recentMemories ? recentMemories : `- (none)`,
     ``,
     `Repair exactly this finding. Do not include secret evidence in logs or comments. Stop and report blocked if the fix needs human review, a migration, generated-output hand edits, public API redesign, or security authority changes.`,
     ``,
     `Finding packet:`,
     JSON.stringify({ packet, finding }, null, 2),
-  ].join("\n")
+  ]
+    .filter((line) => line !== undefined)
+    .join("\n")
+}
+
+function bootstrapIntegrationBranch(input: {
+  cwd: string
+  config: JankuraiConfig
+  checks: DaemonChecks.Interface
+  store?: DaemonStore.Interface
+  runID?: string
+  iteration?: number
+}) {
+  return Effect.gen(function* () {
+    const branch = input.config.pool?.integration_branch?.trim()
+    if (!branch) return { ok: true as const, skipped: true as const }
+    const branchRef = `refs/heads/${branch}`
+    const exists = yield* input.checks.runShellCheck({
+      cwd: input.cwd,
+      command: `git show-ref --verify --quiet ${shellQuote(branchRef)}`,
+      timeout: "1 minute",
+    })
+    const command = exists.exitCode === 0
+      ? `git switch ${shellQuote(branch)}`
+      : `git switch -c ${shellQuote(branch)}`
+    const result = yield* input.checks.runShellCheck({
+      cwd: input.cwd,
+      command,
+      timeout: "1 minute",
+    })
+    if (!result.matched) {
+      const reason = result.error ?? `failed to bootstrap integration branch ${branch}`
+      yield* appendOptionalEvent(input.store, input.runID, input.iteration ?? 0, "jankurai.integration_branch.blocked", {
+        branch,
+        command,
+        reason,
+      })
+      return { ok: false as const, reason }
+    }
+    yield* appendOptionalEvent(input.store, input.runID, input.iteration ?? 0, "jankurai.integration_branch.ready", {
+      branch,
+      command,
+    })
+    return { ok: true as const, branch, command }
+  })
 }
 
 function proofCommandsFromTestMap(cwd: string, paths: readonly string[]) {
