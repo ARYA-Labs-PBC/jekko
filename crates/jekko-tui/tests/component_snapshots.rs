@@ -6,11 +6,11 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::Terminal;
 
-use jekko_tui::{
-    CommandEntry, CommandPalette, Dialog, DialogStack, Logo, NavigationHeader,
-    SelectDialog, SelectOption, Splash, Toast, ToastStack,
-};
 use jekko_tui::components::FooterBandLegacy as FooterBand;
+use jekko_tui::{
+    CommandEntry, CommandPalette, Dialog, DialogStack, Logo, NavigationHeader, SelectDialog,
+    SelectOption, Splash, Toast, ToastStack,
+};
 
 fn buf_to_string<F: FnOnce(&mut ratatui::Frame)>(width: u16, height: u16, f: F) -> String {
     let backend = TestBackend::new(width, height);

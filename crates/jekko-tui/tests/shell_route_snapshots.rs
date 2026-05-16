@@ -189,7 +189,10 @@ fn shell_body_160x40_sidebar() {
     let out = render_shell_body(&mut app, 160, 40);
     assert_snapshot!("shell_body_160x40_sidebar", out);
     // Inspector border title shows "Fusion" (panel_block title); old "Jnoccio" tab label gone.
-    assert!(out.contains("Fusion"), "inspector panel missing at 44-col LEFT");
+    assert!(
+        out.contains("Fusion"),
+        "inspector panel missing at 44-col LEFT"
+    );
 }
 
 #[test]
@@ -198,7 +201,10 @@ fn shell_body_200x60_widest() {
     let mut app = plain_app();
     let out = render_shell_body(&mut app, 200, 60);
     assert_snapshot!("shell_body_200x60_widest", out);
-    assert!(out.contains("Fusion"), "inspector panel missing at 200 cols");
+    assert!(
+        out.contains("Fusion"),
+        "inspector panel missing at 200 cols"
+    );
     assert!(
         out.contains("Press Enter to engage"),
         "empty hero hint missing at 200 cols"
@@ -215,7 +221,10 @@ fn shell_body_no_sidebar_120x30() {
         layout.inspector.is_none(),
         "Inspector should be hidden when sidebar_open=false"
     );
-    assert_eq!(layout.reasoning.width, 120, "Reasoning should fill full width");
+    assert_eq!(
+        layout.reasoning.width, 120,
+        "Reasoning should fill full width"
+    );
     let out = render_shell_body(&mut app, 120, 30);
     assert_snapshot!("shell_body_no_sidebar_120x30", out);
     // No tab bar labels should appear if area too small, but tab bar spans full width so it will appear
@@ -258,7 +267,9 @@ fn nav_bar_renders_f_key_labels() {
     use ratatui::buffer::Buffer;
     let area = Rect::new(0, 0, 60, 1);
     let mut buf = Buffer::empty(area);
-    let nav = NavBar { active_tab: ShellTab::Jnoccio };
+    let nav = NavBar {
+        active_tab: ShellTab::Jnoccio,
+    };
     ratatui::widgets::Widget::render(&nav, area, &mut buf);
     let out: String = buf.content.iter().map(|c| c.symbol()).collect();
     assert!(out.contains("F1"), "F1 key label");

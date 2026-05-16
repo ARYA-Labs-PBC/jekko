@@ -1,9 +1,12 @@
-//! Slash-command popup state.
+//! Slash-command popup state and overlay widget.
 //!
 //! Detects when `/` appears at column 0 and exposes a filterable command list.
 //! The actual command catalog is owned by the host crate (jekko-cli); the
 //! prompt module ships with a small built-in command list so the widget is usable
 //! in isolation.
+//!
+//! [`SlashPopupOverlay`] is a Ratatui widget that renders the filtered list
+//! above the prompt panel when the popup is open.
 
 /// One row in the slash popup.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,6 +49,8 @@ pub fn builtin_commands() -> Vec<SlashCommand> {
             .with_description("Check for duplicate code"),
         SlashCommand::new("jankurai-status", "jankurai-status")
             .with_description("Show current jankurai score"),
+        SlashCommand::new("jankurai", "jankurai")
+            .with_description("Full cycle: audit → analyze → fix → verify → reaudit"),
     ]
 }
 
@@ -161,4 +166,88 @@ pub fn buffer_triggers_slash(buffer: &str) -> bool {
 /// Extract the query string from a triggering buffer (slash already stripped).
 pub fn query_from_buffer(buffer: &str) -> &str {
     buffer.strip_prefix('/').unwrap_or(buffer)
+}
+
+// ---------------------------------------------------------------------------
+// SlashPopupOverlay — Ratatui widget
+// ---------------------------------------------------------------------------
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget};
+
+const GOLD: Color = Color::Rgb(0xd4, 0xa8, 0x43);
+const TEXT: Color = Color::Rgb(0xd8, 0xde, 0xe9);
+const TEXT_DIM: Color = Color::Rgb(0x52, 0x57, 0x60);
+const BORDER: Color = Color::Rgb(0x4a, 0x52, 0x60);
+const BG_PANEL: Color = Color::Rgb(0x0b, 0x0f, 0x14);
+
+/// Overlay widget that renders the slash popup above the composer panel.
+///
+/// The caller is responsible for computing the `Rect` and passing it to
+/// `frame.render_widget(SlashPopupOverlay::new(popup), rect)`. The widget
+/// clears its area first so it paints on top of transcript content.
+pub struct SlashPopupOverlay<'a> {
+    popup: &'a SlashPopup,
+}
+
+impl<'a> SlashPopupOverlay<'a> {
+    pub fn new(popup: &'a SlashPopup) -> Self {
+        Self { popup }
+    }
+
+    /// Number of items in the filtered list — used by callers to size the rect.
+    pub fn item_count(&self) -> usize {
+        self.popup.filtered().len()
+    }
+}
+
+impl Widget for SlashPopupOverlay<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(BORDER))
+            .style(Style::default().bg(BG_PANEL));
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let filtered = self.popup.filtered();
+        let cursor = self.popup.cursor();
+        let lines: Vec<Line> = filtered
+            .iter()
+            .enumerate()
+            .map(|(i, cmd)| {
+                let active = i == cursor;
+                let label_style = if active {
+                    Style::default().fg(GOLD).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(TEXT)
+                };
+                let prefix = if active { "\u{25b8} " } else { "  " };
+                let mut spans = vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(format!("/{}", cmd.label), label_style),
+                ];
+                if let Some(desc) = &cmd.description {
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(desc.clone(), Style::default().fg(TEXT_DIM)));
+                }
+                Line::from(spans)
+            })
+            .collect();
+
+        if lines.is_empty() {
+            let hint = Line::from(Span::styled(
+                "  no commands match",
+                Style::default().fg(TEXT_DIM),
+            ));
+            Paragraph::new(vec![hint]).render(inner, buf);
+        } else {
+            Paragraph::new(lines).render(inner, buf);
+        }
+    }
 }

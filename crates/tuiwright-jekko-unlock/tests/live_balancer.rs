@@ -68,8 +68,16 @@ fn balancer_distributes_across_user_1_and_user_2() -> Result<()> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME must be set")?;
-    let user_1 = home.join(".jekko").join("users").join("user_1").join("llm.env");
-    let user_2 = home.join(".jekko").join("users").join("user_2").join("llm.env");
+    let user_1 = home
+        .join(".jekko")
+        .join("users")
+        .join("user_1")
+        .join("llm.env");
+    let user_2 = home
+        .join(".jekko")
+        .join("users")
+        .join("user_2")
+        .join("llm.env");
     for path in [&user_1, &user_2] {
         if !path.is_file() {
             bail!(
@@ -81,8 +89,7 @@ fn balancer_distributes_across_user_1_and_user_2() -> Result<()> {
 
     let provider =
         std::env::var("JEKKO_LIVE_BALANCER_PROVIDER").unwrap_or_else(|_| DEFAULT_PROVIDER.into());
-    let model =
-        std::env::var("JEKKO_LIVE_BALANCER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into());
+    let model = std::env::var("JEKKO_LIVE_BALANCER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into());
     let count = loop_count();
 
     let mut saw_user_1 = 0usize;
@@ -117,9 +124,7 @@ fn balancer_distributes_across_user_1_and_user_2() -> Result<()> {
         if stderr.contains("user=user_2") {
             saw_user_2 += 1;
         }
-        eprintln!(
-            "[live-balancer] run #{i}: user_1_hits={saw_user_1} user_2_hits={saw_user_2}",
-        );
+        eprintln!("[live-balancer] run #{i}: user_1_hits={saw_user_1} user_2_hits={saw_user_2}",);
         std::thread::sleep(Duration::from_millis(250));
     }
 
@@ -127,14 +132,10 @@ fn balancer_distributes_across_user_1_and_user_2() -> Result<()> {
         bail!("too many upstream failures ({failures}/{count}); check provider+model+keys");
     }
     if saw_user_1 == 0 {
-        bail!(
-            "balancer never picked user_1 across {count} runs — selection is not balanced"
-        );
+        bail!("balancer never picked user_1 across {count} runs — selection is not balanced");
     }
     if saw_user_2 == 0 {
-        bail!(
-            "balancer never picked user_2 across {count} runs — selection is not balanced"
-        );
+        bail!("balancer never picked user_2 across {count} runs — selection is not balanced");
     }
     eprintln!(
         "[live-balancer] OK — user_1 picked {saw_user_1}x, user_2 picked {saw_user_2}x over {count} runs"

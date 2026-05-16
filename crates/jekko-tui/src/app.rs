@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -18,14 +20,15 @@ use crate::components::{
     nav_header::{AppHeader, AuditStatus},
     FooterBand, SplashState, ToastStack,
 };
-use crate::keybind::FocusTarget;
 use crate::dialog::{
     CommandEntry, CommandPalette, Dialog, DialogStack, SelectDialog, SelectOption,
 };
 use crate::engagement::EngagementState;
 use crate::feature_plugins::jankurai::{is_jankurai_installed, JANKURAI_INSTALL_URL};
 use crate::feature_plugins::jnoccio::{JnoccioConnection, JnoccioPanel, JnoccioSnapshot};
+use crate::feature_plugins::zyal::{ZyalPanel, ZyalRunbookLine, ZyalSnapshot};
 use crate::feature_plugins::ShellTab;
+use crate::keybind::FocusTarget;
 use crate::lifecycle::Tty;
 use crate::prompt::{Prompt, PromptOutcome};
 use crate::startup_screen::draw_startup_screen;
@@ -69,6 +72,12 @@ pub struct App {
     /// The Jnoccio feature panel — persisted across frames so connection state
     /// and snapshot updates survive draw cycles.
     pub jnoccio_panel: JnoccioPanel,
+    /// Latest ZYAL panel state hydrated from bracketed paste recognition.
+    pub zyal_panel: ZyalPanel,
+    /// True after a pasted runbook parses as ZYAL.
+    pub zyal_runbook_valid: bool,
+    /// True only when the pasted runbook includes explicit forever arming.
+    pub zyal_runbook_armed: bool,
     pub last_resize: Option<(u16, u16)>,
     pub action_tx: Sender<Action>,
     pub action_rx: Receiver<Action>,
@@ -124,6 +133,9 @@ impl App {
             jnoccio_status: JnoccioBootStatus::Idle,
             jnoccio_model_count: 0,
             jnoccio_panel: JnoccioPanel::new(JnoccioSnapshot::default()),
+            zyal_panel: ZyalPanel::new(ZyalSnapshot::default()),
+            zyal_runbook_valid: false,
+            zyal_runbook_armed: false,
             last_resize: None,
             action_tx,
             action_rx,
@@ -161,6 +173,9 @@ impl App {
 
     fn open_command_palette(&mut self) {
         let entries = vec![
+            CommandEntry::new("jankurai.cycle", "jankurai")
+                .with_description("Full cycle: audit → analyze → fix → verify → reaudit"),
+            CommandEntry::new("jankurai.audit", "audit").with_description("Run jankurai audit"),
             CommandEntry::new("session.new", "New session").with_keybind("Ctrl+X N"),
             CommandEntry::new("model.list", "Model picker")
                 .with_keybind("Ctrl+X M")
@@ -172,6 +187,17 @@ impl App {
         ];
         self.dialogs
             .push(Dialog::Command(CommandPalette::new(entries)));
+    }
+
+    fn execute_command_palette_entry(&mut self, id: &str) {
+        match id {
+            "jankurai.cycle" => self.dispatch(Action::RunJankuraiCycle),
+            "jankurai.audit" => self.dispatch(Action::RunJankuraiAudit),
+            "model.list" => self.open_model_dialog(),
+            "theme.list" => self.open_theme_dialog(),
+            "session.list" | "session.new" => self.open_session_list_dialog(),
+            _ => {}
+        }
     }
 
     fn open_model_dialog(&mut self) {
@@ -223,11 +249,64 @@ impl App {
         });
     }
 
+    fn recognize_zyal_paste(&mut self, text: &str) {
+        let Ok((profile, _)) = zyalc::profile::parse_header(text) else {
+            return;
+        };
+        let armed = has_zyal_forever_arm(text);
+        let mut hasher = DefaultHasher::new();
+        text.hash(&mut hasher);
+        let signature = format!("{:08x}", hasher.finish() as u32);
+        let run_id = text
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("<<<ZYAL v1:daemon id=")
+                    .and_then(|rest| rest.split([' ', '>']).next())
+            })
+            .map(str::to_string)
+            .or_else(|| Some(format!("zyal-{signature}")));
+        let preview = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .take(8)
+            .enumerate()
+            .map(|(idx, line)| ZyalRunbookLine {
+                step: (idx + 1) as u32,
+                text: line.trim().to_string(),
+            })
+            .collect();
+        let status = if armed { "armed" } else { "preview" };
+        let snapshot = ZyalSnapshot {
+            run_id,
+            status: Some(status.to_string()),
+            paste_signature: Some(format!("{profile}:{signature}")),
+            paste_bytes: text.len() as u64,
+            runbook_preview: preview,
+            workers_max: if armed { 1 } else { 0 },
+            ..ZyalSnapshot::default()
+        };
+        self.zyal_runbook_valid = true;
+        self.zyal_runbook_armed = armed;
+        self.zyal_panel.set_snapshot(snapshot);
+    }
+
     /// Move into the app-visible stage. Mirrors `setAppVisible(true)` in
     /// `app.tsx`.
     pub fn mark_app_visible(&mut self) {
         self.visible = true;
         self.stage = Stage::AppVisible;
+    }
+
+    fn has_live_activity(&self) -> bool {
+        self.is_streaming
+            || self.is_audit_running
+            || matches!(
+                self.jnoccio_status,
+                JnoccioBootStatus::Checking | JnoccioBootStatus::Starting
+            )
+            || self.zyal_runbook_armed
+            || !self.visible
     }
 
     /// Dispatch one action. Pure state mutation — no I/O, no terminal effects.
@@ -255,7 +334,11 @@ impl App {
                     _ => {}
                 }
             }
-            Action::Paste(_) | Action::Chord(_) => {}
+            Action::Paste(text) => {
+                self.prompt.handle_paste(text.clone());
+                self.recognize_zyal_paste(&text);
+            }
+            Action::Chord(_) => {}
             Action::Tick => {
                 self.activity_tick = self.activity_tick.wrapping_add(1);
             }
@@ -291,9 +374,36 @@ impl App {
                 // Phase A engages the empty-state logo slide on first submit.
                 self.engagement.engage_now();
 
+                if is_zyal_runbook(&text) {
+                    self.recognize_zyal_paste(&text);
+                    if self.zyal_runbook_armed {
+                        self.transcript
+                            .push_system(crate::transcript::SystemCard::new(
+                                "∞ ZYAL MODE armed — daemon run accepted",
+                                crate::transcript::SystemKind::Info,
+                            ));
+                    } else {
+                        self.transcript.push_system(
+                            crate::transcript::SystemCard::new(
+                                "✓ ZYAL preview loaded — add `ZYAL_ARM RUN_FOREVER` before starting a forever run",
+                                crate::transcript::SystemKind::Warning,
+                            )
+                        );
+                    }
+                    return;
+                }
+
                 // Slash command intercept: /audit and variants.
                 if text.trim() == "/audit" || text.trim() == "/audit-check" {
                     self.dispatch(Action::RunJankuraiAudit);
+                    return;
+                }
+                if text.trim() == "/jankurai --confirm" {
+                    self.dispatch(Action::RunJankuraiCycleConfirmed);
+                    return;
+                }
+                if text.trim() == "/jankurai" {
+                    self.dispatch(Action::RunJankuraiCycle);
                     return;
                 }
 
@@ -372,34 +482,79 @@ impl App {
             }
             Action::RunJankuraiAudit => {
                 if !is_jankurai_installed() {
-                    self.toasts.push(
-                        crate::components::Toast::warning(
-                            &format!("Jankurai not installed — get it at {JANKURAI_INSTALL_URL}")
-                        )
-                    );
+                    self.toasts.push(crate::components::Toast::warning(&format!(
+                        "Jankurai not installed — get it at {JANKURAI_INSTALL_URL}"
+                    )));
                 } else {
                     self.is_audit_running = true;
-                    self.transcript.push_system(
-                        crate::transcript::SystemCard::new(
+                    self.transcript
+                        .push_system(crate::transcript::SystemCard::new(
                             "Starting jankurai audit...",
                             crate::transcript::SystemKind::Info,
-                        )
-                    );
+                        ));
                     crate::feature_plugins::jankurai::run_audit(self.action_tx.clone());
                 }
+            }
+            Action::RunJankuraiCycle => {
+                self.transcript.push_system(
+                    crate::transcript::SystemCard::new(
+                        "⚠ /jankurai is mutating. Type `/jankurai --confirm` to run audit → fix → verify.",
+                        crate::transcript::SystemKind::Warning,
+                    )
+                );
+            }
+            Action::RunJankuraiCycleConfirmed => {
+                if !is_jankurai_installed() {
+                    self.toasts.push(crate::components::Toast::warning(&format!(
+                        "Jankurai not installed — get it at {JANKURAI_INSTALL_URL}"
+                    )));
+                } else {
+                    self.is_audit_running = true;
+                    self.transcript
+                        .push_system(crate::transcript::SystemCard::new(
+                            "⚡ /jankurai — starting full cycle: audit → analyze → fix → verify",
+                            crate::transcript::SystemKind::Info,
+                        ));
+                    crate::feature_plugins::jankurai::run_cycle(self.action_tx.clone());
+                }
+            }
+            Action::JankuraiRunnerLine(line) => {
+                let label = format!("⚡ runner │ {line}");
+                self.transcript
+                    .replace_last(crate::transcript::TranscriptEntry::System(
+                        crate::transcript::SystemCard::new(
+                            label,
+                            crate::transcript::SystemKind::Info,
+                        ),
+                    ));
+            }
+            Action::JankuraiCycleComplete { improved } => {
+                self.is_audit_running = false;
+                let (msg, kind) = if improved {
+                    (
+                        "✓ Jankurai cycle complete — score improved".to_string(),
+                        crate::transcript::SystemKind::Success,
+                    )
+                } else {
+                    (
+                        "△ Jankurai cycle complete — no score improvement detected".to_string(),
+                        crate::transcript::SystemKind::Warning,
+                    )
+                };
+                self.transcript
+                    .push_system(crate::transcript::SystemCard::new(msg, kind));
             }
             Action::JankuraiAuditLine(line) => {
                 // Strip internal tags like [smart] and prefix with audit marker
                 let clean_line = line.replace("[smart] ", "");
                 let label = format!("⚡ audit │ {clean_line}");
-                self.transcript.replace_last(
-                    crate::transcript::TranscriptEntry::System(
+                self.transcript
+                    .replace_last(crate::transcript::TranscriptEntry::System(
                         crate::transcript::SystemCard::new(
                             label,
                             crate::transcript::SystemKind::Info,
-                        )
-                    )
-                );
+                        ),
+                    ));
             }
             Action::JankuraiScoreUpdate { success, summary } => {
                 self.is_audit_running = false;
@@ -437,16 +592,14 @@ impl App {
                         } else {
                             crate::transcript::SystemKind::Success
                         };
-                        self.transcript.push_system(
-                            crate::transcript::SystemCard::new(summary_text, kind)
-                        );
+                        self.transcript
+                            .push_system(crate::transcript::SystemCard::new(summary_text, kind));
 
                         // Auto-continue: if there are actionable findings and
                         // jnoccio is available, synthesize a follow-up prompt
                         // so the LLM can propose concrete fixes.
-                        let has_issues = s.caps_count > 0
-                            || s.hard_findings > 0
-                            || s.soft_findings > 0;
+                        let has_issues =
+                            s.caps_count > 0 || s.hard_findings > 0 || s.soft_findings > 0;
                         if has_issues && !s.actionable_findings.is_empty() {
                             let prompt = synthesize_audit_prompt(s);
                             if self.jnoccio_available {
@@ -460,7 +613,10 @@ impl App {
                                 .with_pending_now();
                                 self.transcript.push_assistant(placeholder);
                                 self.jnoccio_panel.record_call();
-                                crate::chat_bridge::spawn_chat_request(prompt, self.action_tx.clone());
+                                crate::chat_bridge::spawn_chat_request(
+                                    prompt,
+                                    self.action_tx.clone(),
+                                );
                             } else {
                                 // No LLM available — push a static card with
                                 // the findings so the user can act manually.
@@ -475,12 +631,11 @@ impl App {
                     }
                     None => {
                         // Fallback: JSON was missing or unparseable.
-                        self.transcript.push_system(
-                            crate::transcript::SystemCard::new(
+                        self.transcript
+                            .push_system(crate::transcript::SystemCard::new(
                                 "Audit complete. See Repo Intel panel for results.",
                                 crate::transcript::SystemKind::Info,
-                            )
-                        );
+                            ));
                     }
                 }
             }
@@ -506,11 +661,11 @@ impl App {
                         KeyCode::Up => palette.move_cursor(-1),
                         KeyCode::Down => palette.move_cursor(1),
                         KeyCode::Enter => {
-                            // Accept: select the highlighted entry. Concrete
-                            // routing (e.g. session.new → open dialog, etc.)
-                            // requires a command catalog action map, which
-                            // belongs to a follow-up packet. For now: close.
+                            let selected_id = palette.selected().map(|e| e.id.clone());
                             self.dialogs.pop();
+                            if let Some(id) = selected_id {
+                                self.execute_command_palette_entry(&id);
+                            }
                         }
                         _ => {}
                     },
@@ -643,9 +798,30 @@ impl App {
                 }
                 PromptOutcome::Consumed
                 | PromptOutcome::PasteRequested
-                | PromptOutcome::SlashSelected(_)
                 | PromptOutcome::MentionSelected(_)
                 | PromptOutcome::PopupCancelled => return,
+                PromptOutcome::SlashSelected(cmd) => {
+                    match cmd.id.as_str() {
+                        "audit" | "audit-check" => {
+                            self.dispatch(Action::RunJankuraiAudit);
+                        }
+                        "jankurai" => {
+                            self.dispatch(Action::RunJankuraiCycle);
+                        }
+                        "quit" => {
+                            self.quit = true;
+                        }
+                        _ => {
+                            // For unknown commands, submit the text so it goes through
+                            // the normal PromptSubmit intercept path.
+                            let text = format!("/{}", cmd.label);
+                            self.transcript
+                                .push_user(crate::transcript::UserCard::new(text.clone()));
+                            let _ = self.action_tx.send(Action::PromptSubmit(text));
+                        }
+                    }
+                    return;
+                }
                 PromptOutcome::Passthrough => {
                     // Fall through to the global keybind match below.
                 }
@@ -757,7 +933,7 @@ impl App {
         // BOTTOM — Composer (prompt wrapped in panel block)
         if layout.composer.height > 0 {
             let char_count = self.prompt.buffer_char_count();
-            
+
             let title_right = if char_count > 0 {
                 format!("{char_count} chars")
             } else if self.prompt_focused {
@@ -766,14 +942,18 @@ impl App {
                 String::new()
             };
 
-            let block = if char_count == 0 && (self.is_streaming || self.is_audit_running) {
+            let block = if char_count == 0 && self.has_live_activity() {
                 let mut spans = vec![ratatui::text::Span::raw(" ")];
                 spans.extend(theme::activity_dot_spans(self.activity_tick).spans);
                 spans.push(ratatui::text::Span::raw(" "));
                 theme::panel_block("Prompt", None, self.prompt_focused)
                     .title_bottom(ratatui::text::Line::from(spans))
             } else {
-                let status_opt = if title_right.is_empty() { None } else { Some(title_right.as_str()) };
+                let status_opt = if title_right.is_empty() {
+                    None
+                } else {
+                    Some(title_right.as_str())
+                };
                 theme::panel_block("Prompt", status_opt, self.prompt_focused)
             };
 
@@ -781,6 +961,26 @@ impl App {
             frame.render_widget(block, layout.composer);
             if inner.height > 0 {
                 frame.render_widget(&self.prompt, inner);
+            }
+
+            // Slash popup overlay — floats above the composer panel when `/` is typed.
+            if self.prompt.slash_popup().is_open() {
+                use crate::prompt::slash::SlashPopupOverlay;
+                let popup = self.prompt.slash_popup();
+                let item_count = popup.filtered().len().max(1);
+                // +2 for top/bottom borders.
+                let popup_h = ((item_count as u16) + 2)
+                    .min(area.height.saturating_sub(layout.composer.height + 2));
+                if popup_h > 0 {
+                    let popup_w = 64u16.min(layout.composer.width);
+                    let overlay_rect = ratatui::layout::Rect {
+                        x: layout.composer.x,
+                        y: layout.composer.y.saturating_sub(popup_h),
+                        width: popup_w,
+                        height: popup_h,
+                    };
+                    frame.render_widget(SlashPopupOverlay::new(popup), overlay_rect);
+                }
             }
         }
     }
@@ -888,7 +1088,11 @@ impl App {
             } else {
                 String::new()
             };
-            let status_opt = if title_right.is_empty() { None } else { Some(title_right.as_str()) };
+            let status_opt = if title_right.is_empty() {
+                None
+            } else {
+                Some(title_right.as_str())
+            };
             let block = crate::theme::panel_block("Prompt", status_opt, self.prompt_focused);
             let inner = block.inner(prompt_area);
             frame.render_widget(block, prompt_area);
@@ -941,6 +1145,17 @@ impl Default for App {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn is_zyal_runbook(text: &str) -> bool {
+    zyalc::profile::parse_header(text).is_ok()
+}
+
+fn has_zyal_forever_arm(text: &str) -> bool {
+    text.lines().any(|line| {
+        let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        normalized == "ZYAL_ARM RUN_FOREVER"
+    })
 }
 
 /// Environment variable that enables the deterministic chat-Enter mock used
@@ -1079,7 +1294,7 @@ fn synthesize_audit_prompt(s: &crate::action::AuditSummary) -> String {
          Focus on the highest-impact wins first — the items with the most \
          score cap potential. For each proposed fix, explain what you would \
          change and why it would help. Do not apply changes yet — just propose \
-         the plan so I can review it."
+         the plan so I can review it.",
     );
 
     prompt

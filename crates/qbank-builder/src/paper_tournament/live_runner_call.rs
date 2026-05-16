@@ -44,7 +44,11 @@ impl JnoccioHttpRunner {
             request = request.bearer_auth(token);
         }
         let response = request.send().map_err(|err| {
-            let category = if err.is_timeout() { "timeout" } else { "http_request" };
+            let category = if err.is_timeout() {
+                "timeout"
+            } else {
+                "http_request"
+            };
             self.append_after_error(
                 phase,
                 index,
@@ -112,7 +116,8 @@ impl JnoccioHttpRunner {
             JnoccioCallError::retryable(format!("jnoccio {phase} response is not JSON: {err}"))
                 .with_category("parse_schema")
         })?;
-        let content = self.extract_assistant_content(&parsed, phase, index, attempt, &call_started)?;
+        let content =
+            self.extract_assistant_content(&parsed, phase, index, attempt, &call_started)?;
         let route_value = match parsed.get("jnoccio") {
             Some(value) => value,
             None => {
@@ -189,8 +194,14 @@ impl JnoccioHttpRunner {
                 );
                 err
             })?;
-        let (token_usage, prompt_hash, context_hash) =
-            self.extract_route_context(route_value, phase, index, attempt, &call_started, &route_metadata)?;
+        let (token_usage, prompt_hash, context_hash) = self.extract_route_context(
+            route_value,
+            phase,
+            index,
+            attempt,
+            &call_started,
+            &route_metadata,
+        )?;
         let raw_output_hash = sha256_hex(content.as_bytes());
         let receipt = AgentCallReceipt {
             agent_name: format!("{phase}-{}", index + 1),

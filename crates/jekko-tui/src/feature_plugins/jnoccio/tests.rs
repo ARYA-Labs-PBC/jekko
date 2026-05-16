@@ -209,7 +209,10 @@ fn renders_header_and_kpis_at_100x30() {
     assert!(rendered.contains("[1] Board"), "missing Board tab label");
     assert!(rendered.contains("[2] Speed"), "missing Speed tab label");
     // Board body shows sort mode when data present.
-    assert!(rendered.contains("sort: latest"), "missing sort label in body");
+    assert!(
+        rendered.contains("sort: latest"),
+        "missing sort label in body"
+    );
     // Footer hint row.
     assert!(rendered.contains("tabs"), "missing footer hints");
 }

@@ -114,7 +114,12 @@ impl Widget for &ReasoningCard {
             .add_modifier(Modifier::ITALIC);
 
         let mut title_spans = vec![
-            Span::styled("~ ", Style::default().fg(COLOR_TEXT_MUTED).add_modifier(Modifier::ITALIC)),
+            Span::styled(
+                "~ ",
+                Style::default()
+                    .fg(COLOR_TEXT_MUTED)
+                    .add_modifier(Modifier::ITALIC),
+            ),
             Span::styled("thinking", title_style),
         ];
         if self.streaming && !spinner.is_empty() {
@@ -129,7 +134,9 @@ impl Widget for &ReasoningCard {
             if self.text.is_empty() && self.streaming {
                 lines.push(Line::from(Span::styled(
                     "  …",
-                    Style::default().fg(COLOR_TEXT_MUTED).add_modifier(Modifier::ITALIC),
+                    Style::default()
+                        .fg(COLOR_TEXT_MUTED)
+                        .add_modifier(Modifier::ITALIC),
                 )));
             } else {
                 for raw in self.text.lines() {

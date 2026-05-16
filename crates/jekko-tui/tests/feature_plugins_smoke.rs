@@ -22,7 +22,7 @@ pub mod theme {
 }
 
 pub mod action {
-    pub use jekko_tui::action::Action;
+    pub use jekko_tui::action::{Action, AuditFinding, AuditSummary};
 }
 
 #[path = "../src/feature_plugins/jankurai/mod.rs"]

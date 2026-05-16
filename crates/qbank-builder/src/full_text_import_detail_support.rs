@@ -1,7 +1,9 @@
 use super::*;
 use regex::Regex;
 
-pub(super) fn candidate_from_search_result(value: &serde_json::Value) -> Option<EuropePmcCandidate> {
+pub(super) fn candidate_from_search_result(
+    value: &serde_json::Value,
+) -> Option<EuropePmcCandidate> {
     let pmcid = match value.get("pmcid").and_then(|value| value.as_str()) {
         Some(value) => value,
         None => value.get("pmcidVersion").and_then(|value| value.as_str())?,

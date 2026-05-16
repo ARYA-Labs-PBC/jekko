@@ -125,6 +125,8 @@ struct GeneratorSelectionOutput {
 
 pub use build::build_paper_tournament;
 
+#[path = "paper_tournament/build.rs"]
+mod build;
 #[path = "paper_tournament/execution.rs"]
 mod execution;
 #[path = "paper_tournament/gating.rs"]
@@ -133,26 +135,24 @@ mod gating;
 mod hashish;
 #[path = "paper_tournament/live.rs"]
 mod live;
+#[path = "paper_tournament/live_candidate.rs"]
+mod live_candidate;
 #[path = "paper_tournament/live_outcome.rs"]
 mod live_outcome;
+#[path = "paper_tournament/live_outcome_support.rs"]
+mod live_outcome_support;
 #[path = "paper_tournament/live_runner.rs"]
 mod live_runner;
-#[path = "paper_tournament/live_runner_http.rs"]
-mod live_runner_http;
 #[path = "paper_tournament/live_runner_call.rs"]
 mod live_runner_call;
+#[path = "paper_tournament/live_runner_http.rs"]
+mod live_runner_http;
 #[path = "paper_tournament/live_runner_parse.rs"]
 mod live_runner_parse;
 #[path = "paper_tournament/live_runner_support.rs"]
 mod live_runner_support;
 #[path = "paper_tournament/live_write.rs"]
 mod live_write;
-#[path = "paper_tournament/build.rs"]
-mod build;
-#[path = "paper_tournament/live_candidate.rs"]
-mod live_candidate;
-#[path = "paper_tournament/live_outcome_support.rs"]
-mod live_outcome_support;
 #[path = "paper_tournament/preflight.rs"]
 mod preflight;
 #[path = "paper_tournament/prompt.rs"]
@@ -188,9 +188,7 @@ use preflight::{
     fetch_required_text, insert_model_summary, model_matches_gateway_visible_model,
     route_summary_for_challenge, summarize_jnoccio_models,
 };
-use prompt::{
-    build_testing_prompt_with_options, challenge_from_artifact,
-};
+use prompt::{build_testing_prompt_with_options, challenge_from_artifact};
 use prompt_support::{
     accepted_ratio, mean_tester_confidence, provenance, testing_correct_rate_with_min,
 };

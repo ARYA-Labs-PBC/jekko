@@ -1,5 +1,5 @@
-use super::*;
 use super::prompt_support::{model_trial_from_tester, model_trial_from_verifier};
+use super::*;
 
 pub fn build_testing_prompt(
     paper: &PaperRecord,

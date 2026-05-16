@@ -34,7 +34,11 @@ pub struct KeyHint {
 
 impl KeyHint {
     const fn new(key: &'static str, label: &'static str, priority: u8) -> Self {
-        Self { key, label, priority }
+        Self {
+            key,
+            label,
+            priority,
+        }
     }
 
     /// Rendered width: `[key] label` + 3-space separator.
@@ -86,9 +90,18 @@ pub struct NavTab {
 }
 
 pub const NAV_TABS: &[NavTab] = &[
-    NavTab { key: "F1", label: "Chat" },
-    NavTab { key: "F2", label: "Repo Intel" },
-    NavTab { key: "F3", label: "History" },
+    NavTab {
+        key: "F1",
+        label: "Chat",
+    },
+    NavTab {
+        key: "F2",
+        label: "Repo Intel",
+    },
+    NavTab {
+        key: "F3",
+        label: "History",
+    },
 ];
 
 // ── Hint selector ────────────────────────────────────────────────────────────

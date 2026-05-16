@@ -29,14 +29,22 @@ const READ_TIMEOUT: Duration = Duration::from_secs(120);
 /// Spawn a background worker that posts `prompt` to the local jnoccio-fusion
 /// gateway and forwards each streamed text delta back through `action_tx`.
 /// Returns immediately; the worker shuts down once the SSE stream closes or
-/// on first I/O error.
+/// on first I/O error. Retries once on 5xx to handle transient upstream blips.
 pub fn spawn_chat_request(prompt: String, action_tx: Sender<Action>) {
     std::thread::Builder::new()
         .name("jekko-tui-chat-bridge".into())
         .spawn(move || {
-            if let Err(err) = run_chat(&prompt, &action_tx) {
+            let result = run_chat(&prompt, &action_tx).or_else(|e| {
+                if e.to_string().contains("non-200") {
+                    std::thread::sleep(Duration::from_secs(2));
+                    run_chat(&prompt, &action_tx)
+                } else {
+                    Err(e)
+                }
+            });
+            if result.is_err() {
                 let _ = action_tx.send(Action::Runtime(RuntimeEvent::AssistantFailed {
-                    error: err.to_string(),
+                    error: "jnoccio temporarily unavailable".to_string(),
                 }));
             }
             let _ = action_tx.send(Action::Runtime(RuntimeEvent::AssistantCompleted));
@@ -82,9 +90,9 @@ fn run_chat(prompt: &str, tx: &Sender<Action>) -> std::io::Result<()> {
     let mut status_line = String::new();
     reader.read_line(&mut status_line)?;
     if !status_line.starts_with("HTTP/1.1 200") && !status_line.starts_with("HTTP/1.0 200") {
+        let code = status_line.split_whitespace().nth(1).unwrap_or("non-200");
         return Err(std::io::Error::other(format!(
-            "jnoccio gateway returned non-200 status: {}",
-            status_line.trim()
+            "jnoccio gateway returned non-200 status: {code}"
         )));
     }
     loop {

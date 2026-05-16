@@ -1,8 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-mod agent_json; mod bank; mod core_types; mod schema;
-#[path = "lib_cogcore.rs"] mod cogcore_support; mod fixture; mod full_text; mod full_text_import; mod paper_tournament; mod trial_schema;
+mod agent_json;
+mod bank;
+#[path = "lib_cogcore.rs"]
+mod cogcore_support;
+mod core_types;
+mod fixture;
+mod full_text;
+mod full_text_import;
+mod paper_tournament;
+mod schema;
+mod trial_schema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PaperRecord {
@@ -259,9 +268,9 @@ impl ChallengeRecord {
 }
 
 pub use core_types::{
-    canonicalize_paper, challenge_hash, content_hash, finalize_challenge, license_is_redistributable,
-    normalize_text, publication_hash, section_hash, sha256_hex, CogcoreEventRecord,
-    CogcoreSourceRef, WorkItem,
+    canonicalize_paper, challenge_hash, content_hash, finalize_challenge,
+    license_is_redistributable, normalize_text, publication_hash, section_hash, sha256_hex,
+    CogcoreEventRecord, CogcoreSourceRef, WorkItem,
 };
 pub use schema::*;
 

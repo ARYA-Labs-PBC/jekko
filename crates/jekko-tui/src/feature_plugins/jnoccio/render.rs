@@ -39,8 +39,7 @@ impl Widget for &JnoccioPanel {
         block.render(area, buf);
 
         // Background fill
-        let bg_block = ratatui::widgets::Block::default()
-            .style(Style::default().bg(BG));
+        let bg_block = ratatui::widgets::Block::default().style(Style::default().bg(BG));
         bg_block.render(inner, buf);
 
         if inner.height == 0 {
@@ -112,7 +111,10 @@ fn render_tabs(panel: &JnoccioPanel, area: Rect, buf: &mut Buffer) {
         .constraints([Constraint::Length(1), Constraint::Length(1)])
         .split(area);
 
-    for (row_idx, tab_slice) in [&JnoccioTab::ALL[..3], &JnoccioTab::ALL[3..]].iter().enumerate() {
+    for (row_idx, tab_slice) in [&JnoccioTab::ALL[..3], &JnoccioTab::ALL[3..]]
+        .iter()
+        .enumerate()
+    {
         let mut spans: Vec<Span> = Vec::new();
         for (i, tab) in tab_slice.iter().enumerate() {
             if i > 0 {
@@ -191,12 +193,24 @@ fn render_help(area: Rect, buf: &mut Buffer) {
         )]),
         Line::from(""),
         Line::from(Span::styled("1–6   switch tab", Style::default().fg(MUTED))),
-        Line::from(Span::styled("j/k   move cursor", Style::default().fg(MUTED))),
-        Line::from(Span::styled("g/G   top / bottom", Style::default().fg(MUTED))),
-        Line::from(Span::styled("Enter open detail", Style::default().fg(MUTED))),
+        Line::from(Span::styled(
+            "j/k   move cursor",
+            Style::default().fg(MUTED),
+        )),
+        Line::from(Span::styled(
+            "g/G   top / bottom",
+            Style::default().fg(MUTED),
+        )),
+        Line::from(Span::styled(
+            "Enter open detail",
+            Style::default().fg(MUTED),
+        )),
         Line::from(Span::styled("/     search", Style::default().fg(MUTED))),
         Line::from(Span::styled("s     cycle sort", Style::default().fg(MUTED))),
-        Line::from(Span::styled("p     pause / resume", Style::default().fg(MUTED))),
+        Line::from(Span::styled(
+            "p     pause / resume",
+            Style::default().fg(MUTED),
+        )),
         Line::from(Span::styled("?     close help", Style::default().fg(MUTED))),
         Line::from(Span::styled("Esc   back", Style::default().fg(MUTED))),
     ];
@@ -205,11 +219,20 @@ fn render_help(area: Rect, buf: &mut Buffer) {
 
 fn render_footer(area: Rect, buf: &mut Buffer) {
     let hints = vec![
-        Span::styled("1-6", Style::default().fg(MUTED).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "1-6",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" tabs  ", Style::default().fg(MUTED)),
-        Span::styled("j/k", Style::default().fg(MUTED).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "j/k",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" nav  ", Style::default().fg(MUTED)),
-        Span::styled("Enter", Style::default().fg(MUTED).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Enter",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" detail  ", Style::default().fg(MUTED)),
         Span::styled("?", Style::default().fg(MUTED).add_modifier(Modifier::BOLD)),
         Span::styled(" help", Style::default().fg(MUTED)),

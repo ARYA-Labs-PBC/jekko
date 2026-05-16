@@ -139,9 +139,8 @@ fn migrate_legacy_jekko_env() -> Result<()> {
         return Ok(());
     }
     let default = user_dir(&users, DEFAULT_USER_ID);
-    fs::create_dir_all(&default.dir).with_context(|| {
-        format!("create default user dir at {}", default.dir.display())
-    })?;
+    fs::create_dir_all(&default.dir)
+        .with_context(|| format!("create default user dir at {}", default.dir.display()))?;
     fs::rename(&legacy, &default.llm_env_path).with_context(|| {
         format!(
             "move {} to {}",
@@ -257,8 +256,7 @@ fn init(user_id: &str) -> Result<()> {
     }
     if !p.exists() {
         let header = format!("# Jekko model keys for user `{user_id}`\n");
-        fs::write(&p, header)
-            .with_context(|| format!("create keys file at {}", p.display()))?;
+        fs::write(&p, header).with_context(|| format!("create keys file at {}", p.display()))?;
     }
     println!("{}", p.display());
     Ok(())
@@ -316,7 +314,11 @@ fn users(args: &KeysUsersArgs) -> Result<()> {
         let count = fs::read_to_string(&d.llm_env_path)
             .map(|t| parse_env_lines(&t).len())
             .unwrap_or(0);
-        let exists = if d.llm_env_path.is_file() { "ok" } else { "missing" };
+        let exists = if d.llm_env_path.is_file() {
+            "ok"
+        } else {
+            "missing"
+        };
         println!(
             "  {user:<10} {count:>3} keys  [{exists}]  {path}",
             user = d.user_id,
@@ -390,7 +392,10 @@ mod tests {
         assert_eq!(fs::read_to_string(&new_path).unwrap(), "OPENAI_API_KEY=k\n");
         let backup = jekko.join("jekko.env.bak");
         assert!(backup.is_file(), "backup missing");
-        assert!(!jekko.join("jekko.env").exists(), "legacy file should be moved");
+        assert!(
+            !jekko.join("jekko.env").exists(),
+            "legacy file should be moved"
+        );
 
         // Idempotent: second run is a no-op.
         migrate_legacy_jekko_env().unwrap();

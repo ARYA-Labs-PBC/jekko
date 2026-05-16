@@ -117,6 +117,12 @@ impl Prompt {
         self.slash.set_catalog(catalog);
     }
 
+    /// Read access to the slash popup state — used by the host to render the
+    /// overlay widget above the composer panel.
+    pub fn slash_popup(&self) -> &SlashPopup {
+        &self.slash
+    }
+
     /// Replace the mention candidate list.
     pub fn set_mention_candidates(&mut self, candidates: Vec<MentionCandidate>) {
         self.mention.set_candidates(candidates);
@@ -192,7 +198,11 @@ impl Prompt {
 
     /// Total character count of the visible buffer (used by Composer status).
     pub fn buffer_char_count(&self) -> usize {
-        self.textarea.lines().iter().map(|l| l.chars().count()).sum()
+        self.textarea
+            .lines()
+            .iter()
+            .map(|l| l.chars().count())
+            .sum()
     }
 
     /// Fully expanded buffer (paste chips substituted back in).
@@ -513,4 +523,3 @@ impl Widget for &Prompt {
         Widget::render(&self.textarea, area, buf);
     }
 }
-

@@ -98,8 +98,7 @@ impl AssistantCard {
     /// was set. Public for snapshot tests.
     pub fn pending_glyph(&self) -> Option<&'static str> {
         let since = self.pending_since?;
-        let idx = (since.elapsed().as_millis() / SPINNER_FRAME_MS) as usize
-            % SPINNER_FRAMES.len();
+        let idx = (since.elapsed().as_millis() / SPINNER_FRAME_MS) as usize % SPINNER_FRAMES.len();
         Some(SPINNER_FRAMES[idx])
     }
     /// Cheap row estimate. 1 chrome row (header) + content lines per part. No
@@ -187,14 +186,13 @@ impl Widget for &AssistantCard {
                         Span::raw(prefix),
                         Span::styled(
                             glyph.to_string(),
-                            Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(COLOR_ACCENT)
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::raw(" "),
                         Span::styled(PENDING_LABEL, Style::default().fg(COLOR_TEXT_MUTED)),
-                        Span::styled(
-                            format!("  {secs}s"),
-                            Style::default().fg(COLOR_TEXT_MUTED),
-                        ),
+                        Span::styled(format!("  {secs}s"), Style::default().fg(COLOR_TEXT_MUTED)),
                     ]));
                 } else {
                     lines.push(Line::from(Span::styled(

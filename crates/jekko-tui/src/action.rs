@@ -161,14 +161,25 @@ pub enum Action {
     JnoccioBootUpdate(JnoccioBootStatus),
     /// User requested a jankurai audit (via `/audit` slash command or chat intercept).
     RunJankuraiAudit,
+    /// User requested a full jankurai cycle: audit → analyze → fix → verify → reaudit.
+    RunJankuraiCycle,
+    /// User explicitly confirmed the mutating jankurai cycle.
+    RunJankuraiCycleConfirmed,
     /// A single progress line from the running jankurai audit subprocess.
     JankuraiAuditLine(String),
+    /// A single progress line from the jankurai-runner subprocess during a cycle.
+    JankuraiRunnerLine(String),
     /// Background audit thread finished. `success` is false on non-zero exit.
     /// When successful, `summary` carries the parsed audit results so the app
     /// can auto-propose fixes for actionable findings.
     JankuraiScoreUpdate {
         success: bool,
         summary: Option<AuditSummary>,
+    },
+    /// Full jankurai cycle completed. `improved` is true if the re-audit showed
+    /// a better score than the initial audit.
+    JankuraiCycleComplete {
+        improved: bool,
     },
 }
 

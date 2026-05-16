@@ -31,6 +31,6 @@ mod tests;
 pub use delta::{compute_delta, format_delta, DeltaDirection, DeltaMetric};
 pub use detect::{is_jankurai_installed, JANKURAI_INSTALL_URL};
 pub use panel::JankuraiPanel;
-pub use runner::run_audit;
+pub use runner::{run_audit, run_cycle};
 pub use snapshot::{JankuraiSnapshot, JankuraiWorker};
 pub use sparkline::sparkline;

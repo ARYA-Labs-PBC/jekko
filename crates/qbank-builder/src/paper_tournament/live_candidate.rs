@@ -2,10 +2,12 @@ use super::gating::{
     tournament_rejection_reasons, valid_generation_trials, valid_testing_trials,
     valid_verification_trials, verification_majority_with_min,
 };
-use super::live_outcome::{candidate_failure, candidate_metrics, candidate_receipt,
-    has_confident_correct_answer, rejected_candidate_outcome,
-    rejected_candidate_outcome_with_distractors, rejected_prescreen_outcome,
-    rejection_category_from_reasons, run_testing_phase, CandidateOutcome, GenerationCandidate};
+use super::live_outcome::{
+    candidate_failure, candidate_metrics, candidate_receipt, has_confident_correct_answer,
+    rejected_candidate_outcome, rejected_candidate_outcome_with_distractors,
+    rejected_prescreen_outcome, rejection_category_from_reasons, run_testing_phase,
+    CandidateOutcome, GenerationCandidate,
+};
 use super::*;
 
 pub(crate) fn evaluate_candidate(
@@ -23,10 +25,15 @@ pub(crate) fn evaluate_candidate(
         .support
         .first()
         .ok_or("live generator output has no support")?;
-    let support_section = paper.sections.iter().find(|section| {
-        section.section_id == support_quote.section_id
-            && section.section_hash == support_quote.section_hash
-    }).cloned().ok_or("live generator support section is unknown")?;
+    let support_section = paper
+        .sections
+        .iter()
+        .find(|section| {
+            section.section_id == support_quote.section_id
+                && section.section_hash == support_quote.section_hash
+        })
+        .cloned()
+        .ok_or("live generator support section is unknown")?;
     let question = candidate.trial.output.question.clone();
     let quote = support_quote.quote.trim().to_string();
     if !support_section.text.contains(&quote) {
@@ -50,8 +57,16 @@ pub(crate) fn evaluate_candidate(
     }
     let answer = quote.clone();
     let distractor_hashes = if config.hard_distractors {
-        select_hard_distractors(paper, all_papers, &quote, &question, config.distractor_papers)
-    } else { select_distractors(paper, all_papers, config.distractor_papers) };
+        select_hard_distractors(
+            paper,
+            all_papers,
+            &quote,
+            &question,
+            config.distractor_papers,
+        )
+    } else {
+        select_distractors(paper, all_papers, config.distractor_papers)
+    };
     if config.strict_production && candidate.stem_leakage_score > 0.22 {
         failures.push(candidate_failure(
             "stem_leakage",
@@ -90,8 +105,17 @@ pub(crate) fn evaluate_candidate(
         "prescreen-tester",
     )?;
     failures.append(&mut prescreen_failures);
-    let prescreen_counted = valid_testing_trials(&prescreen_trials, &prescreen_grading_trials, config.min_successful_graders.min(3)).len();
-    let prescreen_correct_rate = testing_correct_rate_with_min(&prescreen_trials, &prescreen_grading_trials, config.min_successful_graders.min(3));
+    let prescreen_counted = valid_testing_trials(
+        &prescreen_trials,
+        &prescreen_grading_trials,
+        config.min_successful_graders.min(3),
+    )
+    .len();
+    let prescreen_correct_rate = testing_correct_rate_with_min(
+        &prescreen_trials,
+        &prescreen_grading_trials,
+        config.min_successful_graders.min(3),
+    );
     if prescreen_counted < 2 {
         failures.push(candidate_failure(
             "tester_schema",

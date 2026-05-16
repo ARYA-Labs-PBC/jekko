@@ -14,7 +14,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
-use crate::keybind::{FocusTarget, KeyHint, hints_for};
+use crate::keybind::{hints_for, FocusTarget, KeyHint};
 use crate::theme;
 
 // ── FooterBand ───────────────────────────────────────────────────────────────
@@ -61,7 +61,11 @@ impl<'a> Widget for &FooterBand<'a> {
         // Hints sorted by priority (lowest number = highest priority).
         let all_hints = hints_for(self.focus);
         let right_text = self.right_label.unwrap_or("");
-        let right_width = if right_text.is_empty() { 0 } else { right_text.len() + 2 };
+        let right_width = if right_text.is_empty() {
+            0
+        } else {
+            right_text.len() + 2
+        };
 
         // Build the hints string, dropping lowest-priority hints until it fits.
         let available = inner.width.saturating_sub(right_width as u16) as usize;
@@ -95,15 +99,22 @@ fn build_hint_spans(hints: &[KeyHint], available_cols: usize) -> Vec<Span<'stati
         if sorted.is_empty() {
             break;
         }
-        let total: usize = sorted.iter().enumerate().map(|(i, h)| {
-            h.render_width() + if i > 0 { 3 } else { 0 } // 3-space gap between hints
-        }).sum();
+        let total: usize = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                h.render_width() + if i > 0 { 3 } else { 0 } // 3-space gap between hints
+            })
+            .sum();
         if total <= available_cols || sorted.len() == 1 {
             break;
         }
         // Drop the hint with the highest priority number (lowest importance).
         // If tie, drop the last one in the sorted list.
-        if let Some(pos) = sorted.iter().rposition(|h| h.priority == sorted.last().map(|l| l.priority).unwrap_or(0)) {
+        if let Some(pos) = sorted
+            .iter()
+            .rposition(|h| h.priority == sorted.last().map(|l| l.priority).unwrap_or(0))
+        {
             sorted.remove(pos);
         } else {
             sorted.pop();

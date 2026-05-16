@@ -53,10 +53,7 @@ pub fn panel_block<'a>(title: &'a str, status: Option<&'a str>, focused: bool) -
                 format!(" {s} "),
                 Style::default().fg(TEXT_MUTED),
             ))),
-        None => block.title(Line::from(Span::styled(
-            format!(" {title} "),
-            title_style,
-        ))),
+        None => block.title(Line::from(Span::styled(format!(" {title} "), title_style))),
     }
 }
 

@@ -279,6 +279,55 @@ fn ctrl_b_toggles_sidebar_on_session() {
     assert!(app.sidebar_open);
 }
 
+#[test]
+fn paste_valid_zyal_updates_panel_without_arming() {
+    let mut app = App::new();
+    let text = "<<<ZYAL v1:daemon id=demo>>>\nversion: v1\n<<<END_ZYAL v1:daemon id=demo>>>\n";
+    app.dispatch(Action::Paste(text.to_string()));
+
+    assert!(app.zyal_runbook_valid);
+    assert!(!app.zyal_runbook_armed);
+    assert_eq!(app.prompt.expanded_buffer(), text);
+    assert!(app
+        .zyal_panel
+        .snapshot()
+        .paste_signature
+        .as_ref()
+        .unwrap()
+        .starts_with("runbook:"));
+}
+
+#[test]
+fn zyal_submit_requires_explicit_run_forever_arm() {
+    let mut app = App::new();
+    let text = "<<<ZYAL v1:daemon id=demo>>>\nversion: v1\n<<<END_ZYAL v1:daemon id=demo>>>\n";
+    app.dispatch(Action::PromptSubmit(text.to_string()));
+
+    assert!(app.zyal_runbook_valid);
+    assert!(!app.zyal_runbook_armed);
+    assert_eq!(app.transcript.len(), 1);
+}
+
+#[test]
+fn zyal_submit_with_run_forever_arm_does_not_start_chat() {
+    let mut app = App::new();
+    let text = "<<<ZYAL v1:daemon id=demo>>>\nversion: v1\nZYAL_ARM RUN_FOREVER\n<<<END_ZYAL v1:daemon id=demo>>>\n";
+    app.dispatch(Action::PromptSubmit(text.to_string()));
+
+    assert!(app.zyal_runbook_valid);
+    assert!(app.zyal_runbook_armed);
+    assert_eq!(app.transcript.len(), 1);
+}
+
+#[test]
+fn jankurai_cycle_requires_explicit_confirmation() {
+    let mut app = App::new();
+    app.dispatch(Action::RunJankuraiCycle);
+
+    assert!(!app.is_audit_running);
+    assert_eq!(app.transcript.len(), 1);
+}
+
 // ─── Prompt submit on session ───────────────────────────────────────────────
 
 #[test]

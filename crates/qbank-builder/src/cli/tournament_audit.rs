@@ -6,7 +6,8 @@ pub fn audit_paper_tournament_command(args: &[String]) -> Result<(), String> {
     let allow_mock_smoke = args.iter().any(|arg| arg == "--allow-mock-smoke");
     let mut artifact_paths = Vec::new();
     qbank_builder::collect_json_files(&run_root.join("trials"), &mut artifact_paths)?;
-    artifact_paths.retain(|path| path.file_name().and_then(|name| name.to_str()) == Some("final.json"));
+    artifact_paths
+        .retain(|path| path.file_name().and_then(|name| name.to_str()) == Some("final.json"));
     let mut errors = Vec::new();
     let mut rows = Vec::new();
     for path in &artifact_paths {
@@ -18,7 +19,10 @@ pub fn audit_paper_tournament_command(args: &[String]) -> Result<(), String> {
             .unwrap_or("")
             .to_string();
         if challenge_hash.trim().is_empty() {
-            errors.push(format!("{} missing challenge hash path component", path.display()));
+            errors.push(format!(
+                "{} missing challenge hash path component",
+                path.display()
+            ));
         }
         if artifact.paper_content.non_production && !allow_mock_smoke {
             errors.push(format!(
@@ -45,7 +49,10 @@ pub fn audit_paper_tournament_command(args: &[String]) -> Result<(), String> {
             || artifact.verification_trials.len() < MIN_SUCCESSFUL_VERIFIERS
             || artifact.testing_trials.len() < MIN_SUCCESSFUL_TESTERS
         {
-            errors.push(format!("{} missing minimum successful trial quorum", path.display()));
+            errors.push(format!(
+                "{} missing minimum successful trial quorum",
+                path.display()
+            ));
         }
         let tester_grader_quorum = artifact
             .testing_trials
@@ -65,7 +72,11 @@ pub fn audit_paper_tournament_command(args: &[String]) -> Result<(), String> {
                 path.display()
             ));
         }
-        if artifact.failures.iter().any(|failure| failure.fatal_for_acceptance) {
+        if artifact
+            .failures
+            .iter()
+            .any(|failure| failure.fatal_for_acceptance)
+        {
             errors.push(format!("{} has fatal persisted failures", path.display()));
         }
         let calibrated_confidence = calibrated_artifact_confidence(&artifact);
@@ -77,14 +88,21 @@ pub fn audit_paper_tournament_command(args: &[String]) -> Result<(), String> {
                 path.display()
             ));
         }
-        if !artifact.paper_content.full_text.contains(&artifact.hard_answer) {
+        if !artifact
+            .paper_content
+            .full_text
+            .contains(&artifact.hard_answer)
+        {
             errors.push(format!("{} answer absent from full text", path.display()));
         }
         if artifact.hard_question.trim().is_empty()
             || artifact.hard_answer.trim().is_empty()
             || artifact.hard_agent_name.trim().is_empty()
         {
-            errors.push(format!("{} missing final hard challenge fields", path.display()));
+            errors.push(format!(
+                "{} missing final hard challenge fields",
+                path.display()
+            ));
         }
         let hard_generation = artifact
             .generation_trials
@@ -92,8 +110,14 @@ pub fn audit_paper_tournament_command(args: &[String]) -> Result<(), String> {
             .find(|trial| trial.agent_name == artifact.hard_agent_name);
         match hard_generation.and_then(|trial| trial.output.support.first()) {
             Some(support) if support.quote == artifact.hard_answer => {}
-            Some(_) => errors.push(format!("{} hard generator support quote mismatch", path.display())),
-            None => errors.push(format!("{} missing hard generator support quote", path.display())),
+            Some(_) => errors.push(format!(
+                "{} hard generator support quote mismatch",
+                path.display()
+            )),
+            None => errors.push(format!(
+                "{} missing hard generator support quote",
+                path.display()
+            )),
         }
         for trial in &artifact.generation_trials {
             for support in &trial.output.support {
@@ -110,7 +134,9 @@ pub fn audit_paper_tournament_command(args: &[String]) -> Result<(), String> {
                 }
             }
         }
-        let challenge_path = bank.join("challenges").join(format!("{challenge_hash}.json"));
+        let challenge_path = bank
+            .join("challenges")
+            .join(format!("{challenge_hash}.json"));
         if !challenge_path.exists() {
             errors.push(format!(
                 "{} missing matching accepted challenge",
@@ -126,10 +152,16 @@ pub fn audit_paper_tournament_command(args: &[String]) -> Result<(), String> {
             ));
         }
         if challenge.answer_key.canonical != artifact.hard_answer {
-            errors.push(format!("{} challenge answer mismatch", challenge_path.display()));
+            errors.push(format!(
+                "{} challenge answer mismatch",
+                challenge_path.display()
+            ));
         }
         if challenge.question != artifact.hard_question {
-            errors.push(format!("{} challenge question mismatch", challenge_path.display()));
+            errors.push(format!(
+                "{} challenge question mismatch",
+                challenge_path.display()
+            ));
         }
         if challenge.route_metadata.len()
             < MIN_SUCCESSFUL_GENERATORS + MIN_SUCCESSFUL_VERIFIERS + MIN_SUCCESSFUL_TESTERS
@@ -185,8 +217,14 @@ pub fn audit_paper_tournament_command(args: &[String]) -> Result<(), String> {
         "errors": errors,
         "rows": rows,
     });
-    write_json_pretty(&run_root.join("reports/paper-tournament-audit.json"), &report)?;
-    println!("{}", serde_json::to_string_pretty(&report).map_err(|err| err.to_string())?);
+    write_json_pretty(
+        &run_root.join("reports/paper-tournament-audit.json"),
+        &report,
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).map_err(|err| err.to_string())?
+    );
     if report
         .get("errors")
         .and_then(|value| value.as_array())
@@ -204,7 +242,13 @@ fn calibrated_artifact_confidence(artifact: &FinalPaperChallengeArtifact) -> f64
         .iter()
         .filter_map(|trial| {
             qbank_builder::grade_reduction(&artifact.grading_trials, &trial.agent_name).map(
-                |(correct, _)| if correct { trial.output.confidence as f64 / 100.0 } else { 0.0 },
+                |(correct, _)| {
+                    if correct {
+                        trial.output.confidence as f64 / 100.0
+                    } else {
+                        0.0
+                    }
+                },
             )
         })
         .collect::<Vec<_>>();
@@ -226,16 +270,37 @@ fn audit_route_metadata(
         errors.push(format!("{label} missing provider/model"));
     }
     if route.prompt_hash.as_deref().unwrap_or("").trim().is_empty()
-        || route.context_hash.as_deref().unwrap_or("").trim().is_empty()
-        || route.receipts_hash.as_deref().unwrap_or("").trim().is_empty()
-        || route.model_decisions_hash.as_deref().unwrap_or("").trim().is_empty()
+        || route
+            .context_hash
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        || route
+            .receipts_hash
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        || route
+            .model_decisions_hash
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
     {
         errors.push(format!("{label} missing route hashes"));
     }
     if route.token_usage.is_none() {
         errors.push(format!("{label} missing token_usage"));
     }
-    if route.winner_model_id.as_deref().unwrap_or("").trim().is_empty() {
+    if route
+        .winner_model_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
         errors.push(format!("{label} missing winner_model_id"));
     }
     if route.model_decisions.is_empty() {

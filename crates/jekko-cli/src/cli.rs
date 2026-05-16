@@ -64,6 +64,11 @@ pub struct Cli {
     #[arg(long = "continue", short = 'c')]
     pub r#continue: bool,
 
+    /// Run one jankurai cycle headlessly (audit → fix → verify) and exit.
+    /// Equivalent to `jekko jankurai --once`.
+    #[arg(short = 'j', long = "jankurai")]
+    pub jankurai: bool,
+
     /// Open a specific session by id.
     #[arg(short = 's', value_name = "SESSION_ID")]
     pub session: Option<String>,

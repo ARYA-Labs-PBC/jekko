@@ -1,11 +1,10 @@
-use super::*;
 pub(super) use super::live_outcome_support::{
     append_progress_row, candidate_failure, candidate_metrics, candidate_receipt,
     ensure_paper_time_remaining, has_confident_correct_answer, progress_jsonl_path,
-    rejection_category_from_reasons, rejected_candidate_outcome,
-    rejected_candidate_outcome_with_distractors, rejected_prescreen_outcome,
-    stem_leakage_score,
+    rejected_candidate_outcome, rejected_candidate_outcome_with_distractors,
+    rejected_prescreen_outcome, rejection_category_from_reasons, stem_leakage_score,
 };
+use super::*;
 
 #[derive(Debug, Clone)]
 pub(super) struct GenerationCandidate {

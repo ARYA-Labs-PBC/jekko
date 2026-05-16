@@ -13,6 +13,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     runtime::bootstrap(&cli.global)?;
 
+    // Short-circuit: `-j` / `--jankurai` runs one cycle via jankurai-runner.
+    if cli.jankurai {
+        return cmd::jankurai::run(
+            &cli.global,
+            &cmd::jankurai::JankuraiArgs {
+                forwarded: vec!["--once".to_string()],
+            },
+        );
+    }
+
     match &cli.command {
         Some(Command::Tui(args)) => cmd::tui::run(&cli.global, args),
         Some(Command::Run(args)) => cmd::run::run(&cli.global, args),

@@ -1,5 +1,5 @@
-use super::*;
 use super::live_outcome::{CandidateOutcome, GenerationCandidate};
+use super::*;
 use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;

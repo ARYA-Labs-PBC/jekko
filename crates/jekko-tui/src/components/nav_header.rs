@@ -73,7 +73,10 @@ impl Widget for &StatusBar {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Left side: product name + metadata
         let left = vec![
-            Span::styled(" Jnoccio", Style::default().fg(GOLD).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Jnoccio",
+                Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  repo: ", Style::default().fg(MUTED)),
             Span::styled(self.repo_name.clone(), Style::default().fg(TEXT)),
             Span::styled("  branch: ", Style::default().fg(MUTED)),
@@ -93,8 +96,7 @@ impl Widget for &StatusBar {
         };
 
         // Render left-aligned, then right-aligned
-        let left_para = Paragraph::new(Line::from(left))
-            .style(Style::default().bg(BG));
+        let left_para = Paragraph::new(Line::from(left)).style(Style::default().bg(BG));
         let right_para = Paragraph::new(Line::from(Span::styled(
             right_text,
             Style::default().fg(MUTED).bg(BG),
@@ -159,8 +161,7 @@ impl Widget for &NavBar {
         .style(Style::default().bg(BG));
         right_para.render(area, buf);
 
-        let left_para = Paragraph::new(Line::from(left_spans))
-            .style(Style::default().bg(BG));
+        let left_para = Paragraph::new(Line::from(left_spans)).style(Style::default().bg(BG));
         left_para.render(area, buf);
     }
 }

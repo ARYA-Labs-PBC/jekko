@@ -217,15 +217,30 @@ impl Transcript {
         }
     }
 
-    /// Iterates through the text parts of the last assistant card and replaces
-    /// any occurrences of "\n\n" with "\n" to maximize vertical screen space.
+    /// Iterates through the text parts of the last assistant card and removes
+    /// any lines that are empty or contain only whitespace to maximize vertical
+    /// screen space, while preserving trailing newlines for streaming chunks.
     pub fn collapse_last_assistant_newlines(&mut self) {
         if let Some(TranscriptEntry::Assistant(card)) = self.entries.last_mut() {
             for part in card.parts.iter_mut() {
                 if matches!(part.kind, AssistantPartKind::Text) {
-                    while part.text.contains("\n\n") {
-                        part.text = part.text.replace("\n\n", "\n");
+                    let lines: Vec<&str> = part.text.split('\n').collect();
+                    let mut cleaned = String::with_capacity(part.text.len());
+                    let mut first = true;
+
+                    for (i, line) in lines.iter().enumerate() {
+                        let is_last = i == lines.len() - 1;
+                        // Keep the line if it has visible text, OR if it's the very last
+                        // element (representing a trailing \n from the stream)
+                        if !line.trim().is_empty() || (is_last && line.is_empty()) {
+                            if !first {
+                                cleaned.push('\n');
+                            }
+                            cleaned.push_str(line);
+                            first = false;
+                        }
                     }
+                    part.text = cleaned;
                 }
             }
         }

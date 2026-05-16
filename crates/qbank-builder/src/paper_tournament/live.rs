@@ -1,3 +1,4 @@
+use super::live_candidate::evaluate_candidate;
 use super::live_outcome::{
     candidate_failure, candidate_metrics, candidate_receipt, has_confident_correct_answer,
     rejected_candidate_outcome, rejected_candidate_outcome_with_distractors,
@@ -5,7 +6,6 @@ use super::live_outcome::{
     stem_leakage_score, CandidateOutcome, GenerationCandidate,
 };
 use super::live_write::write_final_artifact_from_outcome;
-use super::live_candidate::evaluate_candidate;
 use super::*;
 
 pub(crate) fn run_single_paper_jnoccio(

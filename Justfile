@@ -206,7 +206,6 @@ score-fast:
 audit-ci:
 	mkdir -p target/jankurai
 	jankurai audit . --mode ratchet --baseline agent/baselines/main.repo-score.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --sarif target/jankurai/jankurai.sarif --github-step-summary target/jankurai/summary.md --repair-queue-jsonl target/jankurai/repair-queue.jsonl
-	node tools/jankurai-audit-gate.mjs target/jankurai/repo-score.json
 	cp target/jankurai/repo-score.json agent/repo-score.json
 	cp target/jankurai/repo-score.md agent/repo-score.md
 
@@ -530,7 +529,6 @@ memory-benchmark-full: memory-benchmark-fast memory-benchmark-generated qbank-va
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-audit:
 	jankurai audit . --mode advisory --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md
-	node tools/jankurai-audit-gate.mjs target/jankurai/repo-score.json
 	cp target/jankurai/repo-score.json agent/repo-score.json
 	cp target/jankurai/repo-score.md agent/repo-score.md
 

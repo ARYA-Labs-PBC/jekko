@@ -324,8 +324,8 @@ mod tests {
         write_env(tmp.path(), "user", "GEMINI_API_KEY=g1\n");
         write_env(tmp.path(), "user_1", "GOOGLE_API_KEY=g2\n");
 
-        let mut pool = KeyPool::with_root(tmp.path().to_path_buf(), true)
-            .with_ttl(Duration::from_secs(0));
+        let mut pool =
+            KeyPool::with_root(tmp.path().to_path_buf(), true).with_ttl(Duration::from_secs(0));
         let cands = pool.candidates("google");
         let ids: Vec<_> = cands.iter().map(|c| c.user_id.clone()).collect();
         assert_eq!(ids, vec!["user", "user_1"]);
@@ -340,8 +340,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_env(tmp.path(), "user", "OPENAI_API_KEY=\n");
         write_env(tmp.path(), "user_1", "OPENAI_API_KEY=k1\n");
-        let mut pool = KeyPool::with_root(tmp.path().to_path_buf(), true)
-            .with_ttl(Duration::from_secs(0));
+        let mut pool =
+            KeyPool::with_root(tmp.path().to_path_buf(), true).with_ttl(Duration::from_secs(0));
         let cands = pool.candidates("openai");
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].user_id, "user_1");
@@ -351,8 +351,8 @@ mod tests {
     fn newly_added_user_dir_is_picked_up_on_rescan() {
         let tmp = TempDir::new().unwrap();
         write_env(tmp.path(), "user", "OPENAI_API_KEY=k0\n");
-        let mut pool = KeyPool::with_root(tmp.path().to_path_buf(), true)
-            .with_ttl(Duration::from_secs(0));
+        let mut pool =
+            KeyPool::with_root(tmp.path().to_path_buf(), true).with_ttl(Duration::from_secs(0));
         assert_eq!(pool.candidates("openai").len(), 1);
 
         write_env(tmp.path(), "user_2", "OPENAI_API_KEY=k2\n");
@@ -380,8 +380,8 @@ mod tests {
     fn unknown_provider_returns_no_candidates() {
         let tmp = TempDir::new().unwrap();
         write_env(tmp.path(), "user", "OPENAI_API_KEY=k\n");
-        let mut pool = KeyPool::with_root(tmp.path().to_path_buf(), false)
-            .with_ttl(Duration::from_secs(0));
+        let mut pool =
+            KeyPool::with_root(tmp.path().to_path_buf(), false).with_ttl(Duration::from_secs(0));
         assert!(pool.candidates("nope-not-real").is_empty());
     }
 }

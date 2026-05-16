@@ -81,12 +81,20 @@ pub fn compute(area: Rect, sidebar_open: bool) -> AppRects {
     let (body_area, composer_area) = if area.height >= needed {
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(reasoning_min), Constraint::Length(composer_rows)])
+            .constraints([
+                Constraint::Min(reasoning_min),
+                Constraint::Length(composer_rows),
+            ])
             .split(area);
         (rows[0], rows[1])
     } else {
         (
-            Rect { x: area.x, y: area.y, width: area.width, height: 0 },
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 0,
+            },
             area,
         )
     };
@@ -115,7 +123,11 @@ pub fn compute(area: Rect, sidebar_open: bool) -> AppRects {
         _ => (body_area, None),
     };
 
-    AppRects { reasoning, inspector, composer: composer_area }
+    AppRects {
+        reasoning,
+        inspector,
+        composer: composer_area,
+    }
 }
 
 /// Resolve inspector width, honouring the sidebar toggle.
@@ -172,6 +184,10 @@ pub fn render_inspector_pane(frame: &mut Frame, area: Rect, app: &App) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    if app.zyal_runbook_valid {
+        frame.render_widget(&app.zyal_panel, area);
+        return;
+    }
     match app.shell_tab {
         ShellTab::Jnoccio => {
             frame.render_widget(&app.jnoccio_panel, area);
@@ -192,7 +208,10 @@ fn render_history_inspector(frame: &mut Frame, area: Rect) {
     frame.render_widget(block, area);
 
     let body = vec![
-        Line::from(Span::styled("No saved sessions yet.", Style::default().fg(theme::TEXT))),
+        Line::from(Span::styled(
+            "No saved sessions yet.",
+            Style::default().fg(theme::TEXT),
+        )),
         Line::from(Span::raw("")),
         Line::from(Span::styled(
             "Start a session to populate this list.",
@@ -249,8 +268,8 @@ pub fn render_empty_reasoning(frame: &mut Frame, area: Rect, engagement: Engagem
                 width: logo_slot.width,
                 height: remaining,
             };
-            let builder = crate::components::LogoBuilder::default_face()
-                .with_alignment(Alignment::Left);
+            let builder =
+                crate::components::LogoBuilder::default_face().with_alignment(Alignment::Left);
             frame.render_widget(&builder, translated);
         }
     }
@@ -263,7 +282,9 @@ pub fn render_empty_reasoning(frame: &mut Frame, area: Rect, engagement: Engagem
         };
         let primary = Paragraph::new(Line::from(Span::styled(
             "Press Enter to engage",
-            Style::default().fg(theme::TEXT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::TEXT)
+                .add_modifier(Modifier::BOLD),
         )))
         .alignment(Alignment::Left);
         let secondary = Paragraph::new(Line::from(Span::styled(

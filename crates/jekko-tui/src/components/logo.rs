@@ -1,19 +1,18 @@
-//! JEKKO logo. Renders one of two faces:
+//! JEKKO logo cell renderer.
 //!
-//! * `Logo` (default unit struct) — picks the right face for the surrounding
-//!   area at render time: a 5×7 pixel-font wordmark for ≥ 60×8, otherwise a
-//!   compact ASCII alternative.
-//! * `LogoVariant::Pixel` — a 5×7 pixel-font wordmark drawn with Unicode
-//!   half-blocks (`▀`/`▄`/`█`), giving square-ish glyphs and a crisp arcade
-//!   silhouette (`scale_x = 2`, `gap = 2`).
-//! * `LogoVariant::Ascii` — the compact textual alternative, kept for narrow
-//!   terminals and tests that need a legible width guarantee.
+//! This ports the retired OpenTUI logo algorithm into native Ratatui: fixed
+//! 80-column frame, crisp 5x7 half-block wordmark, and two amber shadow
+//! extrusion layers. The public `Logo` / `LogoBuilder` API is preserved for
+//! existing callers.
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
+
+pub const INNER_WIDTH: usize = 78;
+pub const OUTER_WIDTH: usize = INNER_WIDTH + 2;
 
 const ASCII_LOGO: &str = r"
    __  ___ _   _  _   __   __
@@ -22,9 +21,29 @@ const ASCII_LOGO: &str = r"
    /_//_/ |_|_/  |_/  /_/
 ";
 
-// --- 5x7 pixel font (J E K K O, plus blank) -----------------------------
-// Each row is a column-pattern string of `1`/`0`; rows are top→bottom.
-// Mirrors `PIXEL_FONT_5X7` from `logo.tsx`.
+const AMBER_STOPS: [Color; 8] = [
+    Color::Rgb(0x3d, 0x26, 0x06),
+    Color::Rgb(0x5c, 0x3a, 0x0e),
+    Color::Rgb(0x8b, 0x5f, 0x1a),
+    Color::Rgb(0xb5, 0x7f, 0x28),
+    Color::Rgb(0xd4, 0xa8, 0x43),
+    Color::Rgb(0xe8, 0xc0, 0x55),
+    Color::Rgb(0xef, 0xd1, 0x7a),
+    Color::Rgb(0xf8, 0xe3, 0xb3),
+];
+
+const AMBER_LIGHT_STOPS: [Color; 8] = [
+    Color::Rgb(0x2d, 0x1a, 0x04),
+    Color::Rgb(0x4f, 0x34, 0x08),
+    Color::Rgb(0x55, 0x37, 0x07),
+    Color::Rgb(0x6e, 0x4a, 0x0a),
+    Color::Rgb(0x7c, 0x5a, 0x11),
+    Color::Rgb(0x8c, 0x5f, 0x0d),
+    Color::Rgb(0xa6, 0x78, 0x17),
+    Color::Rgb(0xb9, 0x88, 0x28),
+];
+
+const TEXT_MUTED: Color = Color::Rgb(0x7d, 0x85, 0x90);
 
 type Glyph = [&'static str; 7];
 
@@ -54,36 +73,60 @@ fn glyph_for(ch: char) -> &'static Glyph {
     }
 }
 
-/// Render the supplied word as a vector of terminal lines built from
-/// `▀`/`▄`/`█` half-block characters. `scale_x` widens each pixel column
-/// horizontally to compensate for terminal cell aspect ratio; `gap` is the
-/// number of pixel columns between letters.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LogoLayer {
+    Global,
+    Wordmark,
+    WordmarkShadowNear,
+    WordmarkShadowMid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LogoCell {
+    pub ch: char,
+    pub fg: Color,
+    pub bg: Option<Color>,
+    pub bold: bool,
+    pub layer: LogoLayer,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LogoRow {
+    pub cells: Vec<LogoCell>,
+}
+
+impl LogoRow {
+    pub fn text(&self) -> String {
+        self.cells.iter().map(|cell| cell.ch).collect()
+    }
+}
+
 fn render_pixel_word(text: &str, scale_x: usize, gap: usize) -> Vec<String> {
     let glyphs: Vec<&'static Glyph> = text.chars().map(glyph_for).collect();
     if glyphs.is_empty() {
         return Vec::new();
     }
-    let pixel_height = 7usize;
-    let terminal_rows = pixel_height.div_ceil(2);
-    let mut rows: Vec<String> = Vec::with_capacity(terminal_rows);
+
+    let terminal_rows = 7usize.div_ceil(2);
+    let mut rows = Vec::with_capacity(terminal_rows);
     for tr in 0..terminal_rows {
         let top_row = 2 * tr;
         let bot_row = 2 * tr + 1;
-        let mut pieces: Vec<String> = Vec::with_capacity(glyphs.len());
+        let mut pieces = Vec::with_capacity(glyphs.len());
         for glyph in &glyphs {
             let top = glyph.get(top_row).copied().unwrap_or("");
             let bot = glyph.get(bot_row).copied().unwrap_or("");
             let cols = top.len().max(bot.len()).max(5);
-            let mut piece = String::with_capacity(cols * scale_x * 3);
+            let mut piece = String::with_capacity(cols * scale_x);
             for c in 0..cols {
                 let t = top.as_bytes().get(c).copied() == Some(b'1');
                 let b = bot.as_bytes().get(c).copied() == Some(b'1');
                 let ch = if t && b {
-                    '\u{2588}' // █
+                    '█'
                 } else if t {
-                    '\u{2580}' // ▀
+                    '▀'
                 } else if b {
-                    '\u{2584}' // ▄
+                    '▄'
                 } else {
                     ' '
                 };
@@ -98,60 +141,45 @@ fn render_pixel_word(text: &str, scale_x: usize, gap: usize) -> Vec<String> {
     rows
 }
 
-/// Which face to draw.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LogoVariant {
-    /// Compact 4-line ASCII alternative.
     Ascii,
-    /// 5×7 pixel font drawn with half-block characters.
     #[default]
     Pixel,
 }
 
-/// JEKKO logo widget. Use the unit-struct form `Logo` for auto-sized
-/// rendering, or construct a `LogoBuilder` via [`Logo::pixel`] /
-/// [`Logo::ascii`] for explicit control.
-///
-/// The default face is a single-tone gold pixel font that lines up with the
-/// rest of the Ratatui chrome.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Logo;
 
-/// Configurable logo. Use this when you want a specific face or want to add
-/// support / status subtitle lines underneath the wordmark.
 #[derive(Clone, Debug)]
 pub struct LogoBuilder {
     variant: Option<LogoVariant>,
     word: &'static str,
     support: Option<&'static str>,
     status: Option<&'static str>,
-    alignment: ratatui::layout::Alignment,
+    alignment: Alignment,
+    idle: bool,
 }
 
 impl Logo {
-    /// Pixel-font face. Use this when the surrounding area is at least
-    /// 60 columns wide and 8 rows tall.
     pub fn pixel() -> LogoBuilder {
         LogoBuilder::new(Some(LogoVariant::Pixel))
     }
 
-    /// Compact ASCII alternative.
     pub fn ascii() -> LogoBuilder {
         LogoBuilder::new(Some(LogoVariant::Ascii))
     }
 
-    /// Width of the rendered pixel word in columns. Useful when callers want
-    /// to size a wrapping frame around the logo without rendering twice.
     pub fn pixel_width(word: &str) -> usize {
-        let rows = render_pixel_word(word, 2, 2);
-        rows.iter().map(|r| r.chars().count()).max().unwrap_or(0)
+        render_pixel_word(word, 2, 2)
+            .iter()
+            .map(|r| r.chars().count())
+            .max()
+            .unwrap_or(0)
     }
 
-    /// Pick the right face for the supplied area. ≥ 60×5 picks the pixel
-    /// face; smaller terminals get the ASCII face. (The pixel face needs
-    /// 1 row for the divider plus 4 rows for the wordmark.)
     pub fn pick(area: Rect) -> LogoVariant {
-        if area.width >= 60 && area.height >= 5 {
+        if area.width >= OUTER_WIDTH as u16 && area.height >= 11 {
             LogoVariant::Pixel
         } else {
             LogoVariant::Ascii
@@ -170,17 +198,14 @@ impl LogoBuilder {
             word: "JEKKO",
             support: None,
             status: None,
-            alignment: ratatui::layout::Alignment::Center,
+            alignment: Alignment::Center,
+            idle: false,
         }
     }
 
-    pub fn with_alignment(mut self, alignment: ratatui::layout::Alignment) -> Self {
+    pub fn with_alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
         self
-    }
-
-    pub fn variant(&self) -> Option<LogoVariant> {
-        self.variant
     }
 
     pub fn with_support(mut self, support: &'static str) -> Self {
@@ -193,60 +218,300 @@ impl LogoBuilder {
         self
     }
 
+    pub fn with_idle(mut self, idle: bool) -> Self {
+        self.idle = idle;
+        self
+    }
+
+    pub fn variant(&self) -> Option<LogoVariant> {
+        self.variant
+    }
+
     pub fn word(&self) -> &'static str {
         self.word
     }
+
+    pub fn rows(&self) -> Vec<LogoRow> {
+        build_logo_rows(self)
+    }
 }
 
-const GOLD: Color = Color::Rgb(0xd4, 0xa8, 0x43);
-const GOLD_DIM: Color = Color::Rgb(0x6a, 0x54, 0x21);
-const TEXT_MUTED: Color = Color::Rgb(0x7d, 0x85, 0x90);
-const ACCENT_DIVIDER: Color = Color::Rgb(0x3a, 0x40, 0x4a);
+fn fit(text: &str, width: usize, alignment: Alignment) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let clipped: String = chars.iter().take(width).collect();
+    let len = clipped.chars().count();
+    let remaining = width.saturating_sub(len);
+    match alignment {
+        Alignment::Left => format!("{clipped}{}", " ".repeat(remaining)),
+        Alignment::Right => format!("{}{}", " ".repeat(remaining), clipped),
+        _ => {
+            let left = remaining / 2;
+            let right = remaining - left;
+            format!("{}{}{}", " ".repeat(left), clipped, " ".repeat(right))
+        }
+    }
+}
+
+fn pair(left: &str, right: &str, width: usize) -> String {
+    let left: String = left.chars().take(width).collect();
+    let right: String = right.chars().take(width).collect();
+    let left_len = left.chars().count();
+    let right_len = right.chars().count();
+    let gap = width.saturating_sub(left_len + right_len);
+    if gap < 1 {
+        fit(&format!("{left} {right}"), width, Alignment::Left)
+    } else {
+        format!("{left}{}{right}", " ".repeat(gap))
+    }
+}
+
+fn framed(content: &str, alignment: Alignment) -> String {
+    format!("│{}│", fit(content, INNER_WIDTH, alignment))
+}
+
+fn framed_pair(left: &str, right: &str) -> String {
+    format!("│{}│", pair(left, right, INNER_WIDTH))
+}
+
+fn top_border() -> String {
+    format!("╭{}╮", "─".repeat(INNER_WIDTH))
+}
+
+fn divider() -> String {
+    format!("├{}┤", "─".repeat(INNER_WIDTH))
+}
+
+fn bottom_border() -> String {
+    format!("╰{}╯", "─".repeat(INNER_WIDTH))
+}
+
+fn row_from_text(text: String, bold: bool, dim: bool) -> LogoRow {
+    let len = text.chars().count().max(1);
+    let cells = text
+        .chars()
+        .enumerate()
+        .map(|(x, ch)| LogoCell {
+            ch,
+            fg: if dim {
+                TEXT_MUTED
+            } else {
+                amber_at(x, 0, len, 1, false)
+            },
+            bg: None,
+            bold,
+            layer: LogoLayer::Global,
+        })
+        .collect();
+    LogoRow { cells }
+}
+
+fn empty_cell() -> LogoCell {
+    LogoCell {
+        ch: ' ',
+        fg: TEXT_MUTED,
+        bg: None,
+        bold: false,
+        layer: LogoLayer::Global,
+    }
+}
+
+fn frame_cells(cells: Vec<LogoCell>) -> LogoRow {
+    let mut inner = cells.into_iter().take(INNER_WIDTH).collect::<Vec<_>>();
+    while inner.len() < INNER_WIDTH {
+        inner.push(empty_cell());
+    }
+    let mut out = Vec::with_capacity(OUTER_WIDTH);
+    out.push(LogoCell {
+        ch: '│',
+        fg: AMBER_STOPS[4],
+        bg: None,
+        bold: false,
+        layer: LogoLayer::Global,
+    });
+    out.extend(inner);
+    out.push(LogoCell {
+        ch: '│',
+        fg: AMBER_STOPS[4],
+        bg: None,
+        bold: false,
+        layer: LogoLayer::Global,
+    });
+    LogoRow { cells: out }
+}
+
+fn shadowed_wordmark_rows(word: &str) -> Vec<LogoRow> {
+    let art = render_pixel_word(word, 2, 2);
+    let art_width = art.iter().map(|r| r.chars().count()).max().unwrap_or(0);
+    let visual_width = art_width + 2;
+    let visual_height = art.len() + 1;
+    let left = INNER_WIDTH.saturating_sub(visual_width) / 2;
+    let mut canvas = vec![vec![empty_cell(); INNER_WIDTH]; visual_height];
+
+    for (dx, dy, layer) in [
+        (2usize, 1usize, LogoLayer::WordmarkShadowMid),
+        (1usize, 1usize, LogoLayer::WordmarkShadowNear),
+    ] {
+        for (y, line) in art.iter().enumerate() {
+            for (x, ch) in line.chars().enumerate() {
+                if ch == ' ' {
+                    continue;
+                }
+                let px = left + x + dx;
+                let py = y + dy;
+                if py < canvas.len() && px < INNER_WIDTH {
+                    canvas[py][px] = LogoCell {
+                        ch: '█',
+                        fg: shadow_color(x, y, art_width, art.len(), layer),
+                        bg: None,
+                        bold: false,
+                        layer,
+                    };
+                }
+            }
+        }
+    }
+
+    for (y, line) in art.iter().enumerate() {
+        for (x, ch) in line.chars().enumerate() {
+            if ch == ' ' {
+                continue;
+            }
+            let px = left + x;
+            if px < INNER_WIDTH {
+                canvas[y][px] = LogoCell {
+                    ch,
+                    fg: amber_at(x, y, art_width, art.len(), false),
+                    bg: None,
+                    bold: true,
+                    layer: LogoLayer::Wordmark,
+                };
+            }
+        }
+    }
+
+    canvas.into_iter().map(frame_cells).collect()
+}
+
+fn build_logo_rows(builder: &LogoBuilder) -> Vec<LogoRow> {
+    let support = builder.support.unwrap_or("ZYAL");
+    let status = builder.status.unwrap_or(if builder.idle {
+        "camouflage idle • watching the wall"
+    } else {
+        "safe autonomous coding ready"
+    });
+    let header_right = if builder.idle {
+        "gecko mode idle   ● ● ●"
+    } else {
+        "gecko mode active ● ● ●"
+    };
+
+    let mut rows = vec![
+        row_from_text(top_border(), false, false),
+        row_from_text(framed_pair(" ›_ JEKKO", header_right), true, false),
+        row_from_text(divider(), false, false),
+        row_from_text(framed("", Alignment::Center), false, false),
+    ];
+    rows.extend(shadowed_wordmark_rows(builder.word));
+    rows.push(row_from_text(
+        framed(
+            &format!("AI coding gecko • {support} support • climbs hard problems"),
+            Alignment::Center,
+        ),
+        false,
+        false,
+    ));
+    rows.push(row_from_text(
+        framed(&format!("gecko:// {status}"), Alignment::Center),
+        false,
+        builder.idle,
+    ));
+    rows.push(row_from_text(bottom_border(), false, false));
+    rows
+}
+
+fn amber_at(x: usize, y: usize, width: usize, height: usize, light: bool) -> Color {
+    let tx = if width <= 1 {
+        0.0
+    } else {
+        x as f32 / (width - 1) as f32
+    };
+    let ty = if height <= 1 {
+        0.0
+    } else {
+        y as f32 / (height - 1) as f32
+    };
+    let t = (tx * 0.74 + ty * 0.26).clamp(0.0, 1.0);
+    color_stop(
+        if light {
+            &AMBER_LIGHT_STOPS
+        } else {
+            &AMBER_STOPS
+        },
+        t,
+    )
+}
+
+fn shadow_color(x: usize, y: usize, width: usize, height: usize, layer: LogoLayer) -> Color {
+    let base = amber_at(x, y, width, height, false);
+    let amount = match layer {
+        LogoLayer::WordmarkShadowMid => 0.80,
+        LogoLayer::WordmarkShadowNear => 0.70,
+        _ => 0.0,
+    };
+    dim_color(base, amount)
+}
+
+fn color_stop(stops: &[Color], t: f32) -> Color {
+    let idx = ((stops.len().saturating_sub(1)) as f32 * t).round() as usize;
+    stops[idx.min(stops.len().saturating_sub(1))]
+}
+
+fn dim_color(color: Color, amount: f32) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => {
+            let k = (1.0 - amount).clamp(0.0, 1.0);
+            Color::Rgb(
+                (r as f32 * k) as u8,
+                (g as f32 * k) as u8,
+                (b as f32 * k) as u8,
+            )
+        }
+        other => other,
+    }
+}
 
 fn pixel_lines(builder: &LogoBuilder) -> Vec<Line<'static>> {
-    let rows = render_pixel_word(builder.word, 2, 2);
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows.len() + 3);
-    // Top trim row — a faint horizontal rule above the wordmark.
-    lines.push(Line::from(Span::styled(
-        "\u{2500}".repeat(Logo::pixel_width(builder.word)),
-        Style::default().fg(ACCENT_DIVIDER),
-    )));
-    for row in rows {
-        lines.push(Line::from(Span::styled(
-            row,
-            Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
-        )));
-    }
-    // Subtitle row(s) — mirrors the support/status props on `LogoProps`.
-    if let (Some(support), Some(status)) = (builder.support, builder.status) {
-        lines.push(Line::from(vec![
-            Span::styled(
-                support.to_string(),
-                Style::default().fg(GOLD_DIM).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(status.to_string(), Style::default().fg(TEXT_MUTED)),
-        ]));
-    } else if let Some(support) = builder.support {
-        lines.push(Line::from(Span::styled(
-            support.to_string(),
-            Style::default().fg(GOLD_DIM).add_modifier(Modifier::BOLD),
-        )));
-    } else if let Some(status) = builder.status {
-        lines.push(Line::from(Span::styled(
-            status.to_string(),
-            Style::default().fg(TEXT_MUTED),
-        )));
-    }
-    lines
+    build_logo_rows(builder)
+        .into_iter()
+        .map(|row| {
+            Line::from(
+                row.cells
+                    .into_iter()
+                    .map(|cell| {
+                        let mut style = Style::default().fg(cell.fg);
+                        if let Some(bg) = cell.bg {
+                            style = style.bg(bg);
+                        }
+                        if cell.bold {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        Span::styled(cell.ch.to_string(), style)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
 }
 
 fn ascii_lines() -> Vec<Line<'static>> {
     ASCII_LOGO
         .lines()
         .map(|line| {
-            Line::from(line.to_string())
-                .style(Style::default().fg(GOLD).add_modifier(Modifier::BOLD))
+            Line::from(line.to_string()).style(
+                Style::default()
+                    .fg(AMBER_STOPS[4])
+                    .add_modifier(Modifier::BOLD),
+            )
         })
         .collect()
 }
@@ -271,10 +536,7 @@ impl Widget for &Logo {
 
 impl Widget for &LogoBuilder {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let variant = match self.variant {
-            Some(v) => v,
-            None => Logo::pick(area),
-        };
+        let variant = self.variant.unwrap_or_else(|| Logo::pick(area));
         render_variant(variant, self, area, buf);
     }
 }
@@ -285,45 +547,42 @@ mod tests {
 
     #[test]
     fn pixel_word_renders_four_rows() {
-        let rows = render_pixel_word("JEKKO", 2, 2);
-        // 7 pixel rows → 4 terminal rows once divided by 2.
-        assert_eq!(rows.len(), 4);
+        assert_eq!(render_pixel_word("JEKKO", 2, 2).len(), 4);
     }
 
     #[test]
-    fn pixel_word_uses_half_blocks() {
-        let rows = render_pixel_word("J", 1, 0);
-        let joined: String = rows.join("\n");
-        assert!(
-            joined.contains('\u{2588}')
-                || joined.contains('\u{2580}')
-                || joined.contains('\u{2584}')
-        );
+    fn logo_rows_match_old_frame_text() {
+        let rows = Logo::pixel().rows();
+        assert_eq!(rows.len(), 11);
+        assert_eq!(rows[0].text(), format!("╭{}╮", "─".repeat(78)));
+        assert!(rows[1].text().starts_with("│ ›_ JEKKO"));
+        assert_eq!(rows[2].text(), format!("├{}┤", "─".repeat(78)));
+        assert!(rows[9]
+            .text()
+            .contains("gecko:// safe autonomous coding ready"));
+        assert_eq!(rows[10].text(), format!("╰{}╯", "─".repeat(78)));
     }
 
     #[test]
-    fn auto_picks_pixel_for_wide_area() {
-        let area = Rect::new(0, 0, 80, 10);
-        assert_eq!(Logo::pick(area), LogoVariant::Pixel);
+    fn wordmark_contains_shadow_layers() {
+        let rows = Logo::pixel().rows();
+        assert!(rows
+            .iter()
+            .flat_map(|row| row.cells.iter())
+            .any(|cell| cell.layer == LogoLayer::WordmarkShadowNear));
+        assert!(rows
+            .iter()
+            .flat_map(|row| row.cells.iter())
+            .any(|cell| cell.layer == LogoLayer::WordmarkShadowMid));
+    }
+
+    #[test]
+    fn auto_picks_pixel_for_full_logo_area() {
+        assert_eq!(Logo::pick(Rect::new(0, 0, 80, 11)), LogoVariant::Pixel);
     }
 
     #[test]
     fn auto_picks_ascii_for_small_area() {
-        let area = Rect::new(0, 0, 40, 4);
-        assert_eq!(Logo::pick(area), LogoVariant::Ascii);
-    }
-
-    #[test]
-    fn auto_picks_ascii_for_narrow_area() {
-        let area = Rect::new(0, 0, 30, 10);
-        assert_eq!(Logo::pick(area), LogoVariant::Ascii);
-    }
-
-    #[test]
-    fn unknown_chars_render_as_blanks() {
-        // Asterisk is not in the JEKKO subset; should not panic and produce
-        // blank pixels.
-        let rows = render_pixel_word("*", 1, 0);
-        assert_eq!(rows.len(), 4);
+        assert_eq!(Logo::pick(Rect::new(0, 0, 40, 4)), LogoVariant::Ascii);
     }
 }

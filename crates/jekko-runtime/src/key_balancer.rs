@@ -364,13 +364,7 @@ impl KeyBalancer {
     }
 
     /// Convenience: classify an HTTP status code and record it.
-    pub fn record_http(
-        &mut self,
-        provider_id: &str,
-        user_id: &str,
-        model_id: &str,
-        status: u16,
-    ) {
+    pub fn record_http(&mut self, provider_id: &str, user_id: &str, model_id: &str, status: u16) {
         if (200..300).contains(&status) {
             self.record_success(provider_id, user_id, model_id);
         } else {
@@ -534,7 +528,10 @@ mod tests {
                 break;
             }
         }
-        assert!(!saw_user, "rate-limited user should be skipped while in cooldown");
+        assert!(
+            !saw_user,
+            "rate-limited user should be skipped while in cooldown"
+        );
     }
 
     #[test]
@@ -547,11 +544,7 @@ mod tests {
         bal.record_failure("openai", "user", "gpt-5", FailureKind::RateLimited);
         bal.record_success("openai", "user", "gpt-5");
 
-        let store = BalancerStore::new(
-            user_dir(tmp.path(), "user")
-                .dir
-                .join(STATE_DB_FILENAME),
-        );
+        let store = BalancerStore::new(user_dir(tmp.path(), "user").dir.join(STATE_DB_FILENAME));
         let usage = store.get("openai", "gpt-5").unwrap();
         assert_eq!(usage.status, KeyHealth::Ready);
         assert!(usage.cooldown_until.is_none());

@@ -1,8 +1,8 @@
-use super::*;
 use super::support::{
     authors_from_xml, body_sections, candidate_from_search_result, first_tag_text,
     license_from_candidate_or_xml,
 };
+use super::*;
 use serde_json::json;
 use std::collections::BTreeSet;
 

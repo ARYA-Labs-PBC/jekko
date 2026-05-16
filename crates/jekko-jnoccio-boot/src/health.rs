@@ -89,9 +89,7 @@ pub fn probe_health_at(addr: &str) -> HealthResult {
 
     let reachable = response.starts_with("HTTP/1.") && {
         let first_line = response.lines().next().unwrap_or("");
-        first_line.contains(" 200 ")
-            || first_line.contains(" 401 ")
-            || first_line.contains(" 404 ")
+        first_line.contains(" 200 ") || first_line.contains(" 401 ") || first_line.contains(" 404 ")
     };
 
     if !reachable {
@@ -99,7 +97,11 @@ pub fn probe_health_at(addr: &str) -> HealthResult {
     }
 
     let (enabled_models, total_models) = parse_model_counts(response);
-    HealthResult { reachable, enabled_models, total_models }
+    HealthResult {
+        reachable,
+        enabled_models,
+        total_models,
+    }
 }
 
 const EMPTY_BODY: &str = "";

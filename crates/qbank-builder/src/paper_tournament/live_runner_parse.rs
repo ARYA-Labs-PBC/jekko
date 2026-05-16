@@ -38,7 +38,10 @@ impl JnoccioHttpRunner {
         if let Some(value) = message.get("content").and_then(|content| content.as_str()) {
             return Ok(value.to_string());
         }
-        if let Some(value) = message.get("reasoning_text").and_then(|value| value.as_str()) {
+        if let Some(value) = message
+            .get("reasoning_text")
+            .and_then(|value| value.as_str())
+        {
             return Ok(value.to_string());
         }
         if let Some(value) = message

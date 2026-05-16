@@ -97,7 +97,10 @@ fn run_boot(tx: mpsc::Sender<BootEvent>) {
 
     let xport = extra_port();
     if let Some(p) = xport {
-        tracing::info!(extra_port = p, "dual-instance mode: aggregating model counts from port {p}");
+        tracing::info!(
+            extra_port = p,
+            "dual-instance mode: aggregating model counts from port {p}"
+        );
     }
 
     send(&tx, BootStatus::Checking);

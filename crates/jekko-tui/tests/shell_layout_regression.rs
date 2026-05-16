@@ -26,7 +26,10 @@ fn compute_layout_gives_composer_at_bottom() {
         area.y + area.height - 4,
         "Composer should be at bottom"
     );
-    assert!(layout.inspector.is_some(), "Inspector should exist at 160 cols");
+    assert!(
+        layout.inspector.is_some(),
+        "Inspector should exist at 160 cols"
+    );
     assert_eq!(
         layout.inspector.unwrap().width,
         44,
@@ -42,14 +45,20 @@ fn compute_layout_no_sidebar_fills_reasoning() {
         layout.inspector.is_none(),
         "Inspector should be hidden when sidebar_open=false"
     );
-    assert_eq!(layout.reasoning.width, 160, "Reasoning should fill full width");
+    assert_eq!(
+        layout.reasoning.width, 160,
+        "Reasoning should fill full width"
+    );
 }
 
 #[test]
 fn compute_layout_very_narrow_hides_inspector() {
     let area = Rect::new(0, 0, 40, 20);
     let layout = shell_layout::compute(area, true);
-    assert!(layout.inspector.is_none(), "Inspector should hide below 110 cols");
+    assert!(
+        layout.inspector.is_none(),
+        "Inspector should hide below 110 cols"
+    );
 }
 
 #[test]
