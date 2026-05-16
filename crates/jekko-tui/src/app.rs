@@ -376,6 +376,33 @@ impl App {
                     run_audit(self.action_tx.clone());
                 }
             }
+            Action::JankuraiAuditLine(line) => {
+                // Update the last system card in-place so the audit progress
+                // shows as a single rolling line instead of flooding the
+                // transcript. If the last entry isn't a system card (unlikely
+                // during an active audit), push a fresh one.
+                use crate::transcript::TranscriptEntry;
+                match self.transcript.entries().last() {
+                    Some(TranscriptEntry::System(_)) => {
+                        self.transcript.replace_last(
+                            TranscriptEntry::System(
+                                crate::transcript::SystemCard::new(
+                                    line,
+                                    crate::transcript::SystemKind::Info,
+                                )
+                            )
+                        );
+                    }
+                    _ => {
+                        self.transcript.push_system(
+                            crate::transcript::SystemCard::new(
+                                line,
+                                crate::transcript::SystemKind::Info,
+                            )
+                        );
+                    }
+                }
+            }
             Action::JankuraiScoreUpdate { success } => {
                 if success {
                     self.transcript.push_system(
