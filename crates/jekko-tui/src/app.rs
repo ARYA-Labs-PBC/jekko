@@ -403,21 +403,85 @@ impl App {
                     }
                 }
             }
-            Action::JankuraiScoreUpdate { success } => {
-                if success {
-                    self.transcript.push_system(
-                        crate::transcript::SystemCard::new(
-                            "Audit complete. See Repo Intel panel for results.",
-                            crate::transcript::SystemKind::Info,
-                        )
-                    );
-                } else {
+            Action::JankuraiScoreUpdate { success, summary } => {
+                if !success {
                     self.transcript.push_system(
                         crate::transcript::SystemCard::new(
                             "Audit failed. Check that jankurai is installed and the repo is accessible.",
                             crate::transcript::SystemKind::Warning,
                         )
                     );
+                    return;
+                }
+
+                match summary {
+                    Some(ref s) => {
+                        // Rich summary card with score details.
+                        let status_icon = if s.caps_count > 0 || s.hard_findings > 0 {
+                            "△"
+                        } else {
+                            "✓"
+                        };
+                        let summary_text = format!(
+                            "{status_icon} Audit complete — score {score} (raw {raw}) · \
+                             {caps} caps · {hard}H/{soft}S findings · \
+                             {actionable} actionable",
+                            score = s.score,
+                            raw = s.raw_score,
+                            caps = s.caps_count,
+                            hard = s.hard_findings,
+                            soft = s.soft_findings,
+                            actionable = s.actionable_findings.len(),
+                        );
+                        let kind = if s.hard_findings > 0 || s.caps_count > 0 {
+                            crate::transcript::SystemKind::Warning
+                        } else {
+                            crate::transcript::SystemKind::Success
+                        };
+                        self.transcript.push_system(
+                            crate::transcript::SystemCard::new(summary_text, kind)
+                        );
+
+                        // Auto-continue: if there are actionable findings and
+                        // jnoccio is available, synthesize a follow-up prompt
+                        // so the LLM can propose concrete fixes.
+                        let has_issues = s.caps_count > 0
+                            || s.hard_findings > 0
+                            || s.soft_findings > 0;
+                        if has_issues && !s.actionable_findings.is_empty() {
+                            let prompt = synthesize_audit_prompt(s);
+                            if self.jnoccio_available {
+                                // Push a placeholder assistant card so streaming
+                                // deltas have something to append to.
+                                let placeholder = AssistantCard::new(vec![AssistantPart::new(
+                                    AssistantPartKind::Text,
+                                    String::new(),
+                                )])
+                                .with_model("jnoccio")
+                                .with_pending_now();
+                                self.transcript.push_assistant(placeholder);
+                                chat_bridge::spawn_chat_request(prompt, self.action_tx.clone());
+                            } else {
+                                // No LLM available — push a static card with
+                                // the findings so the user can act manually.
+                                let card = AssistantCard::new(vec![AssistantPart::new(
+                                    AssistantPartKind::Text,
+                                    prompt,
+                                )])
+                                .with_model("jankurai-analysis");
+                                self.transcript.push_assistant(card);
+                            }
+                        }
+                    }
+                    None => {
+                        // Fallback: JSON was missing or unparseable.
+                        self.transcript.push_system(
+                            crate::transcript::SystemCard::new(
+                                "Audit complete. See Repo Intel panel for results.",
+                                crate::transcript::SystemKind::Info,
+                            )
+                        );
+                    }
                 }
             }
         }
@@ -952,6 +1016,63 @@ fn extract_json_response_field(raw: &str) -> Option<String> {
         idx += 1;
     }
     None
+}
+
+/// Build a structured prompt from the audit results so the LLM can propose
+/// concrete remediation steps. Used both for the live jnoccio path (sent to
+/// the chat bridge) and the static fallback (rendered as an assistant card).
+fn synthesize_audit_prompt(s: &crate::action::AuditSummary) -> String {
+    let mut prompt = String::with_capacity(2048);
+    prompt.push_str("The jankurai audit just completed. Here are the results:\n\n");
+    prompt.push_str(&format!(
+        "**Score**: {} (raw {} before caps)\n",
+        s.score, s.raw_score
+    ));
+    prompt.push_str(&format!(
+        "**Findings**: {} hard, {} soft\n",
+        s.hard_findings, s.soft_findings
+    ));
+    if !s.caps.is_empty() {
+        prompt.push_str(&format!(
+            "**Active caps** (score-limiting rules): {}\n",
+            s.caps.join(", ")
+        ));
+    }
+    if !s.blockers.is_empty() {
+        prompt.push_str("\n**Conformance blockers**:\n");
+        for b in &s.blockers {
+            prompt.push_str(&format!("- {b}\n"));
+        }
+    }
+
+    if !s.actionable_findings.is_empty() {
+        prompt.push_str("\n**Actionable findings** (with agent-suggested fixes):\n\n");
+        for (i, f) in s.actionable_findings.iter().enumerate() {
+            prompt.push_str(&format!(
+                "{}. **[{}]** `{}` in `{}`",
+                i + 1,
+                f.severity.to_uppercase(),
+                f.rule_id,
+                f.path,
+            ));
+            if let Some(line) = f.line {
+                prompt.push_str(&format!(":{line}"));
+            }
+            prompt.push('\n');
+            prompt.push_str(&format!("   Problem: {}\n", f.problem));
+            prompt.push_str(&format!("   Suggested fix: {}\n\n", f.agent_fix));
+        }
+    }
+
+    prompt.push_str(
+        "Based on these findings, propose an action plan to improve the score. \
+         Focus on the highest-impact wins first — the items with the most \
+         score cap potential. For each proposed fix, explain what you would \
+         change and why it would help. Do not apply changes yet — just propose \
+         the plan so I can review it."
+    );
+
+    prompt
 }
 
 /// Translate a crossterm event into an `Action`. Returns `None` when the event

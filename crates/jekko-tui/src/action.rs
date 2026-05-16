@@ -82,6 +82,44 @@ pub enum RuntimeEvent {
     },
 }
 
+/// A single actionable finding from a jankurai audit.
+#[derive(Clone, Debug)]
+pub struct AuditFinding {
+    /// Severity: "critical", "high", "medium", "low".
+    pub severity: String,
+    /// Human-readable problem statement.
+    pub problem: String,
+    /// Agent-targeted fix suggestion from the auditor.
+    pub agent_fix: String,
+    /// File path where the finding was detected.
+    pub path: String,
+    /// Jankurai rule identifier (e.g. "HLT-001-DEAD-MARKER").
+    pub rule_id: String,
+    /// Optional line number.
+    pub line: Option<u64>,
+}
+
+/// Parsed summary of a jankurai audit run, extracted from `agent/repo-score.json`.
+#[derive(Clone, Debug)]
+pub struct AuditSummary {
+    /// Final score after caps (0-100).
+    pub score: u64,
+    /// Raw score before caps.
+    pub raw_score: u64,
+    /// Number of score-capping rules that fired.
+    pub caps_count: usize,
+    /// Names of the caps that fired.
+    pub caps: Vec<String>,
+    /// Number of hard findings.
+    pub hard_findings: u64,
+    /// Number of soft findings.
+    pub soft_findings: u64,
+    /// Conformance blockers.
+    pub blockers: Vec<String>,
+    /// The most impactful findings (with `agent_fix` hints).
+    pub actionable_findings: Vec<AuditFinding>,
+}
+
 /// The action enum dispatched by the TUI loop.
 ///
 /// Components must not mutate app state directly; they emit `Action`s.
@@ -126,8 +164,11 @@ pub enum Action {
     /// A single progress line from the running jankurai audit subprocess.
     JankuraiAuditLine(String),
     /// Background audit thread finished. `success` is false on non-zero exit.
+    /// When successful, `summary` carries the parsed audit results so the app
+    /// can auto-propose fixes for actionable findings.
     JankuraiScoreUpdate {
         success: bool,
+        summary: Option<AuditSummary>,
     },
 }
 
