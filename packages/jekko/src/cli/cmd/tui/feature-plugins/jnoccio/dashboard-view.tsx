@@ -54,16 +54,22 @@ export function JnoccioDashboardView(props: {
         flexShrink={0}
       >
         <box flexDirection="row" gap={2}>
+          {/* ⚠ explicit warning when server is unreachable — "0/0 models" alone is ambiguous */}
+          {props.connection !== "live" && (
+            <text fg={RED}>
+              <b>⚠ No agent connected</b>
+            </text>
+          )}
           <text fg={GOLD}>
             <b>Jnoccio Fusion</b>
           </text>
-          <text fg={theme().textMuted}>
+          <text fg={props.connection === "live" ? theme().textMuted : RED}>
             {props.snapshot.totals.enabled_models}/{props.snapshot.totals.total_models} models
           </text>
-          <text fg={theme().textMuted}>
+          <text fg={props.connection === "live" ? theme().textMuted : RED}>
             {props.snapshot.agent_count}/{props.snapshot.max_agents} agents
           </text>
-          <text fg={theme().textMuted}>x{props.snapshot.instance_count} gateways</text>
+          <text fg={theme().textMuted}>{props.snapshot.instance_count}x gateways</text>
         </box>
         <box flexDirection="row" gap={2}>
           <Show when={props.state.paused()}>

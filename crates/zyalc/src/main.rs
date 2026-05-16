@@ -35,9 +35,7 @@ enum Cmd {
         root: PathBuf,
     },
     /// Print the detected profile + emitted target for a `.zyal` file.
-    Inspect {
-        path: PathBuf,
-    },
+    Inspect { path: PathBuf },
 }
 
 fn main() {
@@ -72,7 +70,10 @@ fn dispatch(cli: &Cli) -> Result<i32> {
                     );
                     Ok(0)
                 } else {
-                    eprintln!("zyalc: drift detected in {} target(s):", report.drifted.len());
+                    eprintln!(
+                        "zyalc: drift detected in {} target(s):",
+                        report.drifted.len()
+                    );
                     for path in &report.drifted {
                         eprintln!("  - {}", path.display());
                     }

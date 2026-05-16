@@ -6,5 +6,4 @@ cd "$ROOT"
 
 git config --global user.email "bot@jekko.ai"
 git config --global user.name "jekko"
-export JEKKO_EXPERIMENTAL_DISABLE_FILEWATCHER="${JEKKO_EXPERIMENTAL_DISABLE_FILEWATCHER:-false}"
-bun turbo test:ci
+rtk cargo test --workspace --locked --no-fail-fast

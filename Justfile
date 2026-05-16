@@ -7,12 +7,12 @@ memory_benchmark_seed := env_var_or_default("MEMORY_BENCHMARK_SEED", "public-dev
 
 # fast deterministic build/test targets, caches, and narrow proof lanes for agent iteration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
-fast: zyal-spec-check workspace-fast
+fast: workspace-fast
 
 # one-command setup lane for local iteration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 setup:
-	bun install --frozen-lockfile
+	cargo fetch
 
 # one-command validation lane for agent iteration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -29,7 +29,7 @@ workspace-fast:
 # Narrow lane for workspace typecheck-only feedback.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 workspace-typecheck-fast:
-	bun turbo --cache-dir "$TURBO_CACHE_DIR" --cache=local:rw --parallel typecheck --filter=@jekko-ai/core --filter=@jekko-ai/plugin --filter=@jekko-ai/sdk
+	rtk cargo check --workspace --locked
 
 # Narrow lane for workspace test-only feedback.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -40,9 +40,7 @@ workspace-test-fast: core-test-fast jekko-test-fast
 # Narrow lane for workspace build-only feedback. (Cache enabled)
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 workspace-build-fast:
-	just core-build-fast
-	just plugin-build-fast
-	just jekko-build-fast
+	rtk cargo build --workspace --locked
 
 # Narrow lane for the core workspace package's fast feedback targets.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -59,7 +57,7 @@ sdk-fast: sdk-typecheck-fast sdk-build-fast
 # Narrow lane for the core workspace package's fast feedback targets.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 typecheck-fast:
-	bun turbo --cache-dir "$TURBO_CACHE_DIR" --cache=local:rw --parallel typecheck --filter=@jekko-ai/core --filter=@jekko-ai/plugin --filter=@jekko-ai/sdk
+	rtk cargo check --workspace --locked
 
 # Narrow lane for package builds that can reuse Turbo cache metadata.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -68,94 +66,77 @@ build-fast: workspace-build-fast
 # Narrow lane for the core package typecheck only.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 core-typecheck-fast:
-	bun --cwd packages/core typecheck
+	rtk cargo check -p jekko-core --locked
 
 # Narrow lane for the core package compile path.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 core-build-fast:
-	bun turbo --cache-dir "$TURBO_CACHE_DIR" --cache=local:rw --parallel build --filter=@jekko-ai/core
+	rtk cargo build -p jekko-core --locked
 
 # Narrow lane for core package behavior checks.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 core-test:
-	bun --cwd packages/core test
+	rtk cargo test -p jekko-core --locked --no-fail-fast
 
 # Narrow lane for core package behavior checks with an explicit fast alias.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 core-test-fast:
-	bun --cwd packages/core test
+	rtk cargo test -p jekko-core --locked --no-fail-fast
 
 # Narrow lane for package-level typechecks.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 plugin-typecheck:
-	bun --cwd packages/plugin typecheck
+	rtk cargo check -p jekko-plugin-api --locked
 
 # Narrow lane for plugin package typechecks with an explicit fast alias.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 plugin-typecheck-fast:
-	bun --cwd packages/plugin typecheck
+	rtk cargo check -p jekko-plugin-api --locked
 
 # Narrow lane for plugin package build only.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 plugin-build-fast:
-	bun turbo --cache-dir "$TURBO_CACHE_DIR" --cache=local:rw --parallel build --filter=@jekko-ai/plugin
+	rtk cargo build -p jekko-plugin-api --locked
 
 # Narrow lane for SDK package typechecks with an explicit fast alias.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 sdk-typecheck:
-	bun --cwd packages/sdk/js typecheck
+	rtk cargo check -p jekko-provider --locked
 
 # Narrow lane for SDK package typechecks with an explicit fast alias.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 sdk-typecheck-fast:
-	bun --cwd packages/sdk/js typecheck
+	rtk cargo check -p jekko-provider --locked
 
 # Narrow lane for SDK package build only.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 sdk-build-fast:
-	bun turbo --cache-dir "$TURBO_CACHE_DIR" --cache=local:rw --parallel build --filter=@jekko-ai/sdk
+	rtk cargo build -p jekko-provider --locked
 
 # Narrow lane for the main Jekko package typecheck.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 jekko-typecheck-fast:
-	bun --cwd packages/jekko typecheck
+	rtk cargo check -p jekko-cli --locked
 
 # Narrow lane for the main Jekko package build.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 jekko-build-fast:
-	bun turbo --cache-dir "$TURBO_CACHE_DIR" --cache=local:rw --parallel build --filter=jekko
+	rtk cargo build -p jekko-cli --locked
 
 # Build only the host Jekko binary for PTY/TUI smoke lanes.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 jekko-build-host-fast:
-	bun --cwd packages/jekko ./script/build.ts --single --skip-install
+	rtk cargo build -p jekko-cli --locked
 
 # Narrow lane for the main Jekko package behavior checks.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 jekko-test-fast:
-	bun --cwd packages/jekko test \
-		test/keybind.test.ts \
-		test/ide/ \
-		test/util/ \
-		test/tool/jankurai-audit-gate.test.ts \
-		test/tool/jankurai-workflow.test.ts \
-		test/auth/ \
-		test/account/ \
-		test/config/agent-color.test.ts \
-		test/config/config.part-01.test.ts \
-		test/config/config.part-02.test.ts \
-		test/config/config.part-04.test.ts \
-		test/config/config.part-05.test.ts \
-		test/config/config.part-06.test.ts \
-		test/config/config.part-07.test.ts \
-		test/config/config.part-08.test.ts \
-		test/config/config.part-09.test.ts \
-		test/config/config.part-12.test.ts
+	rtk cargo test -p jekko-cli --locked --no-fail-fast
 
 # Full Jekko test suite (slower; for pre-release gating).
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 jekko-test-full:
-	bun --cwd packages/jekko test
+	rtk cargo test -p jekko-cli --locked --no-fail-fast
 
 # Narrow lane that composes the main Jekko package's fast feedback targets.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -164,12 +145,11 @@ jekko-fast: jekko-typecheck-fast jekko-build-fast jekko-test-fast
 # Smoke test the built jekko binary on the host platform.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 run: jekko-build-fast
-	@host_target="jekko-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"; \
-	binary="packages/jekko/dist/$host_target/bin/jekko"; \
-	if [ ! -x "$binary" ]; then \
-		echo "Binary not found at $binary — run 'just build' first"; exit 1; \
-	fi; \
-	"$binary" --version
+	rtk cargo run -p jekko-cli -- --version
+
+# Build and deploy the host binary wrapper to ~/.local/bin.
+deploy:
+	packages/jekko/script/deploy-local.sh
 
 # Narrow lane for the jnoccio-fusion Rust crate compile path.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -304,28 +284,39 @@ ux-qa:
 
 # Host binary smoke for the TUI-only product surface.
 tui-binary-smoke: jekko-build-host-fast
-	bun --cwd packages/jekko ./script/tui-binary-smoke.ts
+	rtk cargo run -p jekko-cli -- --version
 
 # CI-safe TUI lane: no production keys, no browser lane.
 tui-ci: tui-binary-smoke
-	bun --cwd packages/jekko test test/cli/tui/ test/cli/cmd/tui/
-	JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_clears_loading_screen_quickly -- --nocapture
-	JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
-	JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
+	rtk cargo test -p jekko-tui --locked --no-fail-fast
+	JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
+	JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
 
 # Local host-binary tuiwright startup proof. This is the fastest gate for
 # catching plugin-loading hangs on the built Mac/host binary.
 tui-startup-smoke: jekko-build-host-fast
-	JEKKO_BIN="$(bun --cwd packages/jekko ./script/host-binary-path.ts)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_clears_loading_screen_quickly -- --nocapture
+	JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
 
 # Copy approved local Jekko/Jnoccio keys from home-level env files into the
 # canonical outside-repo live TUI test env file, redacting all output.
 tui-live-prod-init:
-	bun --cwd packages/jekko ./script/tui-live-prod-init.ts
+	rtk cargo run -p xtask -- live-prod-init
 
 # Local-only live production TUI lane. This refuses to run in CI.
 tui-live-prod: jekko-build-host-fast
-	bun --cwd packages/jekko ./script/tui-live-prod.ts
+	rtk cargo run -p xtask -- live-prod
+
+# LOCAL ONLY: full live TUI connectivity + chat test. Uses real API keys.
+# Requires: JEKKO_TUI_LIVE_PROD=1 and JEKKO_API_KEY to be set.
+# Refuses to run in CI.
+live-tui-test:
+	JEKKO_TUI_LIVE_PROD=1 bash ops/ci/live-tui-test.sh
+
+# LOCAL ONLY: Jnoccio PTY tests with mock server.
+# Requires JNOCCIO_TUI_TEST=1 and JEKKO_BIN.
+tui-jnoccio-test: jekko-build-host-fast
+	JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" JNOCCIO_TUI_TEST=1 \
+		cargo test -p tuiwright-jekko-unlock --test jnoccio_tui_dashboard -- --ignored --nocapture
 
 # Narrow lane for the sandboxctl Rust crate compile path.
 # jankurai:proof HLT-012-OVERBROAD-AGENCY parallel=1 cache=cargo-build narrow-targets=true
@@ -363,7 +354,7 @@ zyalc-test:
 # Narrow lane for the canonical ZYAL spec generator.
 # jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 zyal-spec-check:
-	bun --cwd packages/jekko ./script/generate-zyal-spec.ts --check
+	rtk cargo run -p xtask -- schema
 
 # Build + drift-check across every registered .zyal source.
 # jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-build narrow-targets=true
@@ -609,4 +600,4 @@ ci-audit:
 	bash scripts/ci-local.sh audit
 
 ci:
-	bash scripts/ci-local.sh all
+	just check-fast

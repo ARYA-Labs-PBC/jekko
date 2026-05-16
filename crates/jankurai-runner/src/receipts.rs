@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 
 pub const RECEIPT_DB_REL: &str = "agent/zyal/receipts.sqlite";
 
@@ -23,7 +23,8 @@ impl ReceiptsStore {
     pub fn open(repo_root: &Path) -> Result<Self> {
         let path = repo_root.join(RECEIPT_DB_REL);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("mkdir -p {}", parent.display()))?;
         }
         let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
         let store = Self { conn, path };
@@ -127,7 +128,15 @@ impl ReceiptsStore {
             INSERT INTO commits (run_id, worker_id, finding_id, rule_id, branch, sha, landed_at)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
-            params![run_id, worker_id, finding_id, rule_id, branch, sha, now_secs() as i64],
+            params![
+                run_id,
+                worker_id,
+                finding_id,
+                rule_id,
+                branch,
+                sha,
+                now_secs() as i64
+            ],
         )?;
         Ok(())
     }
@@ -161,13 +170,11 @@ impl ReceiptsStore {
     }
 
     pub fn count_commits_for_run(&self, run_id: &str) -> Result<i64> {
-        let count: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM commits WHERE run_id = ?1",
-                params![run_id],
-                |r| r.get(0),
-            )?;
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM commits WHERE run_id = ?1",
+            params![run_id],
+            |r| r.get(0),
+        )?;
         Ok(count)
     }
 
@@ -226,9 +233,29 @@ mod tests {
     fn records_a_run_and_commits() {
         let dir = tempdir().unwrap();
         let store = ReceiptsStore::open(dir.path()).unwrap();
-        store.record_run_started("run-1", 4, "zyal/run-1/integration", false).unwrap();
-        store.record_commit("run-1", "w-01", "fp1", "HLT-001", "zyal/run-1/w-01/x", "deadbeef").unwrap();
-        store.record_commit("run-1", "w-02", "fp2", "HLT-002", "zyal/run-1/w-02/y", "cafef00d").unwrap();
+        store
+            .record_run_started("run-1", 4, "zyal/run-1/integration", false)
+            .unwrap();
+        store
+            .record_commit(
+                "run-1",
+                "w-01",
+                "fp1",
+                "HLT-001",
+                "zyal/run-1/w-01/x",
+                "deadbeef",
+            )
+            .unwrap();
+        store
+            .record_commit(
+                "run-1",
+                "w-02",
+                "fp2",
+                "HLT-002",
+                "zyal/run-1/w-02/y",
+                "cafef00d",
+            )
+            .unwrap();
         assert_eq!(store.count_commits_for_run("run-1").unwrap(), 2);
         store.record_run_finished("run-1", "ok").unwrap();
     }
@@ -237,22 +264,46 @@ mod tests {
     fn records_findings_and_events() {
         let dir = tempdir().unwrap();
         let store = ReceiptsStore::open(dir.path()).unwrap();
-        store.record_run_started("run-2", 2, "zyal/run-2/integration", true).unwrap();
         store
-            .record_finding("run-2", "fp-x", "HLT-007", "high", &["src/a.rs".to_string()], None)
+            .record_run_started("run-2", 2, "zyal/run-2/integration", true)
             .unwrap();
         store
-            .record_finding("run-2", "cap-x", "cap:no-sec", "critical", &["agent/proof-lanes.toml".to_string()], Some("no-sec"))
+            .record_finding(
+                "run-2",
+                "fp-x",
+                "HLT-007",
+                "high",
+                &["src/a.rs".to_string()],
+                None,
+            )
+            .unwrap();
+        store
+            .record_finding(
+                "run-2",
+                "cap-x",
+                "cap:no-sec",
+                "critical",
+                &["agent/proof-lanes.toml".to_string()],
+                Some("no-sec"),
+            )
             .unwrap();
         store.record_event("run-2", 1, "run_started", "{}").unwrap();
         let findings_count: i64 = store
             .conn
-            .query_row("SELECT COUNT(*) FROM findings WHERE run_id = 'run-2'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM findings WHERE run_id = 'run-2'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(findings_count, 2);
         let events_count: i64 = store
             .conn
-            .query_row("SELECT COUNT(*) FROM events WHERE run_id = 'run-2'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE run_id = 'run-2'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(events_count, 1);
     }
@@ -261,11 +312,17 @@ mod tests {
     fn replacing_a_run_keeps_started_at_overwritten() {
         let dir = tempdir().unwrap();
         let store = ReceiptsStore::open(dir.path()).unwrap();
-        store.record_run_started("dup", 1, "zyal/dup/integration", false).unwrap();
-        store.record_run_started("dup", 8, "zyal/dup/integration", true).unwrap();
+        store
+            .record_run_started("dup", 1, "zyal/dup/integration", false)
+            .unwrap();
+        store
+            .record_run_started("dup", 8, "zyal/dup/integration", true)
+            .unwrap();
         let pool: i64 = store
             .conn
-            .query_row("SELECT pool_size FROM runs WHERE run_id = 'dup'", [], |r| r.get(0))
+            .query_row("SELECT pool_size FROM runs WHERE run_id = 'dup'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(pool, 8);
     }

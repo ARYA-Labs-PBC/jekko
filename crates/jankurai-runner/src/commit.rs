@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 
 pub const SUBJECT_MAX_LEN: usize = 50;
 
@@ -53,7 +53,11 @@ pub fn build_message(plan: &CommitPlan) -> CommitMessage {
 }
 
 fn build_subject(plan: &CommitPlan) -> String {
-    let zone = if plan.zone.is_empty() { "jankurai" } else { plan.zone.as_str() };
+    let zone = if plan.zone.is_empty() {
+        "jankurai"
+    } else {
+        plan.zone.as_str()
+    };
     let core = format!("fix({}): {} {}", zone, plan.rule_id, plan.short_summary);
     truncate_with_ellipsis(&core, SUBJECT_MAX_LEN)
 }
@@ -96,7 +100,9 @@ pub fn assert_refspec_scope(refspec: &str) -> Result<()> {
     if pushed == "zyal" || pushed.starts_with("zyal/") {
         Ok(())
     } else {
-        Err(anyhow!("refusing to push refspec {refspec:?}: outside zyal/* namespace"))
+        Err(anyhow!(
+            "refusing to push refspec {refspec:?}: outside zyal/* namespace"
+        ))
     }
 }
 
@@ -112,7 +118,9 @@ pub fn stage_declared_paths(plan: &CommitPlan) -> Result<()> {
         cmd.arg(path);
     }
     cmd.current_dir(&plan.worktree);
-    let status = cmd.status().with_context(|| format!("git add in {}", plan.worktree.display()))?;
+    let status = cmd
+        .status()
+        .with_context(|| format!("git add in {}", plan.worktree.display()))?;
     if !status.success() {
         return Err(anyhow!("git add returned {}", status.code().unwrap_or(-1)));
     }
@@ -126,9 +134,14 @@ pub fn run_commit(plan: &CommitPlan, message: &CommitMessage) -> Result<()> {
         cmd.arg("-m").arg(&message.body);
     }
     cmd.current_dir(&plan.worktree);
-    let status = cmd.status().with_context(|| format!("git commit in {}", plan.worktree.display()))?;
+    let status = cmd
+        .status()
+        .with_context(|| format!("git commit in {}", plan.worktree.display()))?;
     if !status.success() {
-        return Err(anyhow!("git commit returned {}", status.code().unwrap_or(-1)));
+        return Err(anyhow!(
+            "git commit returned {}",
+            status.code().unwrap_or(-1)
+        ));
     }
     Ok(())
 }
@@ -148,14 +161,24 @@ pub fn rebase_onto_integration(plan: &CommitPlan) -> Result<()> {
         .arg(&plan.integration_branch)
         .current_dir(&plan.worktree)
         .status()
-        .with_context(|| format!("git rebase {} in {}", plan.integration_branch, plan.worktree.display()))?;
+        .with_context(|| {
+            format!(
+                "git rebase {} in {}",
+                plan.integration_branch,
+                plan.worktree.display()
+            )
+        })?;
     if !status.success() {
         // Abort the rebase so the worktree is back to a sane state.
         let _ = Command::new("git")
             .args(["rebase", "--abort"])
             .current_dir(&plan.worktree)
             .status();
-        return Err(anyhow!("git rebase {} returned {}", plan.integration_branch, status.code().unwrap_or(-1)));
+        return Err(anyhow!(
+            "git rebase {} returned {}",
+            plan.integration_branch,
+            status.code().unwrap_or(-1)
+        ));
     }
     Ok(())
 }
@@ -203,13 +226,21 @@ mod tests {
             ..sample_plan()
         };
         let message = build_message(&plan);
-        assert!(message.subject.chars().count() <= SUBJECT_MAX_LEN, "subject = {:?}", message.subject);
+        assert!(
+            message.subject.chars().count() <= SUBJECT_MAX_LEN,
+            "subject = {:?}",
+            message.subject
+        );
     }
 
     #[test]
     fn subject_includes_zone_and_rule() {
         let message = build_message(&sample_plan());
-        assert!(message.subject.starts_with("fix(jekko): HLT-001"), "subject = {:?}", message.subject);
+        assert!(
+            message.subject.starts_with("fix(jekko): HLT-001"),
+            "subject = {:?}",
+            message.subject
+        );
     }
 
     #[test]
@@ -244,7 +275,11 @@ mod tests {
             ..sample_plan()
         };
         let message = build_message(&plan);
-        assert!(message.subject.starts_with("fix(jankurai):"), "subject = {:?}", message.subject);
+        assert!(
+            message.subject.starts_with("fix(jankurai):"),
+            "subject = {:?}",
+            message.subject
+        );
     }
 
     #[test]

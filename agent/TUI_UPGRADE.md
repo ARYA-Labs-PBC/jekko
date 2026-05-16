@@ -80,7 +80,6 @@ cd ~/Code/jekko && bun install
 - `packages/desktop/` (stub)
 - `packages/ui/` (empty)
 - `packages/storybook/` (empty)
-- `apps/web/` (stub)
 
 **Rename:** `opencode.json` → `jekko.json`; `$schema` updated to `https://jekko.ai/config.json`.
 
@@ -329,7 +328,7 @@ Returns only encrypted jnoccio-fusion docs + one factual paper reference + the g
 
 ```bash
 # Dead web package refs
-grep -rn "packages/app\|packages/web\|packages/console\|packages/desktop\|packages/ui\|packages/storybook\|apps/web" \
+grep -rn "packages/app\|packages/console\|packages/desktop\|packages/ui\|packages/storybook" \
   --include='*.{json,ts,tsx,toml}' . | grep -v node_modules
 ```
 Returns only `agent/audit-policy.toml` audit history + generated `repo-score.json` files. All intentionally untouched.
@@ -484,7 +483,6 @@ packages/console/    (stub)
 packages/desktop/    (stub)
 packages/ui/         (empty stub)
 packages/storybook/  (empty stub)
-apps/web/            (stub)
 ```
 
 ---

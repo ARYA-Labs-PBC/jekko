@@ -1,5 +1,7 @@
 # ZYAL — The Operating Contract for Autonomous Agents
 
+> **Historical**: This document references the pre-Rust-port stack (Bun/OpenTUI/Solid/etc.). The current implementation is Rust-native (Ratatui/Crossterm). See [docs/archive/historical/](archive/historical/) for the migration record.
+
 > **Moonshot**: Make autonomous multi-hour, multi-agent software engineering sessions as safe, observable, and reproducible as a CI pipeline — then make them better than any human team.
 
 <!--

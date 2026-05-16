@@ -47,7 +47,10 @@ pub fn schedule(findings: &[Finding]) -> Vec<Wave> {
     let caps: Vec<Finding> = findings.iter().filter(|f| f.is_cap()).cloned().collect();
     if !caps.is_empty() {
         waves.push(Wave {
-            batches: caps.into_iter().map(|f| Batch { findings: vec![f] }).collect(),
+            batches: caps
+                .into_iter()
+                .map(|f| Batch { findings: vec![f] })
+                .collect(),
         });
     }
 
@@ -62,7 +65,10 @@ pub fn schedule(findings: &[Finding]) -> Vec<Wave> {
             // Defensive: never an infinite loop. Promote leftovers to a final
             // wave of singletons.
             waves.push(Wave {
-                batches: leftover.into_iter().map(|f| Batch { findings: vec![f] }).collect(),
+                batches: leftover
+                    .into_iter()
+                    .map(|f| Batch { findings: vec![f] })
+                    .collect(),
             });
             break;
         }
@@ -87,7 +93,9 @@ fn pack_one_wave(findings: Vec<Finding>) -> (Wave, Vec<Finding>) {
             for p in &finding.paths {
                 claimed_paths.insert(p.clone(), batch_index);
             }
-            batches.push(Batch { findings: vec![finding] });
+            batches.push(Batch {
+                findings: vec![finding],
+            });
         }
     }
 

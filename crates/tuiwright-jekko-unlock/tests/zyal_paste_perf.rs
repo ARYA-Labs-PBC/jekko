@@ -1,11 +1,10 @@
 //! Perf regression guard for ZYAL paste detection.
 //!
 //! Pastes a large real ZYAL example (~170 lines, ~600 highlighter tokens) and
-//! asserts the `✓ ZYAL` indicator surfaces in well under one second. The
-//! original implementation took multiple seconds because opentui's
-//! ExtmarksController.updateHighlights rebuilds every highlight per
-//! create()/delete() call — O(N² × text). This test fails loudly if that
-//! quadratic behaviour creeps back.
+//! asserts the `✓ ZYAL` indicator surfaces in well under one second. A
+//! previous implementation took multiple seconds by rebuilding every
+//! highlight per create()/delete() call: O(N^2 x text). This test fails loudly
+//! if that quadratic behaviour creeps back.
 
 use std::time::{Duration, Instant};
 
@@ -13,7 +12,7 @@ use anyhow::{anyhow, Context, Result};
 use serial_test::serial;
 
 mod test_helpers;
-use test_helpers::{ensure_artifact_dir, jekko_bin, prepare_workspace, spawn_jekko, repo_root};
+use test_helpers::{ensure_artifact_dir, jekko_bin, prepare_workspace, repo_root, spawn_jekko};
 
 const RECOGNITION_BUDGET: Duration = Duration::from_millis(1500);
 
@@ -41,8 +40,9 @@ fn large_zyal_paste_recognised_under_one_and_a_half_seconds() -> Result<()> {
     page.wait_for_text("ctrl+p commands", Duration::from_secs(30))
         .context("jekko prompt UI did not boot")?;
 
-    let zyal = std::fs::read_to_string(repo_root().join("docs/ZYAL/examples/12-jankurai-min-loop.zyal"))
-        .context("read 12-jankurai-min-loop example")?;
+    let zyal =
+        std::fs::read_to_string(repo_root().join("docs/ZYAL/examples/12-jankurai-min-loop.zyal"))
+            .context("read 12-jankurai-min-loop example")?;
     if zyal.len() < 5000 {
         return Err(anyhow!(
             "perf test expects a sizeable example; got {} bytes",

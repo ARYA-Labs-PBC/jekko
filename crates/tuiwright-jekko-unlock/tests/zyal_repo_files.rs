@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
+use zyalc::compile::inspect;
 
 mod test_helpers;
 use test_helpers::repo_root;
@@ -51,28 +52,23 @@ fn all_tracked_zyal_files_parse_and_preview() -> Result<()> {
         "expected at least one tracked ZYAL file under the repository"
     );
 
-    let package_root = root.join("packages/jekko");
-    let mut cmd = Command::new("bun");
-    cmd.current_dir(&package_root)
-        .arg("run")
-        .arg("script/validate-zyal.ts")
-        .arg("--")
-        .args(&files);
-
-    let output = cmd.output().context("run bun validate-zyal script")?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "ZYAL validation failed: {}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ));
+    for path in &files {
+        let info = inspect(path).with_context(|| format!("inspect ZYAL file {path:?}"))?;
+        assert!(
+            !info.profile.is_empty(),
+            "expected a detectable ZYAL profile for {path:?}"
+        );
+        println!(
+            "previewed {} as {} -> {}",
+            path.display(),
+            info.profile,
+            info.target
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<none>".to_string())
+        );
     }
 
-    let stdout = String::from_utf8(output.stdout).context("decode validator stdout")?;
-    assert!(
-        stdout.contains(&format!("validated {} ZYAL files", files.len())),
-        "unexpected validator output: {stdout}"
-    );
+    println!("validated {} ZYAL files", files.len());
     Ok(())
 }

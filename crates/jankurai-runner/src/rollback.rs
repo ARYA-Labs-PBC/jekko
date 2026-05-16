@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_ATTEMPTS: u32 = 3;
@@ -46,7 +46,10 @@ pub fn rollback_worktree(plan: &RollbackPlan) -> Result<()> {
         .status()
         .with_context(|| format!("git reset --hard HEAD in {}", plan.worktree.display()))?;
     if !reset.success() {
-        return Err(anyhow!("git reset --hard HEAD returned {}", reset.code().unwrap_or(-1)));
+        return Err(anyhow!(
+            "git reset --hard HEAD returned {}",
+            reset.code().unwrap_or(-1)
+        ));
     }
     if plan.declared_paths.is_empty() {
         // Nothing else to clean. We don't run `git clean` globally — that's
@@ -63,7 +66,10 @@ pub fn rollback_worktree(plan: &RollbackPlan) -> Result<()> {
         .status()
         .with_context(|| format!("git clean in {}", plan.worktree.display()))?;
     if !status.success() {
-        return Err(anyhow!("git clean returned {}", status.code().unwrap_or(-1)));
+        return Err(anyhow!(
+            "git clean returned {}",
+            status.code().unwrap_or(-1)
+        ));
     }
     Ok(())
 }
@@ -98,12 +104,32 @@ mod tests {
     use tempfile::tempdir;
 
     fn init_git(repo: &Path) {
-        Command::new("git").args(["init", "-q"]).current_dir(repo).status().unwrap();
-        Command::new("git").args(["config", "user.email", "test@example.com"]).current_dir(repo).status().unwrap();
-        Command::new("git").args(["config", "user.name", "Test"]).current_dir(repo).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(repo)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(repo)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo)
+            .status()
+            .unwrap();
         fs::write(repo.join("seed.txt"), "seed").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(repo).status().unwrap();
-        Command::new("git").args(["commit", "-q", "-m", "seed"]).current_dir(repo).status().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-q", "-m", "seed"])
+            .current_dir(repo)
+            .status()
+            .unwrap();
     }
 
     #[test]
@@ -132,8 +158,14 @@ mod tests {
             declared_paths: vec![PathBuf::from("declared.txt")],
         })
         .unwrap();
-        assert!(!dir.path().join("declared.txt").exists(), "declared file should be cleaned");
-        assert!(dir.path().join("shared.txt").exists(), "shared file must survive scoped clean");
+        assert!(
+            !dir.path().join("declared.txt").exists(),
+            "declared file should be cleaned"
+        );
+        assert!(
+            dir.path().join("shared.txt").exists(),
+            "shared file must survive scoped clean"
+        );
     }
 
     #[test]
@@ -149,7 +181,10 @@ mod tests {
         .unwrap();
         let seed_after = fs::read_to_string(dir.path().join("seed.txt")).unwrap();
         assert_eq!(seed_after, "seed");
-        assert!(dir.path().join("untracked.txt").exists(), "no declared paths -> no clean");
+        assert!(
+            dir.path().join("untracked.txt").exists(),
+            "no declared paths -> no clean"
+        );
     }
 
     #[test]

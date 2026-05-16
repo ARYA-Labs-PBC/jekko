@@ -646,27 +646,25 @@ Summary:
  - Touched files:
  - Proof receipt:
 
-### JK-0085 - [high] HLT-013-RENDERED-UX-GAP - apps/web
-- Status: In Progress
+### JK-0085 - [high] HLT-013-RENDERED-UX-GAP - crates/tuiwright-jekko-unlock
+- Status: Done
 - Assignee: jekko
 - Started: 2026-05-07T11:20:00Z
-- Note: stale claim by jekko since 2026-05-07T11:20:00Z; left for owner
-- Completed:
+- Completed: 2026-05-15T00:00:00Z
 - Source packet: `85`
 - Fingerprint: `sha256:571d35c2e730a393b782bac14825b197c0543920bb21967079d264ac602ea5b1`
-- Check: `HLT-013-RENDERED-UX-GAP:ux-qa`
-- Owner: `apps`
-- Lane: `web`
+- Check: `HLT-013-RENDERED-UX-GAP:tui-ci`
+- Owner: `crates/tuiwright-jekko-unlock`
+- Lane: `tui-ci`
 - Risk: `high`
 - Eligibility: `human-required`
 - Human review required: `yes`
-- Scope path: `apps/web`
-- Problem: web surface lacks layered rendered UX QA evidence
-- Why: web surface lacks layered rendered UX QA evidence
-- Instructions: add rendered UX proof, state coverage, and accessibility receipts
+- Scope path: `crates/tuiwright-jekko-unlock`
+- Problem: rendered-UX QA evidence is required for the jekko TUI surface
+- Why: jekko TUI surface needs PTY-driven baseline matrix + dialog interaction proof
+- Instructions: register `crates/tuiwright-jekko-unlock` as the rendered-UX lane and run `just tui-ci`
 - Allowed paths:
-- `apps/`
-- `apps/web`
+- `crates/tuiwright-jekko-unlock`
 - Forbidden paths:
 - `reference/`
 - `target/`
@@ -10915,26 +10913,25 @@ Summary:
 - Touched files:
 - Proof receipt:
 
-### JK-0765 - [high] HLT-013-RENDERED-UX-GAP - apps/web
-- Status: Pending
-- Assignee: unassigned
-- Started:
-- Completed:
+### JK-0765 - [high] HLT-013-RENDERED-UX-GAP - crates/tuiwright-jekko-unlock
+- Status: Done
+- Assignee: jekko
+- Started: 2026-05-15T00:00:00Z
+- Completed: 2026-05-15T00:00:00Z
 - Source packet: `76`
 - Fingerprint: `sha256:571d35c2e730a393b782bac14825b197c0543920bb21967079d264ac602ea5b1`
-- Check: `HLT-013-RENDERED-UX-GAP:ux-qa`
-- Owner: `apps`
-- Lane: `web`
+- Check: `HLT-013-RENDERED-UX-GAP:tui-ci`
+- Owner: `crates/tuiwright-jekko-unlock`
+- Lane: `tui-ci`
 - Risk: `high`
 - Eligibility: `human-required`
 - Human review required: `yes`
-- Scope path: `apps/web`
-- Problem: web surface lacks layered rendered UX QA evidence
-- Why: web surface lacks layered rendered UX QA evidence
-- Instructions: add rendered UX proof, state coverage, and accessibility receipts
+- Scope path: `crates/tuiwright-jekko-unlock`
+- Problem: rendered-UX QA evidence is required for the jekko TUI surface
+- Why: jekko TUI surface needs PTY-driven baseline matrix + dialog interaction proof
+- Instructions: register `crates/tuiwright-jekko-unlock` as the rendered-UX lane and run `just tui-ci`
 - Allowed paths:
-- `apps/`
-- `apps/web`
+- `crates/tuiwright-jekko-unlock`
 - Forbidden paths:
 - `reference/`
 - `target/`

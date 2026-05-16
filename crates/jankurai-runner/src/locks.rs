@@ -74,7 +74,8 @@ impl Drop for LockGuard {
 impl FileLockMap {
     pub fn new(repo_root: &Path) -> Result<Self> {
         let locks_root = repo_root.join(".zyal/locks");
-        fs::create_dir_all(&locks_root).with_context(|| format!("mkdir -p {}", locks_root.display()))?;
+        fs::create_dir_all(&locks_root)
+            .with_context(|| format!("mkdir -p {}", locks_root.display()))?;
         let map = Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
             locks_root,
@@ -240,7 +241,9 @@ mod tests {
     fn acquires_disjoint_paths() {
         let dir = tempdir().unwrap();
         let map = FileLockMap::new(dir.path()).unwrap();
-        let outcome = map.try_lock_all(&["src/a.rs".into(), "src/b.rs".into()]).unwrap();
+        let outcome = map
+            .try_lock_all(&["src/a.rs".into(), "src/b.rs".into()])
+            .unwrap();
         match outcome {
             LockAcquireOutcome::Acquired(g) => assert_eq!(g.paths().len(), 2),
             LockAcquireOutcome::Conflict { .. } => panic!("expected acquired"),
@@ -280,7 +283,9 @@ mod tests {
             .try_lock_all(&["a".into(), "a".into(), "b".into()])
             .unwrap();
         match outcome {
-            LockAcquireOutcome::Acquired(g) => assert_eq!(g.paths(), &["a".to_string(), "b".to_string()]),
+            LockAcquireOutcome::Acquired(g) => {
+                assert_eq!(g.paths(), &["a".to_string(), "b".to_string()])
+            }
             _ => panic!("expected acquired"),
         }
     }

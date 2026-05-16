@@ -6,18 +6,38 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use jankurai_runner::commit::{CommitPlan, build_message, assert_refspec_scope};
-use jankurai_runner::rollback::{RollbackPlan, rollback_worktree};
+use jankurai_runner::commit::{assert_refspec_scope, build_message, CommitPlan};
+use jankurai_runner::rollback::{rollback_worktree, RollbackPlan};
 use jankurai_runner::worktree::WorktreeManager;
 use tempfile::tempdir;
 
 fn init_repo(repo: &Path) {
-    Command::new("git").args(["init", "-q"]).current_dir(repo).status().unwrap();
-    Command::new("git").args(["config", "user.email", "test@example.com"]).current_dir(repo).status().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(repo).status().unwrap();
+    Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(repo)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(repo)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(repo)
+        .status()
+        .unwrap();
     fs::write(repo.join("README.md"), "seed").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(repo).status().unwrap();
-    Command::new("git").args(["commit", "-q", "-m", "seed"]).current_dir(repo).status().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(repo)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-q", "-m", "seed"])
+        .current_dir(repo)
+        .status()
+        .unwrap();
 }
 
 #[test]
@@ -29,7 +49,10 @@ fn create_worker_branch_then_commit_then_rollback() {
     let manager = WorktreeManager::new(repo.clone(), "run-int-1", Some("zyal")).unwrap();
     let handle = manager.create("w-01", "HLT-001", "HEAD").unwrap();
     assert!(handle.path.exists(), "worktree dir not created");
-    assert!(handle.branch.starts_with("zyal/"), "branch outside zyal/* namespace");
+    assert!(
+        handle.branch.starts_with("zyal/"),
+        "branch outside zyal/* namespace"
+    );
 
     // Worker writes one declared file inside the worktree.
     let declared_rel = "src/a.rs";
@@ -68,8 +91,14 @@ fn create_worker_branch_then_commit_then_rollback() {
     })
     .unwrap();
     let shared_after = fs::read_to_string(handle.path.join("README.md")).unwrap();
-    assert_eq!(shared_before, shared_after, "shared file must survive scoped clean");
-    assert!(!handle.path.join(declared_rel).exists(), "declared file should be cleaned");
+    assert_eq!(
+        shared_before, shared_after,
+        "shared file must survive scoped clean"
+    );
+    assert!(
+        !handle.path.join(declared_rel).exists(),
+        "declared file should be cleaned"
+    );
 
     // GC + removal returns the worktree slot for reuse.
     manager.remove(&handle).unwrap();

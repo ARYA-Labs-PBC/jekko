@@ -12,6 +12,7 @@ const SCREEN_ROWS: u16 = 60;
 const ARTIFACT_DIR: &str = "target/tuiwright-jekko";
 const OFFLINE_MODEL: &str = "jekko/big-pickle";
 const OFFLINE_API_KEY: &str = "tuiwright-offline-fake-key";
+const MOCK_FIXTURE_DIR: &str = "fixtures/tui-mock-responses";
 
 pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -35,6 +36,20 @@ pub fn ensure_artifact_dir() -> Result<PathBuf> {
     let dir = repo_root().join(ARTIFACT_DIR);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {dir:?}"))?;
     Ok(dir)
+}
+
+pub fn mock_llm_fixture_path(name: &str) -> PathBuf {
+    repo_root()
+        .join("crates")
+        .join("tuiwright-jekko-unlock")
+        .join("tests")
+        .join(MOCK_FIXTURE_DIR)
+        .join(name)
+}
+
+pub fn mock_llm_fixture_json(name: &str) -> Result<String> {
+    let path = mock_llm_fixture_path(name);
+    std::fs::read_to_string(&path).with_context(|| format!("read mock fixture {path:?}"))
 }
 
 fn write_offline_config(config_dir: &std::path::Path) -> Result<()> {
@@ -88,13 +103,13 @@ pub fn prepare_workspace_no_config(
     Ok((parent, project, xdg_data, xdg_cache, xdg_config, xdg_state))
 }
 
-pub fn spawn_jekko(parent: &TempDir, jekko: &PathBuf) -> Result<Page> {
+pub fn spawn_jekko(parent: &TempDir, jekko: &std::path::Path) -> Result<Page> {
     spawn_jekko_with_size(parent, jekko, SCREEN_COLS, SCREEN_ROWS, "default")
 }
 
 pub fn spawn_jekko_with_size(
     parent: &TempDir,
-    jekko: &PathBuf,
+    jekko: &std::path::Path,
     cols: u16,
     rows: u16,
     trace_name: &str,
@@ -104,7 +119,7 @@ pub fn spawn_jekko_with_size(
 
 pub fn spawn_jekko_with_size_env(
     parent: &TempDir,
-    jekko: &PathBuf,
+    jekko: &std::path::Path,
     cols: u16,
     rows: u16,
     trace_name: &str,

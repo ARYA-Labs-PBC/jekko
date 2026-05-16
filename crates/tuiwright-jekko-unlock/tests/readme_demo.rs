@@ -50,7 +50,14 @@ fn secret_project_name() -> &'static str {
     "project"
 }
 
-fn start_serve(jekko: &Path, project: &Path, xdg_data: &Path, xdg_cache: &Path, xdg_config: &Path, xdg_state: &Path) -> Result<Server> {
+fn start_serve(
+    jekko: &Path,
+    project: &Path,
+    xdg_data: &Path,
+    xdg_cache: &Path,
+    xdg_config: &Path,
+    xdg_state: &Path,
+) -> Result<Server> {
     let mut cmd = Command::new(jekko);
     cmd.arg("serve")
         .arg("--port")
@@ -79,12 +86,12 @@ fn start_serve(jekko: &Path, project: &Path, xdg_data: &Path, xdg_cache: &Path, 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let tx_out = tx.clone();
     std::thread::spawn(move || {
-        for line in stdout_reader.lines().flatten() {
+        for line in stdout_reader.lines().map_while(Result::ok) {
             let _ = tx_out.send(line);
         }
     });
     std::thread::spawn(move || {
-        for line in stderr_reader.lines().flatten() {
+        for line in stderr_reader.lines().map_while(Result::ok) {
             let _ = tx.send(line);
         }
     });
@@ -101,7 +108,10 @@ fn start_serve(jekko: &Path, project: &Path, xdg_data: &Path, xdg_cache: &Path, 
                 if let Some(rest) = line.split("listening on ").nth(1) {
                     let url = rest.trim().trim_end_matches('.').to_string();
                     if url.starts_with("http://") {
-                        return Ok(Server { child, base_url: url });
+                        return Ok(Server {
+                            child,
+                            base_url: url,
+                        });
                     }
                 }
             }
@@ -167,7 +177,14 @@ fn spawn_session_tui(
         .size(SCREEN_COLS, SCREEN_ROWS)
         .env("TERM", "xterm-256color")
         .env("COLORTERM", "truecolor")
-        .env("HOME", project.parent().expect("workspace parent").to_string_lossy().as_ref())
+        .env(
+            "HOME",
+            project
+                .parent()
+                .expect("workspace parent")
+                .to_string_lossy()
+                .as_ref(),
+        )
         .env("JEKKO_DISABLE_AUTOUPDATE", "1")
         .env("JEKKO_DISABLE_LSP_DOWNLOAD", "1")
         .env("JEKKO_DISABLE_MODELS_FETCH", "1")
@@ -196,8 +213,14 @@ fn copy_frame(src: &Path, dst: &Path) -> Result<()> {
 
 fn copy_cached_demo_frames(artifact_dir: &Path) -> Result<()> {
     let fixtures = fixture_dir();
-    copy_frame(&fixtures.join("01-boot.png"), &artifact_dir.join("00-preboot.png"))?;
-    copy_frame(&fixtures.join("01-boot.png"), &artifact_dir.join("01-boot.png"))?;
+    copy_frame(
+        &fixtures.join("01-boot.png"),
+        &artifact_dir.join("00-preboot.png"),
+    )?;
+    copy_frame(
+        &fixtures.join("01-boot.png"),
+        &artifact_dir.join("01-boot.png"),
+    )?;
     copy_frame(
         &fixtures.join("zyal-03-panel.png"),
         &artifact_dir.join("02-run-card.png"),
@@ -245,14 +268,27 @@ fn readme_demo_records_zyal_research_flow() -> Result<()> {
     std::fs::create_dir_all(&artifact_dir)?;
 
     let record_live = || -> Result<()> {
-        let server = start_serve(&jekko, &project, &xdg_data, &xdg_cache, &xdg_config, &xdg_state)
-            .context("start jekko serve")?;
+        let server = start_serve(
+            &jekko,
+            &project,
+            &xdg_data,
+            &xdg_cache,
+            &xdg_config,
+            &xdg_state,
+        )
+        .context("start jekko serve")?;
         let result = (|| -> Result<()> {
             let session_id =
                 create_session(&server.base_url).context("create session via POST /session")?;
 
             let page = spawn_session_tui(
-                &jekko, &project, &xdg_data, &xdg_cache, &xdg_config, &xdg_state, &session_id,
+                &jekko,
+                &project,
+                &xdg_data,
+                &xdg_cache,
+                &xdg_config,
+                &xdg_state,
+                &session_id,
             )
             .with_context(|| format!("spawn jekko -s {session_id}"))?;
 

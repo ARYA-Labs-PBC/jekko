@@ -7,13 +7,25 @@ use std::process::Command;
 use std::time::Duration;
 
 use jankurai_runner::bootstrap_check;
-use jankurai_runner::runner::{RunnerConfig, run_tick, random_run_id};
+use jankurai_runner::runner::{random_run_id, run_tick, RunnerConfig};
 use tempfile::tempdir;
 
 fn bootstrap_repo(dir: &std::path::Path) {
-    Command::new("git").args(["init", "-q"]).current_dir(dir).status().unwrap();
-    Command::new("git").args(["config", "user.email", "test@example.com"]).current_dir(dir).status().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(dir).status().unwrap();
+    Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
     for file in bootstrap_check::CANONICAL_FILES {
         let abs = dir.join(file.rel);
         if let Some(parent) = abs.parent() {
@@ -35,8 +47,16 @@ advisory_on = ["medium", "low"]
         r#"{"score": 95.0, "findings": [], "caps_applied": []}"#,
     )
     .unwrap();
-    Command::new("git").args(["add", "."]).current_dir(dir).status().unwrap();
-    Command::new("git").args(["commit", "-q", "-m", "seed"]).current_dir(dir).status().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-q", "-m", "seed"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
 }
 
 #[tokio::test]

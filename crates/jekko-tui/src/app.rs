@@ -23,7 +23,7 @@ use crate::dialog::{
     CommandEntry, CommandPalette, Dialog, DialogStack, SelectDialog, SelectOption,
 };
 use crate::engagement::EngagementState;
-use crate::feature_plugins::jankurai::{is_jankurai_installed, run_audit, JANKURAI_INSTALL_URL};
+use crate::feature_plugins::jankurai::{is_jankurai_installed, JANKURAI_INSTALL_URL};
 use crate::feature_plugins::jnoccio::{JnoccioConnection, JnoccioPanel, JnoccioSnapshot};
 use crate::feature_plugins::ShellTab;
 use crate::lifecycle::Tty;
@@ -101,6 +101,10 @@ pub struct App {
     /// True while an assistant streaming response is in flight. Used by the
     /// Reasoning pane to show the "streaming" status label and spinner.
     pub is_streaming: bool,
+    /// True while a jankurai audit subprocess is running.
+    pub is_audit_running: bool,
+    /// Monotonic frame counter (~60fps) used to drive activity animations.
+    pub activity_tick: u64,
 }
 
 impl App {
@@ -134,6 +138,8 @@ impl App {
             splash: SplashState::new(),
             engagement: EngagementState::default(),
             is_streaming: false,
+            is_audit_running: false,
+            activity_tick: 0,
         };
         debug_assert!(
             matches!(app.route, Route::Shell),
@@ -250,10 +256,15 @@ impl App {
                 }
             }
             Action::Paste(_) | Action::Chord(_) => {}
-            Action::Tick => {}
+            Action::Tick => {
+                self.activity_tick = self.activity_tick.wrapping_add(1);
+            }
             Action::Runtime(RuntimeEvent::AssistantTextDelta { text }) => {
                 self.is_streaming = true;
-                self.transcript.append_to_last_assistant(&text);
+                // Pre-process the delta to collapse multiple newlines, maximizing y-space
+                let collapsed = text.replace("\n\n", "\n");
+                self.transcript.append_to_last_assistant(&collapsed);
+                self.transcript.collapse_last_assistant_newlines();
             }
             Action::Runtime(RuntimeEvent::ReasoningStarted { .. }) => {
                 self.is_streaming = true;
@@ -367,43 +378,31 @@ impl App {
                         )
                     );
                 } else {
+                    self.is_audit_running = true;
                     self.transcript.push_system(
                         crate::transcript::SystemCard::new(
-                            "Running jankurai audit…",
+                            "Starting jankurai audit...",
                             crate::transcript::SystemKind::Info,
                         )
                     );
-                    run_audit(self.action_tx.clone());
+                    crate::feature_plugins::jankurai::run_audit(self.action_tx.clone());
                 }
             }
             Action::JankuraiAuditLine(line) => {
-                // Update the last system card in-place so the audit progress
-                // shows as a single rolling line instead of flooding the
-                // transcript. If the last entry isn't a system card (unlikely
-                // during an active audit), push a fresh one.
-                use crate::transcript::TranscriptEntry;
-                match self.transcript.entries().last() {
-                    Some(TranscriptEntry::System(_)) => {
-                        self.transcript.replace_last(
-                            TranscriptEntry::System(
-                                crate::transcript::SystemCard::new(
-                                    line,
-                                    crate::transcript::SystemKind::Info,
-                                )
-                            )
-                        );
-                    }
-                    _ => {
-                        self.transcript.push_system(
-                            crate::transcript::SystemCard::new(
-                                line,
-                                crate::transcript::SystemKind::Info,
-                            )
-                        );
-                    }
-                }
+                // Strip internal tags like [smart] and prefix with audit marker
+                let clean_line = line.replace("[smart] ", "");
+                let label = format!("⚡ audit │ {clean_line}");
+                self.transcript.replace_last(
+                    crate::transcript::TranscriptEntry::System(
+                        crate::transcript::SystemCard::new(
+                            label,
+                            crate::transcript::SystemKind::Info,
+                        )
+                    )
+                );
             }
             Action::JankuraiScoreUpdate { success, summary } => {
+                self.is_audit_running = false;
                 if !success {
                     self.transcript.push_system(
                         crate::transcript::SystemCard::new(
@@ -460,7 +459,8 @@ impl App {
                                 .with_model("jnoccio")
                                 .with_pending_now();
                                 self.transcript.push_assistant(placeholder);
-                                chat_bridge::spawn_chat_request(prompt, self.action_tx.clone());
+                                self.jnoccio_panel.record_call();
+                                crate::chat_bridge::spawn_chat_request(prompt, self.action_tx.clone());
                             } else {
                                 // No LLM available — push a static card with
                                 // the findings so the user can act manually.
@@ -757,16 +757,26 @@ impl App {
         // BOTTOM — Composer (prompt wrapped in panel block)
         if layout.composer.height > 0 {
             let char_count = self.prompt.buffer_char_count();
-            let status_label: &str = if self.prompt_focused { "focused" } else { "" };
+            
             let title_right = if char_count > 0 {
                 format!("{char_count} chars")
             } else if self.prompt_focused {
-                status_label.to_string()
+                "focused".to_string()
             } else {
                 String::new()
             };
-            let status_opt = if title_right.is_empty() { None } else { Some(title_right.as_str()) };
-            let block = theme::panel_block("Prompt", status_opt, self.prompt_focused);
+
+            let block = if char_count == 0 && (self.is_streaming || self.is_audit_running) {
+                let mut spans = vec![ratatui::text::Span::raw(" ")];
+                spans.extend(theme::activity_dot_spans(self.activity_tick).spans);
+                spans.push(ratatui::text::Span::raw(" "));
+                theme::panel_block("Prompt", None, self.prompt_focused)
+                    .title_bottom(ratatui::text::Line::from(spans))
+            } else {
+                let status_opt = if title_right.is_empty() { None } else { Some(title_right.as_str()) };
+                theme::panel_block("Prompt", status_opt, self.prompt_focused)
+            };
+
             let inner = block.inner(layout.composer);
             frame.render_widget(block, layout.composer);
             if inner.height > 0 {

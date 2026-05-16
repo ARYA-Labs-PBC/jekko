@@ -41,7 +41,9 @@ fn jekko_binary_reports_version() -> Result<()> {
         return Ok(());
     }
     assert!(
-        output.trim().contains("codex") || output.trim().contains("jekko") || output.trim().contains('.'),
+        output.trim().contains("codex")
+            || output.trim().contains("jekko")
+            || output.trim().contains('.'),
         "unexpected version output: {output:?}"
     );
     Ok(())
@@ -54,7 +56,7 @@ fn jekko_binary_help_is_tui_only() -> Result<()> {
         return Ok(());
     }
     assert!(
-        output.contains("start jekko tui"),
+        output.contains("Launch the interactive TUI"),
         "help output did not expose the default TUI command:\n{output}"
     );
     let command_lines = output

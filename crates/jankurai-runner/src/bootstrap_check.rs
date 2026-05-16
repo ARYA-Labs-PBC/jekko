@@ -16,14 +16,38 @@ pub struct CanonicalFile {
 /// The canonical surface the runner expects. Stays in sync with the TS
 /// `CANONICAL_FILES` constant from PR1.
 pub const CANONICAL_FILES: &[CanonicalFile] = &[
-    CanonicalFile { rel: "agent/JANKURAI_STANDARD.md", required: true },
-    CanonicalFile { rel: "agent/audit-policy.toml", required: true },
-    CanonicalFile { rel: "agent/owner-map.json", required: true },
-    CanonicalFile { rel: "agent/test-map.json", required: true },
-    CanonicalFile { rel: "agent/proof-lanes.toml", required: true },
-    CanonicalFile { rel: "agent/boundaries.toml", required: true },
-    CanonicalFile { rel: "agent/tool-adoption.toml", required: false },
-    CanonicalFile { rel: ".jekko/agent/generated-zones.toml", required: false },
+    CanonicalFile {
+        rel: "agent/JANKURAI_STANDARD.md",
+        required: true,
+    },
+    CanonicalFile {
+        rel: "agent/audit-policy.toml",
+        required: true,
+    },
+    CanonicalFile {
+        rel: "agent/owner-map.json",
+        required: true,
+    },
+    CanonicalFile {
+        rel: "agent/test-map.json",
+        required: true,
+    },
+    CanonicalFile {
+        rel: "agent/proof-lanes.toml",
+        required: true,
+    },
+    CanonicalFile {
+        rel: "agent/boundaries.toml",
+        required: true,
+    },
+    CanonicalFile {
+        rel: "agent/tool-adoption.toml",
+        required: false,
+    },
+    CanonicalFile {
+        rel: ".jekko/agent/generated-zones.toml",
+        required: false,
+    },
 ];
 
 #[derive(Debug, Clone)]
@@ -100,7 +124,9 @@ pub fn audit_policy(path: &Path) -> PolicyAudit {
             };
         }
     };
-    let has_min_score = text.lines().any(|line| line.trim_start().starts_with("min_score"));
+    let has_min_score = text
+        .lines()
+        .any(|line| line.trim_start().starts_with("min_score"));
     let fail_on = extract_string_array(&text, "fail_on")
         .into_iter()
         .map(|s| s.to_ascii_lowercase())

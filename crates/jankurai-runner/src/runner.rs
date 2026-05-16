@@ -18,12 +18,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde_json::json;
 
 use crate::bootstrap_check;
-use crate::classifier::{ClassifyResult, classify};
-use crate::dag::{Wave, schedule};
+use crate::classifier::{classify, ClassifyResult};
+use crate::dag::{schedule, Wave};
 use crate::events::{EventKind, EventSink};
 use crate::receipts::ReceiptsStore;
 
@@ -132,8 +132,8 @@ pub async fn run_tick(config: &RunnerConfig, iteration: u64) -> Result<TickRepor
     let waves = schedule(&classify.findings);
 
     let mut events_emitted = 1usize; // RunStarted on iteration 1 counted already
-    // Persist a finding snapshot per tick so the operator can replay
-    // classifications offline.
+                                     // Persist a finding snapshot per tick so the operator can replay
+                                     // classifications offline.
     for finding in &classify.findings {
         receipts.record_finding(
             &config.run_id,
@@ -210,7 +210,10 @@ fn run_jankurai_audit(repo: &std::path::Path) -> Result<()> {
         .status()
         .context("spawn jankurai audit")?;
     if !status.success() {
-        return Err(anyhow!("jankurai audit exited with {}", status.code().unwrap_or(-1)));
+        return Err(anyhow!(
+            "jankurai audit exited with {}",
+            status.code().unwrap_or(-1)
+        ));
     }
     Ok(())
 }
@@ -238,9 +241,5 @@ pub fn random_run_id() -> String {
     // Six hex chars derived from the nano portion give us a low-collision
     // suffix without pulling rand. Two runs started in the same nanosecond
     // would still collide, but that is fine for human-scale operations.
-    format!(
-        "{:08x}-{:06x}",
-        secs as u32,
-        nanos & 0x00ff_ffff
-    )
+    format!("{:08x}-{:06x}", secs as u32, nanos & 0x00ff_ffff)
 }

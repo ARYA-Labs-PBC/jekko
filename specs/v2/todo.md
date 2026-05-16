@@ -1,5 +1,7 @@
 # TODO
 
+> **Historical**: This document references the pre-Rust-port stack (Bun/OpenTUI/Solid/etc.). The current implementation is Rust-native (Ratatui/Crossterm). See [docs/archive/historical/](../../docs/archive/historical/) for the migration record.
+
 ok we need to work towards a launch of v2 so we can get out of this rebuild phase
 
 ## Kill Hono - Kit

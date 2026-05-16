@@ -13,8 +13,8 @@
 //!   6. Assert `✓ ZYAL` (footer detection) **and** `∞ ZYAL MODE` (sidebar
 //!      panel) surface within a few seconds.
 //!
-//! Skipped only when `JEKKO_BIN` is unset — bun source-run is unreliable for
-//! the headless serve flow because the dev server expects packaged assets.
+//! Skipped only when `JEKKO_BIN` is unset; the test must drive a built host
+//! binary so the headless server and TUI use the same isolated store.
 
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -123,7 +123,7 @@ impl Server {
     }
 }
 
-fn start_serve(jekko: &PathBuf, ws: &Workspace) -> Result<Server> {
+fn start_serve(jekko: &std::path::Path, ws: &Workspace) -> Result<Server> {
     let mut cmd = Command::new(jekko);
     cmd.arg("serve")
         .arg("--port")
@@ -166,13 +166,13 @@ fn start_serve(jekko: &PathBuf, ws: &Workspace) -> Result<Server> {
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let tx_out = tx.clone();
     std::thread::spawn(move || {
-        for line in stdout_reader.lines().flatten() {
+        for line in stdout_reader.lines().map_while(Result::ok) {
             let _ = tx_out.send(line);
         }
     });
     let tx_err = tx.clone();
     std::thread::spawn(move || {
-        for line in stderr_reader.lines().flatten() {
+        for line in stderr_reader.lines().map_while(Result::ok) {
             let _ = tx_err.send(line);
         }
     });
@@ -251,7 +251,7 @@ fn extract_session_id_round_trips_common_shapes() {
     }
 }
 
-fn spawn_session_tui(jekko: &PathBuf, ws: &Workspace, session_id: &str) -> Result<Page> {
+fn spawn_session_tui(jekko: &std::path::Path, ws: &Workspace, session_id: &str) -> Result<Page> {
     let mut cfg = SpawnConfig::new(jekko.to_string_lossy().as_ref())
         .arg("-s")
         .arg(session_id)

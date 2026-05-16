@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 
 #[derive(Debug, Clone)]
 pub struct WorktreeHandle {
@@ -39,7 +39,12 @@ impl WorktreeManager {
         })
     }
 
-    pub fn create(&self, worker_id: &str, finding_id: &str, base_branch: &str) -> Result<WorktreeHandle> {
+    pub fn create(
+        &self,
+        worker_id: &str,
+        finding_id: &str,
+        base_branch: &str,
+    ) -> Result<WorktreeHandle> {
         let path = self.worktrees_root.join(worker_id);
         if path.exists() {
             return Err(anyhow!("worktree already exists at {}", path.display()));
@@ -47,7 +52,10 @@ impl WorktreeManager {
         let branch = format!(
             "{}/{}/{}/{}",
             self.branch_prefix,
-            self.worktrees_root.file_name().and_then(|s| s.to_str()).unwrap_or("run"),
+            self.worktrees_root
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("run"),
             worker_id,
             sanitize_branch_segment(finding_id),
         );
@@ -174,7 +182,13 @@ mod tests {
 
     #[test]
     fn sanitizes_branch_segment() {
-        assert_eq!(sanitize_branch_segment("HLT-001/dead marker"), "HLT-001-dead-marker");
-        assert_eq!(sanitize_branch_segment("cap:no-security-lane"), "cap-no-security-lane");
+        assert_eq!(
+            sanitize_branch_segment("HLT-001/dead marker"),
+            "HLT-001-dead-marker"
+        );
+        assert_eq!(
+            sanitize_branch_segment("cap:no-security-lane"),
+            "cap-no-security-lane"
+        );
     }
 }

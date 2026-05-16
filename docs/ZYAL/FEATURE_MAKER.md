@@ -1,5 +1,7 @@
 # Feature Maker Guide
 
+> **Historical**: This document references the pre-Rust-port stack (Bun/OpenTUI/Solid/etc.). The current implementation is Rust-native (Ratatui/Crossterm). See [docs/archive/historical/](../archive/historical/) for the migration record.
+
 Use the feature-maker runbooks when the goal is to recommend, implement, and
 prove one feature at a time from repo evidence.
 

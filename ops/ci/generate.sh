@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-bun ./script/generate.ts
+rtk cargo run -p xtask -- schema
 
 if [ -z "$(git status --porcelain)" ]; then
   printf '%s\n' 'No changes to commit'

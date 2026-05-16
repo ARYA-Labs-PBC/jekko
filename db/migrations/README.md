@@ -1,5 +1,7 @@
 # Migrations
 
+> **Historical**: This document references the pre-Rust-port stack (Bun/OpenTUI/Solid/etc.). The current implementation is Rust-native (Ratatui/Crossterm). See [docs/archive/historical/](../../docs/archive/historical/) for the migration record.
+
 Add versioned SQL migrations here.
 
 Guidance:

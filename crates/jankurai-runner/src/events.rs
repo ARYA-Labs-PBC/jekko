@@ -49,8 +49,7 @@ impl EventSink {
     pub fn open(repo_root: &Path, run_id: &str) -> Result<Self> {
         let path = repo_root.join(EVENT_FILE_REL);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir -p {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
         }
         Ok(Self {
             path,
@@ -97,7 +96,11 @@ fn now_epoch_secs() -> u64 {
 }
 
 fn truncate_for_error(line: &str) -> &str {
-    let cap = line.char_indices().nth(120).map(|(i, _)| i).unwrap_or(line.len());
+    let cap = line
+        .char_indices()
+        .nth(120)
+        .map(|(i, _)| i)
+        .unwrap_or(line.len());
     &line[..cap]
 }
 
@@ -111,8 +114,10 @@ mod tests {
     fn emits_one_line_per_event() {
         let dir = tempdir().unwrap();
         let sink = EventSink::open(dir.path(), "run-1").unwrap();
-        sink.emit(EventKind::RunStarted, json!({"pool_size": 4})).unwrap();
-        sink.emit(EventKind::WorkerStarted, json!({"worker": "w-01"})).unwrap();
+        sink.emit(EventKind::RunStarted, json!({"pool_size": 4}))
+            .unwrap();
+        sink.emit(EventKind::WorkerStarted, json!({"worker": "w-01"}))
+            .unwrap();
         let text = fs::read_to_string(sink.path()).unwrap();
         assert_eq!(text.lines().count(), 2);
         assert!(text.contains("run_started"));
@@ -124,7 +129,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let sink = EventSink::open(dir.path(), "run-1").unwrap();
         let huge = "x".repeat(600);
-        let err = sink.emit(EventKind::WorkerPass, json!({"blob": huge})).unwrap_err();
+        let err = sink
+            .emit(EventKind::WorkerPass, json!({"blob": huge}))
+            .unwrap_err();
         assert!(err.to_string().contains("exceeds"));
         // and nothing was written
         assert!(!sink.path().exists() || fs::read_to_string(sink.path()).unwrap().is_empty());
@@ -134,7 +141,8 @@ mod tests {
     fn lines_are_parseable_back_into_event() {
         let dir = tempdir().unwrap();
         let sink = EventSink::open(dir.path(), "run-1").unwrap();
-        sink.emit(EventKind::CommitLanded, json!({"sha": "abc123"})).unwrap();
+        sink.emit(EventKind::CommitLanded, json!({"sha": "abc123"}))
+            .unwrap();
         let text = fs::read_to_string(sink.path()).unwrap();
         let event: Event = serde_json::from_str(text.trim()).unwrap();
         assert_eq!(event.kind, EventKind::CommitLanded);

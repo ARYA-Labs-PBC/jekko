@@ -1,5 +1,7 @@
 # ZYAL — The Operating Contract for Autonomous Agents
 
+> **Historical**: This document references the pre-Rust-port stack (Bun/OpenTUI/Solid/etc.). The current implementation is Rust-native (Ratatui/Crossterm). See [docs/archive/historical/](docs/archive/historical/) for the migration record.
+
 > **Moonshot**: Make autonomous multi-hour, multi-agent software engineering sessions as safe, observable, and reproducible as a CI pipeline — then make them better than any human team.
 
 ZYAL is the **host-enforced agent operating contract** embedded in Jekko. It is a strict, declarative YAML runbook that gives the *host* — never the model — total control over the lifecycle of unbounded agentic work. Every daemon run is bounded, observable, durable, evidence-gated, and subject to human approval at critical gates.

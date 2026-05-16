@@ -31,34 +31,44 @@ https://github.com/anomalyco/models.dev
 
 ## Developing Jekko
 
-- Requirements: Bun 1.3+
-- Install dependencies and start the dev server from the repo root:
+- Requirements: the pinned Rust toolchain, Cargo, and `just`. The reproducible
+  shell provides them:
 
   ```bash
-  bun install
-  bun dev
+  nix develop
+  ```
+
+- From the repo root, use the Rust lanes:
+
+  ```bash
+  cargo run -p jekko-cli -- --help
+  cargo run -p jekko-cli -- .
+  cargo run -p jekko-cli -- serve --port 4096
+  just fast
+  just tui-ci
   ```
 
 ### Running against a different directory
 
-By default, `bun dev` runs Jekko in the `packages/jekko` directory. To run it against a different directory or repository:
+By default, `jekko` starts in the current directory. To run it against a
+different directory or repository:
 
 ```bash
-bun dev <directory>
+cargo run -p jekko-cli -- <directory>
 ```
 
 To run Jekko in the root of the jekko repo itself:
 
 ```bash
-bun dev .
+cargo run -p jekko-cli -- .
 ```
 
-### Building a "localcode"
+### Building a Local Binary
 
 To compile a standalone executable:
 
 ```bash
-./packages/jekko/script/build.ts --single
+cargo run -p xtask -- publish-build-script --single
 ```
 
 Then run it with:
@@ -70,27 +80,28 @@ Then run it with:
 Replace `<platform>` with your platform (e.g., `darwin-arm64`, `linux-x64`).
 
 - Core pieces:
-  - `packages/jekko`: Jekko core business logic & server.
-  - `packages/jekko/src/cli/cmd/tui/`: The TUI code, written in SolidJS with [opentui](https://github.com/sst/opentui)
-  - `packages/app`: The shared web UI components, written in SolidJS
-  - `packages/plugin`: Source for `@jekko-ai/plugin`
+  - `crates/jekko-cli`: argument parsing, subcommand dispatch, and the user-facing binary.
+  - `crates/jekko-tui`: the Ratatui + Crossterm terminal UI.
+  - `crates/jekko-server`: the Axum HTTP API and OpenAPI surface.
+  - `crates/jekko-store`: SQLite persistence and embedded migrations.
+  - `crates/jekko-runtime`: agent loop, tools, and session orchestration.
+  - `crates/jekko-plugin-api`: declarative plugin manifest contract.
 
-### Understanding bun dev vs jekko
+### Understanding cargo run vs jekko
 
-During development, `bun dev` is the local equivalent of the built `jekko` command. Both run the same CLI interface:
+During development, `cargo run -p jekko-cli -- ...` is the source-built
+equivalent of the installed `jekko` command. Both run the same CLI interface:
 
 ```bash
 # Development (from project root)
-bun dev --help           # Show all available commands
-bun dev serve            # Start headless API server
-bun dev web              # Start server + open web interface
-bun dev <directory>      # Start TUI in specific directory
+cargo run -p jekko-cli -- --help      # Show all available commands
+cargo run -p jekko-cli -- serve       # Start headless API server
+cargo run -p jekko-cli -- <directory> # Start TUI in a specific directory
 
 # Production
-jekko --help          # Show all available commands
-jekko serve           # Start headless API server
-jekko web             # Start server + open web interface
-jekko <directory>     # Start TUI in specific directory
+jekko --help                          # Show all available commands
+jekko serve                           # Start headless API server
+jekko <directory>                     # Start TUI in a specific directory
 ```
 
 ### Running the API Server
@@ -98,64 +109,39 @@ jekko <directory>     # Start TUI in specific directory
 To start the Jekko headless API server:
 
 ```bash
-bun dev serve
+cargo run -p jekko-cli -- serve
 ```
 
 This starts the headless server on port 4096 by default. You can specify a different port:
 
 ```bash
-bun dev serve --port 8080
+cargo run -p jekko-cli -- serve --port 8080
 ```
 
-### Running the Web App
+### Testing the TUI
 
-To test UI changes during development:
-
-1. **First, start the Jekko server** (see [Running the API Server](#running-the-api-server) section above)
-2. **Then run the web app:**
+TUI changes should be verified through the host-binary PTY lane:
 
 ```bash
-bun run --cwd packages/app dev
+just tui-ci
 ```
 
-This starts a local dev server at http://localhost:5173 (or similar port shown in output). Most UI changes can be tested here, but the server must be running for full functionality.
-
 > [!NOTE]
-> If you make changes to the API or SDK (e.g. `packages/jekko/src/server/server.ts`), run `./script/generate.ts` to regenerate the SDK and related files.
+> If you make changes to the HTTP API or OpenAPI output, run
+> `cargo run -p xtask -- openapi-check --strict` and update the checked snapshot
+> only when the API change is intentional.
 
 Please try to follow the [style guide](./AGENTS.md)
 
 ### Setting up a Debugger
 
-Bun debugging is currently rough around the edges. We hope this guide helps you get set up and avoid some pain points.
+Rust debugging works through standard Cargo targets. For CLI/server work, run
+`cargo run -p jekko-cli -- <subcommand>` under your debugger. For TUI boot and
+PTY issues, build the host binary first and point the harness at it:
 
-The most reliable way to debug Jekko is to run it manually in a terminal via `bun run --inspect=<url> dev ...` and attach
-your debugger via that URL. Other methods can result in breakpoints being mapped incorrectly, at least in VSCode (YMMV).
-
-Caveats:
-
-- If you want to run the Jekko TUI and have breakpoints triggered in the server code, you might need to run `bun dev spawn` instead of
-  the usual `bun dev`. This is because `bun dev` runs the server in a worker thread and breakpoints might not work there.
-- If `spawn` does not work for you, you can debug the server separately:
-  - Debug server: `bun run --inspect=ws://localhost:6499/ --cwd packages/jekko ./src/index.ts serve --port 4096`,
-    then attach TUI with `jekko attach http://localhost:4096`
-  - Debug TUI: `bun run --inspect=ws://localhost:6499/ --cwd packages/jekko --conditions=browser ./src/index.ts`
-
-Other tips and tricks:
-
-- You might want to use `--inspect-wait` or `--inspect-brk` instead of `--inspect`, depending on your workflow
-- Specifying `--inspect=ws://localhost:6499/` on every invocation can be tiresome, you may want to `export BUN_OPTIONS=--inspect=ws://localhost:6499/` instead
-
-#### VSCode Setup
-
-If you use VSCode, you can use our example configurations [.vscode/settings.example.json](.vscode/settings.example.json) and [.vscode/launch.example.json](.vscode/launch.example.json).
-
-Some debug methods that can be problematic:
-
-- Debug configurations with `"request": "launch"` can have breakpoints incorrectly mapped and thus unusable
-- The same problem arises when running Jekko in the VSCode `JavaScript Debug Terminal`
-
-With that said, you may want to try these methods, as they might work for you.
+```bash
+JEKKO_BIN="$(cargo run -p xtask -- host-binary-path)" just tui-startup-smoke
+```
 
 ## Pull Request Expectations
 
@@ -226,7 +212,7 @@ These are not strictly enforced, they are just general guidelines:
 - **Types:** Reach for precise types and avoid `any`.
 - **Variables:** Stick to immutable patterns and avoid `let`.
 - **Naming:** Choose concise single-word identifiers when they remain descriptive.
-- **Runtime APIs:** Use Bun helpers such as `Bun.file()` when they fit the use case.
+- **Runtime APIs:** Prefer the standard library and existing workspace helpers before adding a dependency.
 
 ## Feature Requests
 

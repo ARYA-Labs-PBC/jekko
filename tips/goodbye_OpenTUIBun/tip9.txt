@@ -1,0 +1,4244 @@
+# Jekko OpenTUI/Bun/Vite Removal and Ratatui Migration Engineering Plan
+
+## 1. Executive summary
+
+The uploaded project snapshot is heavily centered on a TypeScript/OpenTUI/Solid TUI stack, with Bun used as package manager, runtime, build tool, test runner, script runner, and plugin dependency installer. The right migration is **not** to shim OpenTUI or gradually wrap TSX components. The clean architecture is a **Rust-first CLI/TUI** built with **Ratatui + Crossterm + Tokio**, with Jekko’s domain data, SDK sync, session rendering, command system, plugin slots, prompts, dialogs, and dashboards ported into Rust modules.
+
+I found **no Vite references** in the uploaded snapshot. Still, the migration should add hard CI guards to prevent Vite from re-entering the repo.
+
+Ratatui is a lightweight Rust TUI crate with widgets/utilities for complex terminal UIs; it expects the app to own state, redraw frames, and use a backend such as Crossterm for input and terminal mode management. That fits this migration well because the current OpenTUI/Solid app already has centralized route, state, keybind, dialog, sync, and plugin concepts that can be converted into an Elm/component-style Rust architecture. Ratatui’s own docs describe component architecture as state + event handling + update + render colocated per component, and its event-handling docs make clear that Ratatui does not capture events itself; the application/backend does that work. ([Docs.rs][1])
+
+The hardest areas are:
+
+1. **Prompt replacement**: current prompt depends on OpenTUI `TextareaRenderable`, extmarks, paste decoding, virtual prompt parts, autocomplete overlays, and `opentui-spinner`.
+2. **Plugin UI replacement**: current external TUI plugins are TSX/Solid/OpenTUI modules. A 100% OpenTUI/Bun removal means these plugin UIs cannot remain as-is.
+3. **Build/CI/Nix/tooling removal**: Bun is present across `package.json`, workflows, `ops/ci`, Nix, scripts, tests, and local plugin install behavior.
+4. **Session transcript fidelity**: assistant/user message renderers, tool renderers, diff blocks, scroll behavior, permissions, questions, footer bands, and responsive sidebars need careful Ratatui equivalents.
+
+The target should be:
+
+```text
+Cargo workspace
+  crates/jekko-cli       # binary entrypoint, CLI args, command dispatch
+  crates/jekko-tui       # Ratatui UI, event loop, screens, widgets
+  crates/jekko-core      # domain models, config, session data, theme parsing
+  crates/jekko-sdk       # HTTP/WebSocket client and event sync
+  crates/jekko-plugin-api # Rust/declarative plugin protocol
+  crates/xtask           # repo automation replacing Bun scripts
+```
+
+If the repo still needs JavaScript packages for SDK publishing, keep those packages, but they must use **Node/npm/pnpm/yarn**, not Bun, and must not be used for the TUI.
+
+---
+
+## 2. Inventory findings from the uploaded snapshot
+
+The uploaded archive looks like a **touchpoint subset**, not necessarily the full repository. I inspected it as the source of truth for Bun/OpenTUI/Vite migration planning.
+
+### 2.1 OpenTUI/Solid touchpoints
+
+Major OpenTUI/Solid dependencies appear in:
+
+```text
+package.json
+packages/jekko/package.json
+packages/jekko/bunfig.toml
+packages/jekko/tsconfig.json
+packages/jekko/script/build.ts
+packages/jekko/script/upgrade-opentui.ts
+packages/jekko/specs/tui-plugins.md
+packages/plugin/src/tui.ts
+packages/jekko/src/util/keybind.ts
+packages/jekko/src/cli/cmd/tui/**/*.tsx
+packages/jekko/test/**/tui/**/*.tsx
+```
+
+OpenTUI imports include:
+
+```text
+@opentui/core
+@opentui/solid
+opentui-spinner
+```
+
+Solid/OpenTUI JSX appears throughout:
+
+```text
+packages/jekko/src/cli/cmd/tui/app.tsx
+packages/jekko/src/cli/cmd/tui/app-view.tsx
+packages/jekko/src/cli/cmd/tui/component/**
+packages/jekko/src/cli/cmd/tui/context/**/*.tsx
+packages/jekko/src/cli/cmd/tui/feature-plugins/**/*.tsx
+packages/jekko/src/cli/cmd/tui/plugin/**/*.tsx
+packages/jekko/src/cli/cmd/tui/routes/**/*.tsx
+packages/jekko/src/cli/cmd/tui/ui/**/*.tsx
+```
+
+### 2.2 Bun touchpoints
+
+Bun is present as:
+
+```text
+root package manager
+runtime
+test runner
+build runner
+CI setup action
+Nix build dependency
+local plugin dependency installer
+TypeScript type target
+Bun-specific imports
+Bun-specific APIs
+```
+
+Major files with Bun references:
+
+```text
+bun.lock
+bunfig.toml
+package.json
+.husky/pre-push
+.github/actions/setup-bun/action.yml
+.github/workflows/*.yml
+ops/ci/*.sh
+nix/jekko.nix
+nix/node_modules.nix
+nix/scripts/canonicalize-node-modules.ts
+nix/scripts/normalize-bun-binaries.ts
+
+packages/jekko/bunfig.toml
+packages/jekko/package.json
+packages/jekko/script/build.ts
+packages/jekko/script/check-migrations.ts
+packages/jekko/script/fix-node-pty.ts
+packages/jekko/script/generate-zyal-spec.ts
+packages/jekko/script/generate.ts
+packages/jekko/script/host-binary-path.ts
+packages/jekko/script/httpapi-exercise.ts
+packages/jekko/script/publish.ts
+packages/jekko/script/schema.ts
+packages/jekko/script/trace-imports.ts
+packages/jekko/script/tui-binary-smoke.ts
+packages/jekko/script/tui-live-prod-init.ts
+packages/jekko/script/tui-live-prod.ts
+packages/jekko/script/upgrade-opentui.ts
+packages/jekko/script/validate-zyal.ts
+
+script/beta.ts
+script/changelog.ts
+script/duplicate-pr.ts
+script/format.ts
+script/generate.ts
+script/github/close-issues.ts
+script/memory-benchmark-seed-commit.ts
+script/publish.ts
+script/raw-changelog.ts
+script/stats.ts
+script/sync-zed.ts
+script/version.ts
+```
+
+Direct Bun APIs/imports inside TUI source include:
+
+```text
+packages/jekko/src/cli/cmd/tui/component/prompt/autocomplete.tsx
+packages/jekko/src/cli/cmd/tui/component/prompt/index.tsx
+packages/jekko/src/cli/cmd/tui/context/editor-zed.ts
+packages/jekko/src/cli/cmd/tui/thread.ts
+packages/jekko/src/cli/cmd/tui/util/sound.ts
+packages/jekko/src/cli/cmd/tui/win32.ts
+```
+
+### 2.3 Vite touchpoints
+
+I found **no Vite references** in the uploaded snapshot:
+
+```text
+vite
+Vite
+@vite
+vite.config
+```
+
+Still add CI guards because the goal is explicit: no Vite.
+
+---
+
+## 3. Migration principles
+
+### 3.1 Do not port TSX one-to-one mechanically
+
+OpenTUI/Solid is declarative and reactive. Ratatui is immediate-mode rendering. The right model is:
+
+```text
+AppState
+  + Event
+  -> Action
+  -> State update
+  -> Draw full frame
+```
+
+Use components for boundaries, but keep the frame render deterministic. Ratatui’s official docs describe a component approach where each component owns state, events, updates, and rendering. ([Ratatui][2])
+
+### 3.2 Use Crossterm as the terminal backend
+
+The current app uses alternate screen, raw keyboard mode, mouse capture, terminal title changes, Ctrl+C handling, and startup/fatal restoration. Crossterm is the canonical backend choice here. Ratatui’s Crossterm backend docs show that apps usually enable raw mode, enter alternate screen, draw with `Terminal`, and restore the terminal on exit. ([Docs.rs][3])
+
+### 3.3 Keep pixel-perfectness through tokens, not CSS-like shims
+
+OpenTUI supports layout semantics like `box`, `flexDirection`, `gap`, `padding`, `border`, `zIndex`, `backgroundColor`, `scrollbox`, and `textarea`. Ratatui does not have CSS/flexbox by default. Recreate the visible UI using:
+
+```text
+ratatui::layout::{Layout, Constraint, Direction, Rect}
+ratatui::widgets::{Block, Paragraph, List, Clear, Gauge, Scrollbar}
+ratatui::text::{Line, Span, Text}
+ratatui::style::{Style, Color, Modifier}
+unicode-width for cell-accurate truncation
+custom helper functions for padding, centering, overlays, and clipped rects
+```
+
+The result can be very close visually, but the implementation should be idiomatic Ratatui, not a homegrown OpenTUI clone.
+
+### 3.4 Split “data services” from “view components”
+
+Current Solid providers should become ordinary Rust state/services:
+
+```text
+ArgsProvider              -> CliArgs / AppConfig
+ExitProvider              -> ExitState / AppAction::Quit
+KVProvider                -> KvStore
+ToastProvider             -> ToastState
+RouteProvider             -> Router
+TuiConfigProvider         -> TuiConfig
+SDKProvider               -> SdkClient
+ProjectProvider           -> ProjectState
+SyncProvider / SyncV2     -> SyncStore + background tasks
+ThemeProvider             -> ThemeStore
+LocalProvider             -> LocalSelectionState
+KeybindProvider           -> Keymap
+PromptStashProvider       -> PromptStash
+DialogProvider            -> DialogStack
+CommandProvider           -> CommandRegistry
+FrecencyProvider          -> FrecencyStore
+PromptHistoryProvider     -> PromptHistory
+EditorContextProvider     -> EditorContext
+```
+
+---
+
+## 4. Recommended target repository structure
+
+Add a Cargo workspace at the root:
+
+```toml
+# Cargo.toml
+[workspace]
+resolver = "2"
+members = [
+  "crates/jekko-cli",
+  "crates/jekko-tui",
+  "crates/jekko-core",
+  "crates/jekko-sdk",
+  "crates/jekko-plugin-api",
+  "crates/xtask"
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/neverhuman/jekko"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+ratatui = "0.29"
+crossterm = "0.28"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+similar = "2"
+directories = "6"
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+tokio-tungstenite = "0.26"
+futures = "0.3"
+```
+
+Use current crate versions at implementation time, but avoid locking architecture to a specific Ratatui minor. `ratatui-textarea` is a good candidate for the prompt because it provides a Ratatui textarea-like widget with multi-line editing, wrapping, selection, mouse scrolling, and multiple textareas. It will still need wrappers for Jekko-specific prompt parts, paste summaries, file mentions, slash commands, ZYAL previews, and autocomplete overlays. ([Docs.rs][4])
+
+Proposed Rust source tree:
+
+```text
+crates/
+  jekko-cli/
+    Cargo.toml
+    src/
+      main.rs
+      cli.rs
+      commands.rs
+      logging.rs
+
+  jekko-core/
+    Cargo.toml
+    src/
+      lib.rs
+      config/
+        mod.rs
+        tui.rs
+        cwd.rs
+      keybind/
+        mod.rs
+        parse.rs
+      theme/
+        mod.rs
+        color.rs
+        json.rs
+        syntax.rs
+        presets.rs
+      session/
+        mod.rs
+        model.rs
+        transcript.rs
+        validation.rs
+      plugin/
+        manifest.rs
+      util/
+        truncate.rs
+        terminal_tokenize.rs
+        yaml_tokenize.rs
+        revert_diff.rs
+
+  jekko-sdk/
+    Cargo.toml
+    src/
+      lib.rs
+      client.rs
+      event.rs
+      sync.rs
+      websocket.rs
+      models.rs
+
+  jekko-tui/
+    Cargo.toml
+    src/
+      lib.rs
+      app.rs
+      action.rs
+      event.rs
+      terminal.rs
+      state.rs
+      route.rs
+
+      ui/
+        mod.rs
+        component.rs
+        rect.rs
+        frame.rs
+        palette.rs
+        text.rs
+        spinner.rs
+        scroll.rs
+        toast.rs
+        footer_band.rs
+        dialog.rs
+        dialog_select.rs
+        prompt.rs
+        autocomplete.rs
+        diff.rs
+        textarea.rs
+        markdown.rs
+        mouse.rs
+
+      screens/
+        mod.rs
+        splash.rs
+        home.rs
+        shell.rs
+        navigation_header.rs
+        session.rs
+        jnoccio.rs
+
+      session/
+        mod.rs
+        renderers.rs
+        tools.rs
+        permission.rs
+        question.rs
+        daemon_banner.rs
+        subagent_footer.rs
+        sidebar.rs
+
+      plugins/
+        mod.rs
+        api.rs
+        registry.rs
+        slots.rs
+        internal/
+          home_tips.rs
+          shell_activity_feed.rs
+          sidebar_context.rs
+          sidebar_files.rs
+          sidebar_lsp.rs
+          sidebar_mcp.rs
+          sidebar_pending.rs
+          plugin_manager.rs
+          jnoccio.rs
+          jankurai.rs
+
+      services/
+        mod.rs
+        sdk_task.rs
+        sync_task.rs
+        clipboard.rs
+        editor.rs
+        sound.rs
+        kv.rs
+        project.rs
+
+      tests/
+        snapshots.rs
+
+  jekko-plugin-api/
+    Cargo.toml
+    src/
+      lib.rs
+      command.rs
+      slot.rs
+      theme.rs
+      view_model.rs
+
+  xtask/
+    Cargo.toml
+    src/
+      main.rs
+      build.rs
+      generate.rs
+      publish.rs
+      schema.rs
+      ci.rs
+```
+
+---
+
+## 5. File-by-file removal and replacement plan
+
+### 5.1 Root files
+
+| Current file                               |                           Action | Replacement                                                                                                           |
+| ------------------------------------------ | -------------------------------: | --------------------------------------------------------------------------------------------------------------------- |
+| `bun.lock`                                 |                           Delete | `Cargo.lock`; optional `package-lock.json`/`pnpm-lock.yaml` only if JS SDK remains                                    |
+| `bunfig.toml`                              |                           Delete | none                                                                                                                  |
+| `package.json`                             |                Rewrite or delete | If JS packages remain, remove Bun/OpenTUI/Solid from catalogs and scripts. If not, delete root JS workspace entirely. |
+| `.husky/pre-push`                          |                          Rewrite | Use `cargo fmt`, `cargo clippy`, `cargo test`; no `bun` or `process.versions.bun`                                     |
+| `.github/actions/setup-bun/action.yml`     |                           Delete | use `dtolnay/rust-toolchain`, `actions/cache`, `cargo`                                                                |
+| `.github/workflows/*.yml`                  | Rewrite every Bun-using workflow | replace `setup-bun`, `bun install`, `bun run`, `bun test` with Rust/xtask commands                                    |
+| `ops/ci/*.sh`                              |                          Rewrite | `cargo xtask ci ...` or pure shell around `cargo`                                                                     |
+| `nix/jekko.nix`                            |                          Rewrite | `rustPlatform.buildRustPackage`                                                                                       |
+| `nix/node_modules.nix`                     |                           Delete | not needed for Rust TUI                                                                                               |
+| `nix/scripts/canonicalize-node-modules.ts` |                           Delete | not needed                                                                                                            |
+| `nix/scripts/normalize-bun-binaries.ts`    |                           Delete | not needed                                                                                                            |
+| `docs/testing-tui.md`                      |                          Rewrite | Ratatui snapshot tests + PTY integration tests                                                                        |
+| `docs/install.md`                          |                           Update | install Rust-built binary                                                                                             |
+| `docs/ci-local.md`                         |                           Update | no Bun CI lane                                                                                                        |
+| `docs/architecture.md`                     |                           Update | Rust/Ratatui architecture                                                                                             |
+| `docs/boundaries.md`                       |                           Update | Rust module boundaries                                                                                                |
+
+Root `package.json` after migration, if JS SDK remains:
+
+```json
+{
+  "name": "jekko",
+  "description": "AI-powered development tool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "cargo build --workspace --release",
+    "test": "cargo test --workspace",
+    "lint": "cargo clippy --workspace --all-targets -- -D warnings",
+    "fmt": "cargo fmt --all --check"
+  },
+  "workspaces": [
+    "packages/sdk/js",
+    "packages/plugin"
+  ],
+  "devDependencies": {
+    "typescript": "5.8.2"
+  }
+}
+```
+
+Remove from the root catalog/dependencies:
+
+```text
+@opentui/core
+@opentui/solid
+opentui-spinner
+solid-js
+@types/bun
+@tsconfig/bun
+bun packageManager
+```
+
+### 5.2 `packages/jekko`
+
+| Current file/path                                   |                                                             Action | Replacement                                                                |
+| --------------------------------------------------- | -----------------------------------------------------------------: | -------------------------------------------------------------------------- |
+| `packages/jekko/bunfig.toml`                        |                                                             Delete | none                                                                       |
+| `packages/jekko/package.json`                       |                     Delete or reduce to JS SDK/server-only package | Rust binary lives in `crates/jekko-cli`                                    |
+| `packages/jekko/tsconfig.json`                      | Delete if package removed; otherwise remove Bun/OpenTUI JSX config | Rust cargo config                                                          |
+| `packages/jekko/parsers-config.ts`                  |                                                               Port | `crates/jekko-core/src/theme/syntax.rs` or `syntax/parsers.rs`             |
+| `packages/jekko/BUN_SHELL_MIGRATION_PLAN.md`        |                                                     Archive/delete | New Rust migration doc                                                     |
+| `packages/jekko/script/build.ts`                    |                                                             Delete | `crates/xtask/src/build.rs`                                                |
+| `packages/jekko/script/upgrade-opentui.ts`          |                                                             Delete | none                                                                       |
+| `packages/jekko/script/fix-node-pty.ts`             |                                                             Delete | use Rust PTY crate or no PTY patching                                      |
+| `packages/jekko/script/host-binary-path.ts`         |                                                             Delete | `cargo metadata` or `xtask host-binary-path`                               |
+| `packages/jekko/script/schema.ts`                   |                                                               Port | `xtask schema`                                                             |
+| `packages/jekko/script/generate*.ts`                |                                                               Port | `xtask generate`                                                           |
+| `packages/jekko/script/tui-binary-smoke.ts`         |                                                               Port | Rust integration test                                                      |
+| `packages/jekko/script/tui-live-prod*.ts`           |                                                               Port | Rust integration test / smoke command                                      |
+| `packages/jekko/src/cli/cmd/tui/**/*.tsx`           |                                                            Replace | `crates/jekko-tui/src/**`                                                  |
+| `packages/jekko/src/cli/cmd/tui/**/*.ts`            |                                                   Port selectively | non-UI helpers move to `jekko-core`, services move to `jekko-tui/services` |
+| `packages/jekko/test/**/tui/**/*.tsx`               |                                                            Replace | Ratatui snapshot/integration tests                                         |
+| `packages/jekko/test/**/*.test.ts` using `bun:test` |                  Port or switch to Node test runner if JS retained | Prefer Rust tests for TUI                                                  |
+
+### 5.3 `packages/plugin`
+
+Current `packages/plugin/src/tui.ts` exports OpenTUI/Solid plugin API types. That cannot remain under a 100% OpenTUI removal.
+
+Replace it with one of two approaches:
+
+#### Recommended: declarative plugin UI protocol
+
+Keep external plugins, but do not allow TSX rendering. A plugin may register commands, routes, slots, and declarative view models:
+
+```ts
+// future JS plugin API, if JS plugins are retained without Bun
+export type TuiView =
+  | { type: "text"; text: string; style?: TuiStyle }
+  | { type: "row"; children: TuiView[] }
+  | { type: "column"; children: TuiView[] }
+  | { type: "panel"; title?: string; children: TuiView[] }
+  | { type: "list"; rows: TuiListRow[] }
+
+export type TuiPlugin = {
+  id: string
+  commands?: TuiCommand[]
+  routes?: TuiRoute[]
+  slots?: TuiSlotContribution[]
+  themes?: string[]
+}
+```
+
+Rust host renders these view models with Ratatui. This preserves plugin concepts while removing OpenTUI/Solid.
+
+#### Alternative: Rust-only plugin API
+
+Use compiled internal plugins and a future dynamic/plugin ABI only if truly needed. For near-term safety, make all existing built-in feature plugins first-class Rust modules.
+
+---
+
+## 6. OpenTUI/Solid component replacement map
+
+| Current TypeScript/OpenTUI file                             | Ratatui replacement                                            |
+| ----------------------------------------------------------- | -------------------------------------------------------------- |
+| `app.tsx`                                                   | `crates/jekko-tui/src/app.rs`, `terminal.rs`, `event.rs`       |
+| `app-view.tsx`                                              | `screens/mod.rs`, `route.rs`, `screens/navigation_header.rs`   |
+| `component/navigation-header.tsx`                           | `screens/navigation_header.rs`                                 |
+| `routes/home.tsx`                                           | `screens/home.rs`                                              |
+| `routes/shell/shell-view.tsx`                               | `screens/shell.rs`                                             |
+| `routes/session/session-view.tsx`                           | `screens/session.rs`                                           |
+| `routes/session/session-renderers.tsx`                      | `session/renderers.rs`, `session/tools.rs`                     |
+| `component/prompt/index.tsx`                                | `ui/prompt.rs`, `ui/textarea.rs`, `ui/autocomplete.rs`         |
+| `component/prompt/autocomplete.tsx`                         | `ui/autocomplete.rs`                                           |
+| `ui/dialog.tsx`                                             | `ui/dialog.rs`                                                 |
+| `ui/dialog-select.tsx`                                      | `ui/dialog_select.rs`                                          |
+| `ui/dialog-alert.tsx`                                       | `ui/dialog.rs` variants                                        |
+| `ui/dialog-confirm.tsx`                                     | `ui/dialog.rs` variants                                        |
+| `ui/dialog-prompt.tsx`                                      | `ui/dialog.rs` + textarea                                      |
+| `ui/toast.tsx`                                              | `ui/toast.rs`                                                  |
+| `component/splash-screen.tsx`                               | `screens/splash.rs`                                            |
+| `component/footer-band.tsx`                                 | `ui/footer_band.rs`                                            |
+| `component/logo.tsx`, `logo-ansi.ts`                        | `ui/logo.rs`                                                   |
+| `context/theme*.ts(x)` and theme JSON                       | `jekko-core/src/theme/**`, `jekko-tui/src/ui/palette.rs`       |
+| `context/keybind.tsx`, `src/util/keybind.ts`                | `jekko-core/src/keybind/**`                                    |
+| `context/route.tsx`                                         | `jekko-tui/src/route.rs`                                       |
+| `context/sync*.tsx`                                         | `jekko-sdk/src/sync.rs`, `jekko-tui/src/services/sync_task.rs` |
+| `context/local*.tsx`                                        | `jekko-tui/src/state.rs`                                       |
+| `context/editor*.ts(x)`                                     | `services/editor.rs`                                           |
+| `context/jnoccio*.ts(x)`                                    | `services/jnoccio.rs`, `screens/jnoccio.rs`                    |
+| `feature-plugins/home/*`                                    | `plugins/internal/home_tips.rs`                                |
+| `feature-plugins/shell/*`                                   | `plugins/internal/shell_activity_feed.rs`                      |
+| `feature-plugins/sidebar/*`                                 | `plugins/internal/sidebar_*.rs`                                |
+| `feature-plugins/jnoccio/*`                                 | `screens/jnoccio.rs`, `plugins/internal/jnoccio.rs`            |
+| `feature-plugins/jankurai/*`                                | `plugins/internal/jankurai.rs`                                 |
+| `plugin/runtime*.ts`, `plugin/api*.tsx`, `plugin/slots.tsx` | `plugins/registry.rs`, `plugins/api.rs`, `plugins/slots.rs`    |
+
+---
+
+## 7. Ratatui architecture and core code
+
+### 7.1 Terminal lifecycle
+
+```rust
+// crates/jekko-tui/src/terminal.rs
+
+use std::io::{self, Stdout};
+
+use anyhow::Result;
+use crossterm::{
+    cursor::{Hide, Show},
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+    terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    },
+};
+use ratatui::{backend::CrosstermBackend, Terminal};
+
+pub type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
+
+pub struct TerminalGuard {
+    terminal: TuiTerminal,
+}
+
+impl TerminalGuard {
+    pub fn enter(enable_mouse: bool) -> Result<Self> {
+        enable_raw_mode()?;
+
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, Hide)?;
+
+        if enable_mouse {
+            execute!(io::stdout(), EnableMouseCapture)?;
+        }
+
+        let backend = CrosstermBackend::new(io::stdout());
+        let mut terminal = Terminal::new(backend)?;
+        terminal.clear()?;
+
+        Ok(Self { terminal })
+    }
+
+    pub fn terminal_mut(&mut self) -> &mut TuiTerminal {
+        &mut self.terminal
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            Show,
+            LeaveAlternateScreen
+        );
+    }
+}
+```
+
+### 7.2 App event loop
+
+```rust
+// crates/jekko-tui/src/app.rs
+
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use crossterm::event::{self, Event as CrosstermEvent, KeyEventKind};
+use tokio::sync::mpsc;
+
+use crate::{
+    action::Action,
+    event::AppEvent,
+    state::AppState,
+    terminal::TerminalGuard,
+};
+
+const FRAME_INTERVAL: Duration = Duration::from_millis(16); // close to current 60fps target
+
+pub async fn run(mut state: AppState) -> Result<()> {
+    let mut terminal = TerminalGuard::enter(state.config.mouse)?;
+    let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
+
+    spawn_input_task(tx.clone());
+    spawn_tick_task(tx.clone());
+    spawn_sync_task(tx.clone(), state.sdk.clone());
+
+    let mut last_draw = Instant::now();
+
+    loop {
+        while let Ok(event) = rx.try_recv() {
+            let actions = state.handle_event(event);
+            for action in actions {
+                state.update(action)?;
+            }
+        }
+
+        if last_draw.elapsed() >= FRAME_INTERVAL || state.needs_redraw {
+            terminal.terminal_mut().draw(|frame| {
+                state.render(frame);
+            })?;
+            state.needs_redraw = false;
+            last_draw = Instant::now();
+        }
+
+        if state.should_quit {
+            break;
+        }
+
+        if let Some(event) = rx.recv().await {
+            let actions = state.handle_event(event);
+            for action in actions {
+                state.update(action)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn spawn_input_task(tx: mpsc::UnboundedSender<AppEvent>) {
+    std::thread::spawn(move || loop {
+        match event::read() {
+            Ok(CrosstermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
+                let _ = tx.send(AppEvent::Key(key));
+            }
+            Ok(CrosstermEvent::Mouse(mouse)) => {
+                let _ = tx.send(AppEvent::Mouse(mouse));
+            }
+            Ok(CrosstermEvent::Resize(width, height)) => {
+                let _ = tx.send(AppEvent::Resize { width, height });
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let _ = tx.send(AppEvent::Error(error.to_string()));
+                break;
+            }
+        }
+    });
+}
+
+fn spawn_tick_task(tx: mpsc::UnboundedSender<AppEvent>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(90));
+        loop {
+            interval.tick().await;
+            if tx.send(AppEvent::Tick).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+fn spawn_sync_task(tx: mpsc::UnboundedSender<AppEvent>, sdk: crate::services::SdkHandle) {
+    tokio::spawn(async move {
+        sdk.run_event_stream(tx).await;
+    });
+}
+```
+
+### 7.3 Action and event model
+
+```rust
+// crates/jekko-tui/src/event.rs
+
+use crossterm::event::{KeyEvent, MouseEvent};
+
+#[derive(Debug, Clone)]
+pub enum AppEvent {
+    Key(KeyEvent),
+    Mouse(MouseEvent),
+    Resize { width: u16, height: u16 },
+    Tick,
+    Sync(crate::services::SyncEvent),
+    ToastExpired(u64),
+    Error(String),
+}
+```
+
+```rust
+// crates/jekko-tui/src/action.rs
+
+#[derive(Debug, Clone)]
+pub enum Action {
+    Noop,
+    Quit,
+    Redraw,
+
+    Navigate(crate::route::Route),
+    NavigateBack,
+
+    OpenCommandDialog,
+    OpenDialog(crate::ui::dialog::Dialog),
+    CloseDialog,
+
+    PromptFocus,
+    PromptBlur,
+    PromptSubmit,
+    PromptInsert(String),
+    PromptBackspace,
+
+    ShowToast(crate::ui::toast::Toast),
+
+    SyncPatch(crate::services::SyncPatch),
+    SetTheme(String),
+    ToggleThemeMode,
+}
+```
+
+### 7.4 Component trait
+
+```rust
+// crates/jekko-tui/src/ui/component.rs
+
+use anyhow::Result;
+use ratatui::{Frame, layout::Rect};
+
+use crate::{action::Action, event::AppEvent, state::AppState};
+
+pub trait Component {
+    fn handle_event(&mut self, _event: &AppEvent, _state: &AppState) -> Vec<Action> {
+        Vec::new()
+    }
+
+    fn update(&mut self, _action: &Action, _state: &mut AppState) -> Result<()> {
+        Ok(())
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect, state: &AppState);
+}
+```
+
+This is close to Ratatui’s component approach while keeping global app state available.
+
+---
+
+## 8. Theme and pixel fidelity
+
+### 8.1 Port theme JSON exactly
+
+Move current theme JSON files:
+
+```text
+packages/jekko/src/cli/cmd/tui/context/theme/*.json
+```
+
+to:
+
+```text
+crates/jekko-core/src/theme/presets/*.json
+```
+
+Preserve fields:
+
+```text
+primary
+secondary
+accent
+error
+warning
+success
+info
+text
+textMuted
+selectedListItemText
+background
+backgroundPanel
+backgroundElement
+backgroundMenu
+border
+borderActive
+borderSubtle
+diffAdded
+diffRemoved
+diffContext
+diffHunkHeader
+diffHighlightAdded
+diffHighlightRemoved
+diffAddedBg
+diffRemovedBg
+diffContextBg
+diffLineNumber
+diffAddedLineNumberBg
+diffRemovedLineNumberBg
+markdown*
+syntax*
+thinkingOpacity
+```
+
+### 8.2 Ratatui color model
+
+```rust
+// crates/jekko-core/src/theme/color.rs
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rgba {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl Rgba {
+    pub fn from_hex(input: &str) -> anyhow::Result<Self> {
+        let hex = input.trim_start_matches('#');
+        let parse = |range: std::ops::Range<usize>| {
+            u8::from_str_radix(&hex[range], 16)
+        };
+
+        let (r, g, b, a) = match hex.len() {
+            6 => (parse(0..2)?, parse(2..4)?, parse(4..6)?, 255),
+            8 => (parse(0..2)?, parse(2..4)?, parse(4..6)?, parse(6..8)?),
+            _ => anyhow::bail!("invalid hex color: {input}"),
+        };
+
+        Ok(Self { r, g, b, a })
+    }
+
+    pub fn to_ratatui(self) -> ratatui::style::Color {
+        ratatui::style::Color::Rgb(self.r, self.g, self.b)
+    }
+
+    pub fn blend_over(self, bg: Rgba) -> Rgba {
+        let alpha = self.a as f32 / 255.0;
+        let inv = 1.0 - alpha;
+        Rgba {
+            r: ((self.r as f32 * alpha) + (bg.r as f32 * inv)).round() as u8,
+            g: ((self.g as f32 * alpha) + (bg.g as f32 * inv)).round() as u8,
+            b: ((self.b as f32 * alpha) + (bg.b as f32 * inv)).round() as u8,
+            a: 255,
+        }
+    }
+}
+```
+
+Important: terminals do not support true alpha blending per cell. Any OpenTUI transparent/alpha colors must be pre-blended against the active background.
+
+### 8.3 Theme style helpers
+
+```rust
+// crates/jekko-tui/src/ui/palette.rs
+
+use ratatui::style::{Modifier, Style};
+
+use jekko_core::theme::ResolvedTheme;
+
+pub trait ThemeStyle {
+    fn text(&self) -> Style;
+    fn muted(&self) -> Style;
+    fn accent(&self) -> Style;
+    fn panel(&self) -> Style;
+    fn element(&self) -> Style;
+    fn selected(&self) -> Style;
+    fn border(&self) -> Style;
+}
+
+impl ThemeStyle for ResolvedTheme {
+    fn text(&self) -> Style {
+        Style::default().fg(self.text.to_ratatui())
+    }
+
+    fn muted(&self) -> Style {
+        Style::default().fg(self.text_muted.to_ratatui())
+    }
+
+    fn accent(&self) -> Style {
+        Style::default().fg(self.accent.to_ratatui())
+    }
+
+    fn panel(&self) -> Style {
+        Style::default()
+            .fg(self.text.to_ratatui())
+            .bg(self.background_panel.to_ratatui())
+    }
+
+    fn element(&self) -> Style {
+        Style::default()
+            .fg(self.text.to_ratatui())
+            .bg(self.background_element.to_ratatui())
+    }
+
+    fn selected(&self) -> Style {
+        Style::default()
+            .fg(self.selected_list_item_text.to_ratatui())
+            .bg(self.primary.to_ratatui())
+            .add_modifier(Modifier::BOLD)
+    }
+
+    fn border(&self) -> Style {
+        Style::default().fg(self.border.to_ratatui())
+    }
+}
+```
+
+### 8.4 Exact glyph inventory to preserve
+
+Preserve these visible characters from the current UI:
+
+```text
+│      header separators, split borders
+▔      splash underline
+▸      boot log bullet
+✓      done
+●      current/final/selected
+!      warning
+✗      error
+▣      assistant footer
+…      truncation
+⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏  spinner frames
+```
+
+Use `unicode-width` for all truncation, not `.len()`.
+
+---
+
+## 9. Screen replacement details and snippets
+
+## 9.1 App shell and route rendering
+
+Current `app-view.tsx` does:
+
+```text
+full terminal box
+  optional TimeToFirstDraw
+  NavigationHeader
+  route body: Home | Shell | Session | Plugin route
+  SplashScreen until ready
+```
+
+Ratatui replacement:
+
+```rust
+// crates/jekko-tui/src/state.rs
+
+use ratatui::{Frame, layout::Rect, widgets::Block};
+
+use crate::{
+    route::Route,
+    screens::{home, navigation_header, session, shell, splash},
+};
+
+pub struct AppState {
+    pub route: Route,
+    pub ready: bool,
+    pub boot_visible: bool,
+    pub splash: splash::SplashState,
+    pub theme: jekko_core::theme::ResolvedTheme,
+    pub config: crate::config::TuiRuntimeConfig,
+    pub should_quit: bool,
+    pub needs_redraw: bool,
+
+    pub home: home::HomeState,
+    pub shell: shell::ShellState,
+    pub session: session::SessionState,
+    pub dialogs: crate::ui::dialog::DialogStack,
+    pub toasts: crate::ui::toast::ToastState,
+    pub prompt: crate::ui::prompt::PromptState,
+    pub plugins: crate::plugins::PluginRegistry,
+    pub sdk: crate::services::SdkHandle,
+}
+
+impl AppState {
+    pub fn render(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+
+        frame.render_widget(
+            Block::default().style(
+                ratatui::style::Style::default()
+                    .bg(self.theme.background.to_ratatui())
+            ),
+            area,
+        );
+
+        if self.boot_visible || !self.ready {
+            splash::render(frame, area, &self.splash, self);
+            return;
+        }
+
+        let [header, body] = crate::ui::rect::vertical(area, [
+            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Min(0),
+        ]);
+
+        navigation_header::render(frame, header, self);
+
+        match &self.route {
+            Route::Home => home::render(frame, body, self),
+            Route::Shell => shell::render(frame, body, self),
+            Route::Session { session_id } => {
+                session::render(frame, body, session_id.clone(), self)
+            }
+            Route::Plugin { id, params } => {
+                self.plugins.render_route(frame, body, id, params, &self.theme);
+            }
+        }
+
+        self.dialogs.render(frame, area, &self.theme);
+        self.toasts.render(frame, area, &self.theme);
+    }
+}
+```
+
+Helper layout:
+
+```rust
+// crates/jekko-tui/src/ui/rect.rs
+
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+pub fn vertical<const N: usize>(area: Rect, constraints: [Constraint; N]) -> [Rect; N] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area)
+        .to_vec()
+        .try_into()
+        .ok()
+        .expect("layout returned wrong number of rects")
+}
+
+pub fn horizontal<const N: usize>(area: Rect, constraints: [Constraint; N]) -> [Rect; N] {
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(constraints)
+        .split(area)
+        .to_vec()
+        .try_into()
+        .ok()
+        .expect("layout returned wrong number of rects")
+}
+
+pub fn inner(area: Rect, left: u16, right: u16, top: u16, bottom: u16) -> Rect {
+    let x = area.x.saturating_add(left);
+    let y = area.y.saturating_add(top);
+    let width = area.width.saturating_sub(left + right);
+    let height = area.height.saturating_sub(top + bottom);
+    Rect { x, y, width, height }
+}
+```
+
+---
+
+## 9.2 Navigation header
+
+Current behavior:
+
+```text
+height 1
+padding left/right 2
+Ctrl+H Back
+optional separator │
+optional Ctrl+J Jnoccio
+gold active state #F5A623
+Ctrl+H navigates back
+Ctrl+J toggles Jnoccio if available
+```
+
+Remove current diagnostic write to `/tmp/jekko-enter-diag.log`.
+
+Ratatui replacement:
+
+```rust
+// crates/jekko-tui/src/screens/navigation_header.rs
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+};
+
+use crate::{action::Action, route::Route, state::AppState};
+
+const GOLD: Color = Color::Rgb(0xF5, 0xA6, 0x23);
+
+pub fn handle_key(key: KeyEvent, state: &AppState) -> Option<Action> {
+    if !key.modifiers.contains(KeyModifiers::CONTROL) {
+        return None;
+    }
+
+    match key.code {
+        KeyCode::Char('h') | KeyCode::Char('H') => Some(Action::NavigateBack),
+        KeyCode::Char('j') | KeyCode::Char('J') if state.jnoccio_available() => {
+            if matches!(state.route, Route::Plugin { ref id, .. } if id == "jnoccio") {
+                Some(Action::NavigateBack)
+            } else {
+                Some(Action::Navigate(Route::Plugin {
+                    id: "jnoccio".into(),
+                    params: Default::default(),
+                }))
+            }
+        }
+        _ => None,
+    }
+}
+
+pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
+    let theme = &state.theme;
+    let is_home = matches!(state.route, Route::Home | Route::Session { .. });
+    let is_jnoccio = matches!(state.route, Route::Plugin { ref id, .. } if id == "jnoccio");
+
+    let key_bg = theme.background_element.to_ratatui();
+    let active_bg = theme.background_menu.to_ratatui();
+
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(
+            " Ctrl+H ",
+            Style::default()
+                .fg(if is_home { GOLD } else { theme.text_muted.to_ratatui() })
+                .bg(if is_home { active_bg } else { key_bg }),
+        ),
+        Span::styled(
+            " Back",
+            Style::default().fg(if is_home { GOLD } else { theme.text_muted.to_ratatui() }),
+        ),
+    ];
+
+    if state.jnoccio_available() {
+        spans.extend([
+            Span::styled(" │ ", Style::default().fg(theme.border_subtle.to_ratatui())),
+            Span::styled(
+                " Ctrl+J ",
+                Style::default()
+                    .fg(if is_jnoccio { GOLD } else { theme.text_muted.to_ratatui() })
+                    .bg(if is_jnoccio { active_bg } else { key_bg }),
+            ),
+            Span::styled(
+                " Jnoccio",
+                Style::default().fg(if is_jnoccio { GOLD } else { theme.text_muted.to_ratatui() }),
+            ),
+        ]);
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+```
+
+---
+
+## 9.3 Splash screen
+
+Current splash:
+
+```text
+60/40 horizontal split
+left: bottom-aligned boot log
+right: centered NEVERHUMAN branding
+min show: 2400ms
+hard cap: 15000ms
+spinner frame every 90ms
+pulse period: 4600ms
+boot phases:
+  renderer, terminal, theme, plugins, sync, jnoccio, jankurai, Jekko
+```
+
+Ratatui replacement:
+
+```rust
+// crates/jekko-tui/src/screens/splash.rs
+
+use std::time::{Duration, Instant};
+
+use ratatui::{
+    Frame,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Paragraph},
+};
+
+use crate::{state::AppState, ui::rect};
+
+const MIN_SHOW: Duration = Duration::from_millis(2400);
+const HARD_CAP: Duration = Duration::from_millis(15_000);
+const PULSE_PERIOD_MS: u128 = 4600;
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const NEVER_HUMAN: &str = "N · E · V · E · R · H · U · M · A · N";
+
+#[derive(Debug, Clone)]
+pub struct SplashState {
+    pub mounted_at: Instant,
+    pub revealed: usize,
+    pub dismissed: bool,
+}
+
+impl Default for SplashState {
+    fn default() -> Self {
+        Self {
+            mounted_at: Instant::now(),
+            revealed: 1,
+            dismissed: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum BootStatus {
+    Running,
+    Done,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct BootLine {
+    pub phase: &'static str,
+    pub message: String,
+    pub status: BootStatus,
+}
+
+pub fn render(frame: &mut Frame, area: Rect, splash: &SplashState, state: &AppState) {
+    let theme = &state.theme;
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme.background.to_ratatui())),
+        area,
+    );
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    render_boot_log(frame, chunks[0], splash, state);
+    render_brand(frame, chunks[1], splash, state);
+}
+
+fn render_boot_log(frame: &mut Frame, area: Rect, splash: &SplashState, state: &AppState) {
+    let theme = &state.theme;
+    let lines = boot_lines(state);
+    let elapsed = splash.mounted_at.elapsed();
+
+    let visible = lines
+        .iter()
+        .take(splash.revealed.min(lines.len()))
+        .enumerate()
+        .map(|(idx, line)| {
+            let ts = format!("[+{:.2}s]", (idx as f32 * 0.18).min(elapsed.as_secs_f32()));
+            let glyph = status_glyph(&line.status, idx + 1 == lines.len(), splash);
+
+            Line::from(vec![
+                Span::styled(ts, Style::default().fg(theme.text_muted.to_ratatui())),
+                Span::raw(" "),
+                Span::styled("▸", Style::default().fg(theme.accent.to_ratatui())),
+                Span::raw(" "),
+                Span::styled(format!("{:<12}", line.phase), Style::default().fg(theme.text.to_ratatui())),
+                Span::styled(format!("{:<16}", line.message), Style::default().fg(theme.text_muted.to_ratatui())),
+                Span::styled(glyph, Style::default().fg(status_color(&line.status, state))),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    let height = visible.len() as u16;
+    let y = area.y + area.height.saturating_sub(height + 1);
+    let log_area = Rect {
+        x: area.x + 2,
+        y,
+        width: area.width.saturating_sub(4),
+        height: height.max(1),
+    };
+
+    frame.render_widget(Paragraph::new(visible), log_area);
+}
+
+fn render_brand(frame: &mut Frame, area: Rect, splash: &SplashState, state: &AppState) {
+    let theme = &state.theme;
+    let elapsed_ms = splash.mounted_at.elapsed().as_millis();
+    let spinner = spinner_frame(splash);
+    let pulse = pulse_style(elapsed_ms, state);
+
+    let text = vec![
+        Line::from(Span::styled(
+            NEVER_HUMAN,
+            Style::default()
+                .fg(theme.text.to_ratatui())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "▔".repeat(NEVER_HUMAN.chars().count()),
+            Style::default().fg(theme.accent.to_ratatui()),
+        )),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("Jekko ", Style::default().fg(theme.text.to_ratatui())),
+            Span::styled("loading…", pulse),
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled("[q] quit", Style::default().fg(theme.text_muted.to_ratatui()))),
+        Line::raw(""),
+        Line::from(Span::styled(loading_band(area.width, spinner), pulse)),
+    ];
+
+    let h = text.len() as u16;
+    let brand_area = Rect {
+        x: area.x + 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: area.width.saturating_sub(4),
+        height: h,
+    };
+
+    frame.render_widget(Paragraph::new(text).alignment(Alignment::Center), brand_area);
+}
+
+fn boot_lines(state: &AppState) -> Vec<BootLine> {
+    vec![
+        BootLine { phase: "renderer", message: "ready".into(), status: BootStatus::Done },
+        BootLine { phase: "terminal", message: format!("{}x{}", state.size.width, state.size.height), status: BootStatus::Done },
+        BootLine { phase: "theme", message: state.theme_name.clone(), status: BootStatus::Done },
+        BootLine { phase: "plugins", message: state.plugins.status_label(), status: state.plugins.boot_status() },
+        BootLine { phase: "sync", message: state.sync.status_label(), status: state.sync.boot_status() },
+        BootLine { phase: "jnoccio", message: state.jnoccio.status_label(), status: state.jnoccio.boot_status() },
+        BootLine { phase: "jankurai", message: state.jankurai.status_label(), status: state.jankurai.boot_status() },
+        BootLine { phase: "Jekko", message: if state.ready { "ready" } else { "waiting" }.into(), status: if state.ready { BootStatus::Done } else { BootStatus::Running } },
+    ]
+}
+
+fn spinner_frame(splash: &SplashState) -> &'static str {
+    let idx = (splash.mounted_at.elapsed().as_millis() / 90) as usize % SPINNER.len();
+    SPINNER[idx]
+}
+
+fn status_glyph(status: &BootStatus, final_ready: bool, splash: &SplashState) -> &'static str {
+    match status {
+        BootStatus::Done if final_ready => "●",
+        BootStatus::Done => "✓",
+        BootStatus::Warn => "!",
+        BootStatus::Error => "✗",
+        BootStatus::Running => spinner_frame(splash),
+    }
+}
+
+fn status_color(status: &BootStatus, state: &AppState) -> ratatui::style::Color {
+    let theme = &state.theme;
+    match status {
+        BootStatus::Done => theme.success.to_ratatui(),
+        BootStatus::Warn => theme.warning.to_ratatui(),
+        BootStatus::Error => theme.error.to_ratatui(),
+        BootStatus::Running => theme.accent.to_ratatui(),
+    }
+}
+
+fn pulse_style(elapsed_ms: u128, state: &AppState) -> Style {
+    let phase = elapsed_ms % PULSE_PERIOD_MS;
+    let ratio = phase as f32 / PULSE_PERIOD_MS as f32;
+    let mix = 0.5 + 0.5 * (ratio * std::f32::consts::TAU).sin();
+    let color = state.theme.tint_accent_to_text(mix * 0.45);
+    Style::default().fg(color.to_ratatui())
+}
+
+fn loading_band(width: u16, spinner: &str) -> String {
+    let cells = ((width as f32 * 0.34) as usize).saturating_sub(4).max(12);
+    (0..cells)
+        .map(|i| match i % 6 {
+            0 | 1 => spinner.repeat(2),
+            2 | 4 => " ".to_string(),
+            _ => spinner.to_string(),
+        })
+        .collect()
+}
+```
+
+---
+
+## 9.4 Home screen
+
+Current home:
+
+```text
+centered logo
+2-line gap
+sync ready:
+  Enter engage  ? help  Ctrl+P commands
+else:
+  connecting…
+slots:
+  home_logo, home_bottom, home_footer
+toast overlay
+footer band
+```
+
+Ratatui replacement:
+
+```rust
+// crates/jekko-tui/src/screens/home.rs
+
+use ratatui::{
+    Frame,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::Style,
+    text::{Line, Span},
+    widgets::{Block, Paragraph},
+};
+
+use crate::{action::Action, state::AppState};
+
+#[derive(Default)]
+pub struct HomeState {
+    pub engaged: bool,
+}
+
+pub fn handle_enter(state: &mut AppState) -> Vec<Action> {
+    if state.home.engaged {
+        return vec![];
+    }
+    state.home.engaged = true;
+    vec![Action::Navigate(crate::route::Route::Shell)]
+}
+
+pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    let theme = &state.theme;
+
+    let [content, footer] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(area)
+        .to_vec()
+        .try_into()
+        .unwrap();
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme.background.to_ratatui())),
+        content,
+    );
+
+    let logo = state.plugins.render_slot_or_logo("home_logo", theme);
+    let hint = if state.sync.ready {
+        Line::from(vec![
+            key_span(" Enter ", state),
+            Span::styled(" engage  ", theme.muted_style()),
+            key_span(" ? ", state),
+            Span::styled(" help  ", theme.muted_style()),
+            key_span(" Ctrl+P ", state),
+            Span::styled(" commands", theme.muted_style()),
+        ])
+    } else {
+        Line::from(Span::styled("connecting…", theme.muted_style()))
+    };
+
+    let mut lines = logo;
+    lines.push(Line::raw(""));
+    lines.push(Line::raw(""));
+    lines.push(hint);
+
+    let height = lines.len() as u16;
+    let centered = Rect {
+        x: content.x + 2,
+        y: content.y + content.height.saturating_sub(height) / 2,
+        width: content.width.saturating_sub(4),
+        height,
+    };
+
+    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), centered);
+
+    crate::ui::footer_band::render(frame, footer, theme, |f, area| {
+        state.plugins.render_slot(frame, area, "home_footer", theme);
+    });
+}
+
+fn key_span(label: &'static str, state: &AppState) -> Span<'static> {
+    Span::styled(
+        label,
+        ratatui::style::Style::default()
+            .fg(state.theme.text.to_ratatui())
+            .bg(state.theme.background_element.to_ratatui()),
+    )
+}
+```
+
+---
+
+## 9.5 Shell route responsive layout
+
+Current shell behavior:
+
+```text
+left panel hidden below width 80
+width 80..99: left overlay width 28 only when visible
+width 100..119: fixed left width 28
+width 120..159: fixed left width 38
+width >=160: fixed left width 44
+center activity feed grows
+footer band at bottom
+```
+
+Ratatui replacement:
+
+```rust
+// crates/jekko-tui/src/screens/shell.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::Style,
+    widgets::Block,
+};
+
+use crate::state::AppState;
+
+#[derive(Debug, Clone, Copy)]
+pub enum LeftSize {
+    Hidden,
+    Shown { width: u16, overlay: bool },
+}
+
+#[derive(Default)]
+pub struct ShellState {
+    pub left_visible: bool,
+}
+
+pub fn resolve_left(width: u16, visible: bool) -> LeftSize {
+    if width < 80 {
+        LeftSize::Hidden
+    } else if width < 100 {
+        if visible {
+            LeftSize::Shown { width: 28, overlay: true }
+        } else {
+            LeftSize::Hidden
+        }
+    } else if width < 120 {
+        LeftSize::Shown { width: 28, overlay: false }
+    } else if width < 160 {
+        LeftSize::Shown { width: 38, overlay: false }
+    } else {
+        LeftSize::Shown { width: 44, overlay: false }
+    }
+}
+
+pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    let theme = &state.theme;
+
+    let [body, footer] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(area)
+        .to_vec()
+        .try_into()
+        .unwrap();
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme.background.to_ratatui())),
+        body,
+    );
+
+    match resolve_left(body.width, state.shell.left_visible) {
+        LeftSize::Hidden => {
+            render_center_feed(frame, body, state);
+        }
+        LeftSize::Shown { width, overlay: false } => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(width), Constraint::Min(0)])
+                .split(body);
+
+            render_left_panel(frame, chunks[0], state);
+            render_center_feed(frame, chunks[1], state);
+        }
+        LeftSize::Shown { width, overlay: true } => {
+            render_center_feed(frame, body, state);
+
+            let left = Rect {
+                x: body.x,
+                y: body.y,
+                width: width.min(body.width),
+                height: body.height,
+            };
+
+            frame.render_widget(ratatui::widgets::Clear, left);
+            render_left_panel(frame, left, state);
+        }
+    }
+
+    render_shell_footer(frame, footer, state);
+}
+
+fn render_left_panel(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    let theme = &state.theme;
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme.background_panel.to_ratatui())),
+        area,
+    );
+
+    let [tabs, pane] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(area)
+        .to_vec()
+        .try_into()
+        .unwrap();
+
+    state.plugins.render_slot(frame, tabs, "shell_left_tabs", theme);
+    state.plugins.render_slot(frame, pane, "shell_left_pane", theme);
+}
+
+fn render_center_feed(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    if !state.plugins.render_slot(frame, area, "shell_activity_feed", &state.theme) {
+        let paragraph = ratatui::widgets::Paragraph::new("No active feed")
+            .style(state.theme.muted_style())
+            .alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(paragraph, area);
+    }
+}
+
+fn render_shell_footer(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    crate::ui::footer_band::render(frame, area, &state.theme, |frame, area| {
+        let line = ratatui::text::Line::from(vec![
+            key(" Enter ", state), txt(" send  ", state),
+            key(" Ctrl+P ", state), txt(" commands  ", state),
+            key(" Tab ", state), txt(" pane  ", state),
+            key(" Ctrl+B ", state), txt(" left  ", state),
+            key(" Ctrl+Shift+T ", state), txt(" theme  ", state),
+            key(" ? ", state), txt(" help  ", state),
+            key(" Ctrl+C ", state), txt(" quit", state),
+        ]);
+        frame.render_widget(ratatui::widgets::Paragraph::new(line), area);
+    });
+}
+
+fn key<'a>(s: &'a str, state: &AppState) -> ratatui::text::Span<'a> {
+    ratatui::text::Span::styled(
+        s,
+        ratatui::style::Style::default()
+            .fg(state.theme.text.to_ratatui())
+            .bg(state.theme.background_element.to_ratatui()),
+    )
+}
+
+fn txt<'a>(s: &'a str, state: &AppState) -> ratatui::text::Span<'a> {
+    ratatui::text::Span::styled(s, state.theme.muted_style())
+}
+```
+
+---
+
+## 9.6 Session screen
+
+Current session:
+
+```text
+row layout
+content grows
+padding left/right 2
+scrollbox sticky bottom
+message list
+reverted messages card
+daemon banner
+permission prompt
+question prompt
+subagent footer
+session_prompt slot / Prompt fallback
+Toast
+```
+
+Ratatui replacement:
+
+```rust
+// crates/jekko-tui/src/screens/session.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    widgets::Block,
+};
+
+use crate::state::AppState;
+
+#[derive(Default)]
+pub struct SessionState {
+    pub scroll: u16,
+    pub sticky_bottom: bool,
+    pub show_scrollbar: bool,
+}
+
+pub fn render(frame: &mut Frame, area: Rect, session_id: String, state: &mut AppState) {
+    let theme = &state.theme;
+
+    frame.render_widget(
+        Block::default().style(ratatui::style::Style::default().bg(theme.background.to_ratatui())),
+        area,
+    );
+
+    let padded = crate::ui::rect::inner(area, 2, 2, 0, 1);
+
+    let bottom_height = bottom_stack_height(state, &session_id).min(padded.height);
+    let [transcript_area, bottom_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(bottom_height),
+        ])
+        .split(padded)
+        .to_vec()
+        .try_into()
+        .unwrap();
+
+    render_transcript(frame, transcript_area, &session_id, state);
+    render_bottom_stack(frame, bottom_area, &session_id, state);
+}
+
+fn render_transcript(frame: &mut Frame, area: Rect, session_id: &str, state: &mut AppState) {
+    let messages = state.sync.messages(session_id);
+
+    let rendered = crate::session::renderers::render_messages(messages, state);
+    let viewport = crate::ui::scroll::Viewport::new(area.height as usize, state.session.scroll as usize);
+
+    let visible_lines = viewport.visible(rendered);
+    frame.render_widget(ratatui::widgets::Paragraph::new(visible_lines), area);
+
+    if state.session.show_scrollbar {
+        crate::ui::scroll::render_scrollbar(frame, area, viewport, &state.theme);
+    }
+}
+
+fn render_bottom_stack(frame: &mut Frame, area: Rect, session_id: &str, state: &mut AppState) {
+    let mut rows = Vec::new();
+
+    if state.sync.daemon_run(session_id).is_some() {
+        rows.push(("daemon", 2));
+    }
+    if state.sync.permission(session_id).is_some() {
+        rows.push(("permission", state.session_permission_height(session_id)));
+    } else if state.sync.question(session_id).is_some() {
+        rows.push(("question", state.session_question_height(session_id)));
+    }
+    if state.sync.is_subagent(session_id) {
+        rows.push(("subagent", 1));
+    }
+    rows.push(("prompt", state.prompt.height()));
+
+    let constraints = rows
+        .iter()
+        .map(|(_, h)| Constraint::Length(*h))
+        .collect::<Vec<_>>();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    for ((name, _), rect) in rows.iter().zip(chunks.iter()) {
+        match *name {
+            "daemon" => crate::session::daemon_banner::render(frame, *rect, session_id, state),
+            "permission" => crate::session::permission::render(frame, *rect, session_id, state),
+            "question" => crate::session::question::render(frame, *rect, session_id, state),
+            "subagent" => crate::session::subagent_footer::render(frame, *rect, session_id, state),
+            "prompt" => crate::ui::prompt::render(frame, *rect, session_id, state),
+            _ => {}
+        }
+    }
+}
+
+fn bottom_stack_height(state: &AppState, session_id: &str) -> u16 {
+    let mut h = state.prompt.height();
+    if state.sync.daemon_run(session_id).is_some() { h += 2; }
+    if state.sync.permission(session_id).is_some() {
+        h += state.session_permission_height(session_id);
+    } else if state.sync.question(session_id).is_some() {
+        h += state.session_question_height(session_id);
+    }
+    if state.sync.is_subagent(session_id) { h += 1; }
+    h
+}
+```
+
+---
+
+## 10. Prompt migration plan
+
+The current prompt is the most complex UI surface. It uses:
+
+```text
+TextareaRenderable
+extmarks
+virtual prompt parts
+paste decoding
+file/image/pdf paste handling
+slash command autocomplete
+@ mention autocomplete
+frecency
+prompt history
+prompt stash
+shell mode via leading !
+editor open integration
+workspace selection
+ZYAL detection and preview
+status spinner
+usage/money line
+Ctrl+C double quit/interrupt behavior
+Esc interrupt
+model/provider/variant metadata row
+right-side slot
+```
+
+### 10.1 Prompt state model
+
+```rust
+// crates/jekko-tui/src/ui/prompt.rs
+
+use ratatui_textarea::TextArea;
+
+#[derive(Debug, Clone)]
+pub enum PromptPart {
+    Text(String),
+    File {
+        path: String,
+        mime: Option<String>,
+        summary: Option<String>,
+    },
+    Agent {
+        name: String,
+        payload: String,
+    },
+    Paste {
+        label: String,
+        bytes: usize,
+        text: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptMode {
+    Normal,
+    Shell,
+    Zyal,
+}
+
+pub struct PromptState {
+    pub textarea: TextArea<'static>,
+    pub parts: Vec<PromptPart>,
+    pub focused: bool,
+    pub disabled: bool,
+    pub mode: PromptMode,
+    pub autocomplete: crate::ui::autocomplete::AutocompleteState,
+    pub history: PromptHistory,
+    pub stash: PromptStash,
+    pub last_ctrl_c_at: Option<std::time::Instant>,
+    pub show_suggestion: bool,
+    pub usage: PromptUsage,
+}
+
+impl PromptState {
+    pub fn new() -> Self {
+        let mut textarea = TextArea::default();
+        textarea.set_placeholder_text("Ask Jekko…");
+        textarea.set_max_histories(200);
+        Self {
+            textarea,
+            parts: Vec::new(),
+            focused: true,
+            disabled: false,
+            mode: PromptMode::Normal,
+            autocomplete: Default::default(),
+            history: Default::default(),
+            stash: Default::default(),
+            last_ctrl_c_at: None,
+            show_suggestion: true,
+            usage: PromptUsage::default(),
+        }
+    }
+
+    pub fn text(&self) -> String {
+        self.textarea.lines().join("\n")
+    }
+
+    pub fn height(&self) -> u16 {
+        let text_rows = self.textarea.lines().len().clamp(1, 6) as u16;
+        1 + text_rows + 2
+    }
+}
+```
+
+### 10.2 Prompt rendering with Ratatui
+
+```rust
+// crates/jekko-tui/src/ui/prompt.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+};
+
+use crate::state::AppState;
+
+pub fn render(frame: &mut Frame, area: Rect, session_id: &str, state: &mut AppState) {
+    let theme = &state.theme;
+    let prompt = &mut state.prompt;
+
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(theme.border_active.to_ratatui()))
+        .style(Style::default().bg(theme.background_panel.to_ratatui()));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(prompt.textarea.lines().len().clamp(1, 6) as u16),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    configure_textarea_style(prompt, state);
+    frame.render_widget(&prompt.textarea, rows[0]);
+
+    render_meta_row(frame, rows[1], session_id, state);
+    render_status_row(frame, rows[2], session_id, state);
+
+    if prompt.autocomplete.visible {
+        let overlay = autocomplete_area_above(area, prompt.autocomplete.height(area.width));
+        crate::ui::autocomplete::render(frame, overlay, &prompt.autocomplete, state);
+    }
+}
+
+fn configure_textarea_style(prompt: &mut PromptState, state: &AppState) {
+    let theme = &state.theme;
+    prompt.textarea.set_style(
+        Style::default()
+            .fg(theme.text.to_ratatui())
+            .bg(if prompt.focused {
+                theme.background_menu.to_ratatui()
+            } else {
+                theme.background_panel.to_ratatui()
+            }),
+    );
+    prompt.textarea.set_cursor_style(
+        Style::default()
+            .fg(theme.background.to_ratatui())
+            .bg(theme.primary.to_ratatui())
+            .add_modifier(Modifier::REVERSED),
+    );
+}
+
+fn render_meta_row(frame: &mut Frame, area: Rect, session_id: &str, state: &AppState) {
+    let theme = &state.theme;
+    let meta = Line::from(vec![
+        Span::styled(" ", theme.muted_style()),
+        Span::styled(state.local.agent_label(), theme.accent_style()),
+        Span::styled(" · ", theme.muted_style()),
+        Span::styled(state.local.model_label(), theme.text_style()),
+        Span::styled(" · ", theme.muted_style()),
+        Span::styled(state.prompt.mode.label(), theme.muted_style()),
+        Span::raw(" "),
+    ]);
+
+    frame.render_widget(Paragraph::new(meta), area);
+}
+
+fn render_status_row(frame: &mut Frame, area: Rect, session_id: &str, state: &AppState) {
+    let theme = &state.theme;
+    let spinner = if state.sync.session_busy(session_id) {
+        crate::ui::spinner::frame(state.tick)
+    } else {
+        " "
+    };
+
+    let line = Line::from(vec![
+        Span::styled(spinner, theme.accent_style()),
+        Span::raw(" "),
+        Span::styled(state.prompt.status_label(session_id), theme.muted_style()),
+        Span::raw("  "),
+        Span::styled(state.prompt.usage.label(), theme.muted_style()),
+        Span::raw("  "),
+        key(" Ctrl+P ", state),
+        Span::styled("commands", theme.muted_style()),
+    ]);
+
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn autocomplete_area_above(prompt_area: Rect, height: u16) -> Rect {
+    Rect {
+        x: prompt_area.x,
+        y: prompt_area.y.saturating_sub(height),
+        width: prompt_area.width,
+        height,
+    }
+}
+
+fn key<'a>(s: &'a str, state: &AppState) -> Span<'a> {
+    Span::styled(
+        s,
+        Style::default()
+            .fg(state.theme.text.to_ratatui())
+            .bg(state.theme.background_element.to_ratatui()),
+    )
+}
+```
+
+### 10.3 Prompt event handling
+
+```rust
+// crates/jekko-tui/src/ui/prompt.rs
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::{action::Action, state::AppState};
+
+pub fn handle_key(key: KeyEvent, state: &mut AppState) -> Vec<Action> {
+    if !state.prompt.focused || state.prompt.disabled {
+        return vec![];
+    }
+
+    if state.prompt.autocomplete.visible {
+        if let Some(action) = crate::ui::autocomplete::handle_key(key, state) {
+            return vec![action];
+        }
+    }
+
+    match key.code {
+        KeyCode::Enter if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+            vec![Action::PromptSubmit]
+        }
+        KeyCode::Esc => {
+            if state.sync.active_request_can_interrupt() {
+                vec![Action::PromptInterrupt]
+            } else {
+                vec![Action::PromptBlur]
+            }
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            handle_ctrl_c(state)
+        }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![Action::OpenCommandDialog]
+        }
+        KeyCode::Char(ch) => {
+            state.prompt.textarea.input(ratatui_textarea::Input {
+                key: ratatui_textarea::Key::Char(ch),
+                ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                alt: key.modifiers.contains(KeyModifiers::ALT),
+                shift: key.modifiers.contains(KeyModifiers::SHIFT),
+            });
+            state.prompt.recompute_mode_and_autocomplete();
+            vec![Action::Redraw]
+        }
+        _ => {
+            if state.prompt.textarea.input(key.into()) {
+                state.prompt.recompute_mode_and_autocomplete();
+                vec![Action::Redraw]
+            } else {
+                vec![]
+            }
+        }
+    }
+}
+
+fn handle_ctrl_c(state: &mut AppState) -> Vec<Action> {
+    let now = std::time::Instant::now();
+
+    if state.sync.active_request_can_interrupt() {
+        return vec![Action::PromptInterrupt];
+    }
+
+    if state
+        .prompt
+        .last_ctrl_c_at
+        .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(900))
+    {
+        vec![Action::Quit]
+    } else {
+        state.prompt.last_ctrl_c_at = Some(now);
+        vec![Action::ShowToast(crate::ui::toast::Toast::info(
+            "Press Ctrl+C again to quit",
+        ))]
+    }
+}
+```
+
+### 10.4 Autocomplete overlay
+
+Current autocomplete supports:
+
+```text
+absolute overlay above prompt
+same width as prompt
+max 10 rows
+border SplitBorder
+backgroundMenu
+fuzzy file/agent/command search
+mouse hover
+keyboard up/down/tab/enter
+tab expands directories
+```
+
+Ratatui replacement:
+
+```rust
+// crates/jekko-tui/src/ui/autocomplete.rs
+
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState},
+};
+
+use crate::state::AppState;
+
+#[derive(Default)]
+pub struct AutocompleteState {
+    pub visible: bool,
+    pub selected: usize,
+    pub query: String,
+    pub items: Vec<AutocompleteItem>,
+}
+
+#[derive(Clone)]
+pub struct AutocompleteItem {
+    pub title: String,
+    pub description: Option<String>,
+    pub kind: AutocompleteKind,
+}
+
+#[derive(Clone)]
+pub enum AutocompleteKind {
+    File { path: String, is_dir: bool },
+    Command { value: String },
+    Agent { name: String },
+}
+
+impl AutocompleteState {
+    pub fn height(&self, width: u16) -> u16 {
+        let rows = self.items.len().min(10) as u16;
+        rows.saturating_add(2).max(3)
+    }
+}
+
+pub fn render(frame: &mut Frame, area: Rect, state: &AutocompleteState, app: &AppState) {
+    if !state.visible {
+        return;
+    }
+
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP | Borders::BOTTOM)
+        .border_style(Style::default().fg(app.theme.border_active.to_ratatui()))
+        .style(Style::default().bg(app.theme.background_menu.to_ratatui()));
+
+    let items = state
+        .items
+        .iter()
+        .take(10)
+        .map(|item| {
+            let mut spans = vec![
+                Span::styled(&item.title, Style::default().fg(app.theme.text.to_ratatui())),
+            ];
+            if let Some(desc) = &item.description {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(desc, Style::default().fg(app.theme.text_muted.to_ratatui())));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect::<Vec<_>>();
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(state.selected.min(items.len().saturating_sub(1))));
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .fg(app.theme.selected_list_item_text.to_ratatui())
+                .bg(app.theme.primary.to_ratatui())
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(" ");
+
+    frame.render_stateful_widget(list, area, &mut list_state);
+}
+```
+
+---
+
+## 11. Dialog system migration
+
+Current dialog system has a stack, escape handling, dialog sizes, select/prompt/confirm/alert variants, and mouse close behavior.
+
+### 11.1 Dialog stack
+
+```rust
+// crates/jekko-tui/src/ui/dialog.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    widgets::{Block, Borders, Clear},
+};
+
+use crate::state::AppState;
+
+#[derive(Debug, Clone)]
+pub enum Dialog {
+    Alert(AlertDialog),
+    Confirm(ConfirmDialog),
+    Prompt(PromptDialog),
+    Select(crate::ui::dialog_select::SelectDialog),
+    Help(HelpDialog),
+    Custom(crate::plugins::DeclarativeView),
+}
+
+#[derive(Default)]
+pub struct DialogStack {
+    stack: Vec<Dialog>,
+}
+
+impl DialogStack {
+    pub fn replace(&mut self, dialog: Dialog) {
+        self.stack.clear();
+        self.stack.push(dialog);
+    }
+
+    pub fn push(&mut self, dialog: Dialog) {
+        self.stack.push(dialog);
+    }
+
+    pub fn clear(&mut self) {
+        self.stack.clear();
+    }
+
+    pub fn open(&self) -> bool {
+        !self.stack.is_empty()
+    }
+
+    pub fn render(&mut self, frame: &mut Frame, screen: Rect, theme: &jekko_core::theme::ResolvedTheme) {
+        let Some(dialog) = self.stack.last_mut() else {
+            return;
+        };
+
+        let area = centered_rect(screen, dialog_width(screen), dialog_height(screen, dialog));
+        frame.render_widget(Clear, area);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border_style())
+            .style(theme.panel_style());
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        match dialog {
+            Dialog::Alert(d) => d.render(frame, inner, theme),
+            Dialog::Confirm(d) => d.render(frame, inner, theme),
+            Dialog::Prompt(d) => d.render(frame, inner, theme),
+            Dialog::Select(d) => d.render(frame, inner, theme),
+            Dialog::Help(d) => d.render(frame, inner, theme),
+            Dialog::Custom(view) => view.render(frame, inner, theme),
+        }
+    }
+}
+
+fn centered_rect(screen: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(screen.width.saturating_sub(4));
+    let height = height.min(screen.height.saturating_sub(4));
+    Rect {
+        x: screen.x + screen.width.saturating_sub(width) / 2,
+        y: screen.y + screen.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
+fn dialog_width(screen: Rect) -> u16 {
+    match screen.width {
+        0..=79 => screen.width.saturating_sub(4),
+        80..=119 => 72,
+        120..=179 => 88,
+        _ => 104,
+    }
+}
+
+fn dialog_height(screen: Rect, dialog: &Dialog) -> u16 {
+    match dialog {
+        Dialog::Select(d) => d.height(screen.height),
+        Dialog::Prompt(_) => 8,
+        Dialog::Confirm(_) => 8,
+        Dialog::Alert(_) => 7,
+        Dialog::Help(_) => screen.height.saturating_mul(3) / 4,
+        Dialog::Custom(_) => screen.height.saturating_mul(2) / 3,
+    }
+}
+```
+
+### 11.2 DialogSelect replacement
+
+Current `DialogSelect` features:
+
+```text
+title row + esc
+optional filter input
+fuzzy sorting
+grouping by category
+selected/current marker
+keyboard:
+  up/down
+  Ctrl+P/Ctrl+N
+  pageup/pagedown
+  home/end
+  enter
+custom keybinds
+footer keybinds left/right
+mouse hover/click
+```
+
+Ratatui replacement:
+
+```rust
+// crates/jekko-tui/src/ui/dialog_select.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{List, ListItem, ListState, Paragraph},
+};
+
+use crate::state::AppState;
+
+#[derive(Clone)]
+pub struct SelectOption<T = serde_json::Value> {
+    pub title: String,
+    pub value: T,
+    pub description: Option<String>,
+    pub footer: Option<String>,
+    pub category: Option<String>,
+    pub disabled: bool,
+    pub current: bool,
+}
+
+pub struct SelectDialog {
+    pub title: String,
+    pub filter: String,
+    pub selected: usize,
+    pub options: Vec<SelectOption>,
+    pub render_filter: bool,
+    pub flat_when_filtering: bool,
+    pub keybinds: Vec<SelectKeybind>,
+}
+
+pub struct SelectKeybind {
+    pub label: String,
+    pub key: String,
+    pub side: SelectKeybindSide,
+}
+
+pub enum SelectKeybindSide {
+    Left,
+    Right,
+}
+
+impl SelectDialog {
+    pub fn height(&self, screen_height: u16) -> u16 {
+        let rows = self.filtered_rows().len() as u16;
+        let filter = if self.render_filter { 2 } else { 0 };
+        let footer = if self.keybinds.is_empty() { 0 } else { 2 };
+        rows.min(screen_height / 2).saturating_add(3 + filter + footer)
+    }
+
+    pub fn filtered_options(&self) -> Vec<&SelectOption> {
+        let needle = self.filter.to_lowercase();
+        let mut options = self
+            .options
+            .iter()
+            .filter(|o| !o.disabled)
+            .collect::<Vec<_>>();
+
+        if needle.is_empty() {
+            return options;
+        }
+
+        options.sort_by_key(|opt| fuzzy_score(&needle, opt).unwrap_or(i32::MAX));
+        options
+            .into_iter()
+            .filter(|opt| fuzzy_score(&needle, opt).is_some())
+            .collect()
+    }
+
+    pub fn render(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &jekko_core::theme::ResolvedTheme,
+    ) {
+        let filter_height = if self.render_filter { 2 } else { 0 };
+        let footer_height = if self.keybinds.is_empty() { 0 } else { 2 };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(filter_height),
+                Constraint::Min(1),
+                Constraint::Length(footer_height),
+            ])
+            .split(area);
+
+        render_title(frame, chunks[0], &self.title, theme);
+
+        if self.render_filter {
+            render_filter(frame, chunks[1], &self.filter, theme);
+        }
+
+        self.render_list(frame, chunks[2], theme);
+
+        if footer_height > 0 {
+            render_keybind_footer(frame, chunks[3], &self.keybinds, theme);
+        }
+    }
+
+    fn render_list(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &jekko_core::theme::ResolvedTheme,
+    ) {
+        let options = self.filtered_options();
+        let items = options
+            .iter()
+            .map(|opt| {
+                let marker = if opt.current { "● " } else { "  " };
+                let mut spans = vec![
+                    Span::styled(marker, Style::default().fg(theme.primary.to_ratatui())),
+                    Span::styled(&opt.title, theme.text_style()),
+                ];
+
+                if let Some(desc) = &opt.description {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(desc, theme.muted_style()));
+                }
+
+                if let Some(footer) = &opt.footer {
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(footer, theme.muted_style()));
+                }
+
+                ListItem::new(Line::from(spans))
+            })
+            .collect::<Vec<_>>();
+
+        if items.is_empty() {
+            frame.render_widget(
+                Paragraph::new("No results found").style(theme.muted_style()),
+                area,
+            );
+            return;
+        }
+
+        self.selected = self.selected.min(items.len().saturating_sub(1));
+
+        let mut list_state = ListState::default();
+        list_state.select(Some(self.selected));
+
+        let list = List::new(items)
+            .highlight_symbol(" ")
+            .highlight_style(
+                Style::default()
+                    .fg(theme.selected_list_item_text.to_ratatui())
+                    .bg(theme.primary.to_ratatui())
+                    .add_modifier(Modifier::BOLD),
+            );
+
+        frame.render_stateful_widget(list, area, &mut list_state);
+    }
+}
+
+fn render_title(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    theme: &jekko_core::theme::ResolvedTheme,
+) {
+    let line = Line::from(vec![
+        Span::styled(title.to_string(), theme.text_style().add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled("esc", theme.muted_style()),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn render_filter(
+    frame: &mut Frame,
+    area: Rect,
+    filter: &str,
+    theme: &jekko_core::theme::ResolvedTheme,
+) {
+    let line = Line::from(vec![
+        Span::styled("Search ", theme.muted_style()),
+        Span::styled(filter.to_string(), theme.text_style()),
+    ]);
+    frame.render_widget(Paragraph::new(line).style(theme.panel_style()), area);
+}
+
+fn render_keybind_footer(
+    frame: &mut Frame,
+    area: Rect,
+    keybinds: &[SelectKeybind],
+    theme: &jekko_core::theme::ResolvedTheme,
+) {
+    let spans = keybinds
+        .iter()
+        .flat_map(|kb| {
+            [
+                Span::styled(kb.label.clone(), theme.text_style().add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(kb.key.clone(), theme.muted_style()),
+                Span::raw("  "),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn fuzzy_score(needle: &str, option: &SelectOption) -> Option<i32> {
+    let haystack = format!(
+        "{} {}",
+        option.title.to_lowercase(),
+        option.category.clone().unwrap_or_default().to_lowercase()
+    );
+
+    let mut score = 0;
+    let mut pos = 0usize;
+
+    for ch in needle.chars() {
+        let found = haystack[pos..].find(ch)?;
+        score += found as i32;
+        pos += found + ch.len_utf8();
+    }
+
+    Some(score)
+}
+```
+
+---
+
+## 12. Session transcript and tool rendering
+
+### 12.1 Message rendering strategy
+
+Current `session-renderers.tsx` has distinct renderers:
+
+```text
+UserMessage
+AssistantMessage
+ReasoningPart
+TextPart
+ToolPart
+InlineTool
+BlockTool
+Diff/Edit/ApplyPatch
+Shell
+Write
+Glob
+Read
+Grep
+WebFetch
+WebSearch
+Task
+Pending tasks
+Question
+Skill
+Diagnostics
+```
+
+In Ratatui, render transcript into `Vec<Line<'static>>`, then clip through a scroll viewport.
+
+```rust
+// crates/jekko-tui/src/session/renderers.rs
+
+use ratatui::{
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
+
+use crate::state::AppState;
+
+pub fn render_messages(
+    messages: &[jekko_core::session::Message],
+    state: &AppState,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    for (idx, message) in messages.iter().enumerate() {
+        if idx > 0 {
+            lines.push(Line::raw(""));
+        }
+
+        match message.role {
+            jekko_core::session::Role::User => {
+                render_user_message(&mut lines, message, state);
+            }
+            jekko_core::session::Role::Assistant => {
+                render_assistant_message(&mut lines, message, state);
+            }
+        }
+    }
+
+    lines
+}
+
+fn render_user_message(
+    lines: &mut Vec<Line<'static>>,
+    message: &jekko_core::session::Message,
+    state: &AppState,
+) {
+    let theme = &state.theme;
+    let accent = state.agent_accent(&message.agent);
+
+    lines.push(Line::from(vec![
+        Span::styled("│ ", Style::default().fg(accent)),
+        Span::styled("You", theme.text_style().add_modifier(Modifier::BOLD)),
+        Span::styled(format_timestamp(message), theme.muted_style()),
+    ]));
+
+    for wrapped in crate::ui::text::wrap_lines(&message.content, state.content_width()) {
+        lines.push(Line::from(vec![
+            Span::styled("│ ", Style::default().fg(accent)),
+            Span::styled(wrapped, theme.text_style()),
+        ]));
+    }
+
+    for file in &message.files {
+        lines.push(Line::from(vec![
+            Span::styled("│ ", Style::default().fg(accent)),
+            Span::styled(" @", theme.accent_style()),
+            Span::styled(file.path.clone(), theme.muted_style()),
+        ]));
+    }
+}
+
+fn render_assistant_message(
+    lines: &mut Vec<Line<'static>>,
+    message: &jekko_core::session::Message,
+    state: &AppState,
+) {
+    let theme = &state.theme;
+    lines.push(Line::from(vec![
+        Span::styled("▣ ", theme.accent_style()),
+        Span::styled(message.model_label.clone(), theme.muted_style()),
+        Span::raw(" "),
+        Span::styled(format_duration(message.duration_ms), theme.muted_style()),
+        Span::raw(" "),
+        Span::styled(message.cost_label.clone().unwrap_or_default(), theme.muted_style()),
+    ]));
+
+    for part in &message.parts {
+        match part {
+            jekko_core::session::Part::Text(text) => {
+                for wrapped in crate::ui::text::wrap_lines(text, state.content_width()) {
+                    lines.push(Line::from(Span::styled(wrapped, theme.text_style())));
+                }
+            }
+            jekko_core::session::Part::Reasoning(reasoning) => {
+                render_reasoning(lines, reasoning, state);
+            }
+            jekko_core::session::Part::Tool(tool) => {
+                crate::session::tools::render_tool(lines, tool, state);
+            }
+        }
+    }
+}
+
+fn format_timestamp(message: &jekko_core::session::Message) -> Span<'static> {
+    Span::raw(format!(" {}", message.time_label()))
+}
+
+fn format_duration(ms: Option<u64>) -> String {
+    ms.map(|ms| format!("{:.1}s", ms as f64 / 1000.0)).unwrap_or_default()
+}
+```
+
+### 12.2 Tool blocks
+
+```rust
+// crates/jekko-tui/src/session/tools.rs
+
+use ratatui::{
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
+
+use crate::state::AppState;
+
+pub fn render_tool(
+    lines: &mut Vec<Line<'static>>,
+    tool: &jekko_core::session::ToolPart,
+    state: &AppState,
+) {
+    if tool.inline {
+        render_inline_tool(lines, tool, state);
+    } else {
+        render_block_tool(lines, tool, state);
+    }
+}
+
+fn render_inline_tool(
+    lines: &mut Vec<Line<'static>>,
+    tool: &jekko_core::session::ToolPart,
+    state: &AppState,
+) {
+    let theme = &state.theme;
+    let icon = tool_icon(tool);
+    let status = status_glyph(tool);
+
+    lines.push(Line::from(vec![
+        Span::styled(icon, theme.accent_style()),
+        Span::raw(" "),
+        Span::styled(tool.title.clone(), theme.text_style()),
+        Span::raw(" "),
+        Span::styled(status, status_style(tool, state)),
+    ]));
+}
+
+fn render_block_tool(
+    lines: &mut Vec<Line<'static>>,
+    tool: &jekko_core::session::ToolPart,
+    state: &AppState,
+) {
+    let theme = &state.theme;
+
+    lines.push(Line::from(vec![
+        Span::styled("│ ", theme.border_style()),
+        Span::styled(tool_icon(tool), theme.accent_style()),
+        Span::raw(" "),
+        Span::styled(tool.title.clone(), theme.text_style().add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled(status_glyph(tool), status_style(tool, state)),
+    ]));
+
+    for line in tool.output.lines().take(tool.max_visible_lines()) {
+        lines.push(Line::from(vec![
+            Span::styled("│ ", theme.border_style()),
+            Span::styled(line.to_string(), theme.muted_style()),
+        ]));
+    }
+}
+
+fn tool_icon(tool: &jekko_core::session::ToolPart) -> &'static str {
+    match tool.kind.as_str() {
+        "shell" => "⌁",
+        "write" => "✎",
+        "read" => "◉",
+        "grep" => "⌕",
+        "glob" => "◇",
+        "webfetch" => "↗",
+        "websearch" => "⌕",
+        "task" => "▣",
+        "edit" | "apply_patch" => "±",
+        _ => "•",
+    }
+}
+
+fn status_glyph(tool: &jekko_core::session::ToolPart) -> &'static str {
+    match tool.status {
+        jekko_core::session::ToolStatus::Running => "⠋",
+        jekko_core::session::ToolStatus::Success => "✓",
+        jekko_core::session::ToolStatus::Error => "✗",
+        jekko_core::session::ToolStatus::Cancelled => "!",
+    }
+}
+
+fn status_style(tool: &jekko_core::session::ToolPart, state: &AppState) -> Style {
+    match tool.status {
+        jekko_core::session::ToolStatus::Running => state.theme.accent_style(),
+        jekko_core::session::ToolStatus::Success => state.theme.success_style(),
+        jekko_core::session::ToolStatus::Error => state.theme.error_style(),
+        jekko_core::session::ToolStatus::Cancelled => state.theme.warning_style(),
+    }
+}
+```
+
+---
+
+## 13. Diff renderer replacement
+
+Current OpenTUI uses a `<diff>` widget. Ratatui replacement should use `similar` and render either unified or split depending on width and config.
+
+```rust
+// crates/jekko-tui/src/ui/diff.rs
+
+use ratatui::{
+    style::Style,
+    text::{Line, Span},
+};
+
+use similar::{ChangeTag, TextDiff};
+
+use crate::state::AppState;
+
+pub fn unified_diff_lines(
+    old: &str,
+    new: &str,
+    state: &AppState,
+) -> Vec<Line<'static>> {
+    let theme = &state.theme;
+    let diff = TextDiff::from_lines(old, new);
+    let mut lines = Vec::new();
+
+    for group in diff.grouped_ops(3) {
+        lines.push(Line::from(Span::styled(
+            "@@",
+            Style::default()
+                .fg(theme.diff_hunk_header.to_ratatui())
+                .bg(theme.diff_context_bg.to_ratatui()),
+        )));
+
+        for op in group {
+            for change in diff.iter_changes(&op) {
+                let (prefix, fg, bg) = match change.tag() {
+                    ChangeTag::Delete => ("-", theme.diff_removed, theme.diff_removed_bg),
+                    ChangeTag::Insert => ("+", theme.diff_added, theme.diff_added_bg),
+                    ChangeTag::Equal => (" ", theme.diff_context, theme.diff_context_bg),
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{:>4} ", line_number_label(change.old_index())),
+                        Style::default()
+                            .fg(theme.diff_line_number.to_ratatui())
+                            .bg(bg.to_ratatui()),
+                    ),
+                    Span::styled(
+                        prefix,
+                        Style::default().fg(fg.to_ratatui()).bg(bg.to_ratatui()),
+                    ),
+                    Span::styled(
+                        change.value().trim_end_matches('\n').to_string(),
+                        Style::default().fg(fg.to_ratatui()).bg(bg.to_ratatui()),
+                    ),
+                ]));
+            }
+        }
+    }
+
+    lines
+}
+
+fn line_number_label(index: Option<usize>) -> String {
+    index.map(|i| (i + 1).to_string()).unwrap_or_else(|| "".into())
+}
+```
+
+Split diff for wide screens:
+
+```rust
+pub fn split_diff_lines(old: &str, new: &str, width: u16, state: &AppState) -> Vec<Line<'static>> {
+    if width < 120 {
+        return unified_diff_lines(old, new, state);
+    }
+
+    let theme = &state.theme;
+    let left_width = (width / 2).saturating_sub(2) as usize;
+    let right_width = (width / 2).saturating_sub(2) as usize;
+    let diff = TextDiff::from_lines(old, new);
+    let mut lines = Vec::new();
+
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Delete => {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        crate::ui::text::truncate(change.value(), left_width),
+                        Style::default()
+                            .fg(theme.diff_removed.to_ratatui())
+                            .bg(theme.diff_removed_bg.to_ratatui()),
+                    ),
+                    Span::raw(" │ "),
+                    Span::raw(" ".repeat(right_width)),
+                ]));
+            }
+            ChangeTag::Insert => {
+                lines.push(Line::from(vec![
+                    Span::raw(" ".repeat(left_width)),
+                    Span::raw(" │ "),
+                    Span::styled(
+                        crate::ui::text::truncate(change.value(), right_width),
+                        Style::default()
+                            .fg(theme.diff_added.to_ratatui())
+                            .bg(theme.diff_added_bg.to_ratatui()),
+                    ),
+                ]));
+            }
+            ChangeTag::Equal => {
+                let text = change.value().trim_end_matches('\n');
+                lines.push(Line::from(vec![
+                    Span::styled(crate::ui::text::truncate(text, left_width), theme.muted_style()),
+                    Span::raw(" │ "),
+                    Span::styled(crate::ui::text::truncate(text, right_width), theme.muted_style()),
+                ]));
+            }
+        }
+    }
+
+    lines
+}
+```
+
+---
+
+## 14. Permission and question prompt replacement
+
+Current permission prompt has:
+
+```text
+stages: permission | always | reject
+diff edit body
+options with keyboard/mouse
+left accent border
+backgroundPanel
+```
+
+Ratatui replacement sketch:
+
+```rust
+// crates/jekko-tui/src/session/permission.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+};
+
+use crate::state::AppState;
+
+pub fn render(frame: &mut Frame, area: Rect, session_id: &str, state: &AppState) {
+    let Some(req) = state.sync.permission(session_id) else {
+        return;
+    };
+
+    let theme = &state.theme;
+
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(theme.warning.to_ratatui()))
+        .style(Style::default().bg(theme.background_panel.to_ratatui()));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let [title, body, options] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner)
+        .to_vec()
+        .try_into()
+        .unwrap();
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Permission required", theme.warning_style().add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(req.title.clone(), theme.text_style()),
+        ])),
+        title,
+    );
+
+    let body_lines = if let Some(diff) = &req.diff {
+        crate::ui::diff::unified_diff_lines(&diff.old, &diff.new, state)
+    } else {
+        crate::ui::text::wrap_lines(&req.description, body.width as usize)
+            .into_iter()
+            .map(|s| Line::from(Span::styled(s, theme.text_style())))
+            .collect()
+    };
+
+    frame.render_widget(Paragraph::new(body_lines), body);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            key(" y ", state), Span::styled(" allow  ", theme.muted_style()),
+            key(" a ", state), Span::styled(" always  ", theme.muted_style()),
+            key(" n ", state), Span::styled(" reject  ", theme.muted_style()),
+            key(" esc ", state), Span::styled(" cancel", theme.muted_style()),
+        ])),
+        options,
+    );
+}
+
+fn key<'a>(label: &'a str, state: &AppState) -> Span<'a> {
+    Span::styled(
+        label,
+        Style::default()
+            .fg(state.theme.text.to_ratatui())
+            .bg(state.theme.background_element.to_ratatui()),
+    )
+}
+```
+
+---
+
+## 15. Jnoccio dashboard replacement
+
+Current dashboard:
+
+```text
+full screen
+top title/status row
+metrics row
+tab row, 6 tabs
+content panel
+detail drawer:
+  wide screens: right drawer min(50, 35%)
+  narrow screens: full overlay
+footer hints
+colors: GOLD, HOT_PINK, RED, PURPLE, TEAL, BLUE
+```
+
+Ratatui structure:
+
+```rust
+// crates/jekko-tui/src/screens/jnoccio.rs
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+};
+
+use crate::state::AppState;
+
+const GOLD: Color = Color::Rgb(0xFF, 0xD7, 0x00);
+const HOT_PINK: Color = Color::Rgb(0xFF, 0x4F, 0xA3);
+const TEAL: Color = Color::Rgb(0x3A, 0xD7, 0xC2);
+const BLUE: Color = Color::Rgb(0x5A, 0x9B, 0xFF);
+const PURPLE: Color = Color::Rgb(0xB0, 0x7C, 0xFF);
+
+pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    let [top, metrics, tabs, main, footer] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(area)
+        .to_vec()
+        .try_into()
+        .unwrap();
+
+    render_title(frame, top, state);
+    render_metrics(frame, metrics, state);
+    render_tabs(frame, tabs, state);
+
+    if area.width >= 140 {
+        let drawer_w = ((area.width as f32 * 0.35) as u16).max(50);
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(0), Constraint::Length(drawer_w)])
+            .split(main);
+        render_active_panel(frame, chunks[0], state);
+        render_detail_drawer(frame, chunks[1], state);
+    } else {
+        render_active_panel(frame, main, state);
+        if state.jnoccio.drawer_open {
+            frame.render_widget(ratatui::widgets::Clear, main);
+            render_detail_drawer(frame, main, state);
+        }
+    }
+
+    render_footer(frame, footer, state);
+}
+
+fn render_title(frame: &mut Frame, area: Rect, state: &AppState) {
+    let status = state.jnoccio.status_label();
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Jnoccio", Style::default().fg(GOLD).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(status, state.theme.muted_style()),
+        ])),
+        area,
+    );
+}
+
+fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
+    let tabs = ["Feed", "Agents", "Latency", "Limits", "Model", "Vault"];
+    let spans = tabs
+        .iter()
+        .enumerate()
+        .flat_map(|(idx, title)| {
+            let active = idx == state.jnoccio.active_tab;
+            [
+                Span::styled(
+                    format!(" {} ", title),
+                    if active {
+                        Style::default().fg(state.theme.background.to_ratatui()).bg(GOLD)
+                    } else {
+                        state.theme.muted_style()
+                    },
+                ),
+                Span::raw(" "),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+```
+
+---
+
+## 16. Plugin system migration
+
+### 16.1 Current plugin problem
+
+The current plugin system allows:
+
+```tsx
+render: () => (
+  <box>
+    <text>demo</text>
+  </box>
+)
+```
+
+That is impossible to keep while removing:
+
+```text
+OpenTUI
+Solid
+Bun
+TSX runtime
+@opentui/core
+@opentui/solid
+```
+
+### 16.2 Recommended new plugin contract
+
+Keep plugin concepts:
+
+```text
+plugin IDs
+commands
+routes
+slots
+themes
+enable/disable state
+metadata
+lifecycle cleanup
+internal plugins
+external plugin config
+```
+
+Replace plugin-rendered JSX with either:
+
+1. **Declarative view model** rendered by Rust/Ratatui.
+2. **Rust internal plugins only** for first migration.
+3. Future WASM plugin ABI, if needed.
+
+Declarative view example:
+
+```rust
+// crates/jekko-plugin-api/src/view_model.rs
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum View {
+    Text {
+        text: String,
+        style: Option<StyleToken>,
+    },
+    Row {
+        children: Vec<View>,
+    },
+    Column {
+        children: Vec<View>,
+    },
+    Panel {
+        title: Option<String>,
+        children: Vec<View>,
+    },
+    List {
+        rows: Vec<ListRow>,
+    },
+    Slot {
+        name: String,
+        props: serde_json::Value,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListRow {
+    pub title: String,
+    pub description: Option<String>,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StyleToken {
+    Text,
+    Muted,
+    Accent,
+    Success,
+    Warning,
+    Error,
+    Primary,
+}
+```
+
+Slot registry:
+
+```rust
+// crates/jekko-tui/src/plugins/slots.rs
+
+use std::collections::BTreeMap;
+
+use ratatui::{Frame, layout::Rect};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotMode {
+    Append,
+    Replace,
+    SingleWinner,
+}
+
+pub struct SlotContribution {
+    pub plugin_id: String,
+    pub priority: i32,
+    pub view: jekko_plugin_api::View,
+}
+
+#[derive(Default)]
+pub struct SlotRegistry {
+    slots: BTreeMap<String, Vec<SlotContribution>>,
+}
+
+impl SlotRegistry {
+    pub fn register(&mut self, name: impl Into<String>, contribution: SlotContribution) {
+        self.slots.entry(name.into()).or_default().push(contribution);
+    }
+
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        name: &str,
+        mode: SlotMode,
+        theme: &jekko_core::theme::ResolvedTheme,
+    ) -> bool {
+        let Some(items) = self.slots.get(name) else {
+            return false;
+        };
+
+        match mode {
+            SlotMode::Replace | SlotMode::SingleWinner => {
+                if let Some(item) = items.iter().max_by_key(|item| item.priority) {
+                    crate::plugins::view_renderer::render(frame, area, &item.view, theme);
+                    true
+                } else {
+                    false
+                }
+            }
+            SlotMode::Append => {
+                let chunks = crate::ui::rect::vertical_even(area, items.len());
+                for (item, chunk) in items.iter().zip(chunks) {
+                    crate::plugins::view_renderer::render(frame, chunk, &item.view, theme);
+                }
+                true
+            }
+        }
+    }
+}
+```
+
+### 16.3 Existing plugin docs to rewrite
+
+Rewrite:
+
+```text
+packages/jekko/specs/tui-plugins.md
+packages/plugin/src/tui.ts
+```
+
+Remove all examples that import:
+
+```text
+@opentui/core
+@opentui/solid
+JSX
+SolidPlugin
+CliRenderer
+RGBA from OpenTUI
+```
+
+Replace with either Rust examples or declarative JSON/plugin examples.
+
+### 16.4 Local plugin install behavior
+
+Current docs say local config-scoped plugins install:
+
+```text
+package.json
+bun.lock
+node_modules/
+.gitignore
+```
+
+New behavior must not write `bun.lock`. Options:
+
+```text
+A. No JS runtime plugin install during first Ratatui release.
+B. Use npm/pnpm with --ignore-scripts for JS declarative plugins.
+C. Use precompiled `.wasm` or `.json` plugin bundles.
+```
+
+Recommended first release:
+
+```text
+External TUI plugins:
+  - theme-only packages supported
+  - declarative JSON plugins supported
+  - TSX UI plugins deprecated/incompatible
+Internal built-in plugins:
+  - ported to Rust
+```
+
+---
+
+## 17. Build, scripts, CI, and Nix replacement
+
+### 17.1 `xtask` commands
+
+Create:
+
+```text
+crates/xtask/src/main.rs
+```
+
+with commands replacing Bun scripts:
+
+```rust
+// crates/xtask/src/main.rs
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    Build {
+        #[arg(long)]
+        release: bool,
+    },
+    Schema,
+    Generate,
+    Publish,
+    HostBinaryPath,
+    Ci,
+    SmokeTui,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Command::Build { release } => xtask::build::run(release),
+        Command::Schema => xtask::schema::run(),
+        Command::Generate => xtask::generate::run(),
+        Command::Publish => xtask::publish::run(),
+        Command::HostBinaryPath => xtask::build::print_host_binary_path(),
+        Command::Ci => xtask::ci::run(),
+        Command::SmokeTui => xtask::ci::smoke_tui(),
+    }
+}
+```
+
+### 17.2 CI commands
+
+Replace Bun commands with:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
+cargo run -p xtask -- ci
+cargo run -p xtask -- build --release
+```
+
+Add dependency guards:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+for pattern in \
+  '@opentui' \
+  'opentui-spinner' \
+  'solid-js' \
+  'bunfig' \
+  'bun.lock' \
+  'bun:test' \
+  'Bun\.' \
+  '#!/usr/bin/env bun' \
+  '\bbun\b' \
+  '\bvite\b' \
+  '@vite' \
+  'vite.config'
+do
+  if grep -RInE "$pattern" \
+    --exclude-dir=.git \
+    --exclude-dir=target \
+    --exclude='Cargo.lock' \
+    .; then
+    echo "Forbidden migration residue found: $pattern" >&2
+    exit 1
+  fi
+done
+```
+
+Use a slightly more nuanced guard if JavaScript SDK remains and words like “bun” appear in historical docs. The final release branch should pass the strict guard.
+
+### 17.3 Nix replacement
+
+Replace `nix/jekko.nix` with a Rust derivation:
+
+```nix
+{ lib
+, rustPlatform
+, pkg-config
+, openssl
+}:
+
+rustPlatform.buildRustPackage {
+  pname = "jekko";
+  version = "1.0.3";
+
+  src = ../.;
+
+  cargoLock.lockFile = ../Cargo.lock;
+
+  nativeBuildInputs = [
+    pkg-config
+  ];
+
+  buildInputs = [
+    openssl
+  ];
+
+  buildAndTestSubdir = ".";
+
+  meta = with lib; {
+    description = "AI-powered development tool";
+    homepage = "https://github.com/neverhuman/jekko";
+    license = licenses.mit;
+  };
+}
+```
+
+Delete:
+
+```text
+nix/node_modules.nix
+nix/scripts/canonicalize-node-modules.ts
+nix/scripts/normalize-bun-binaries.ts
+```
+
+---
+
+## 18. Test strategy
+
+### 18.1 Snapshot tests with Ratatui TestBackend
+
+```rust
+// crates/jekko-tui/tests/snapshots.rs
+
+use ratatui::{backend::TestBackend, Terminal};
+
+#[test]
+fn home_80x24_snapshot() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut state = jekko_tui::test_support::home_state();
+    terminal.draw(|frame| state.render(frame)).unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    insta::assert_snapshot!(format!("{buffer:?}"));
+}
+
+#[test]
+fn shell_120x30_snapshot() {
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut state = jekko_tui::test_support::shell_state();
+    terminal.draw(|frame| state.render(frame)).unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    insta::assert_snapshot!(format!("{buffer:?}"));
+}
+```
+
+Recommended snapshot matrix:
+
+```text
+home_80x24
+home_120x30
+splash_80x24
+splash_160x40
+shell_79x24         # left hidden
+shell_80x24         # overlay behavior
+shell_100x30        # left width 28
+shell_120x30        # left width 38
+shell_160x40        # left width 44
+session_empty_80x24
+session_with_tools_120x30
+session_diff_unified_100x30
+session_diff_split_160x40
+dialog_select_80x24
+prompt_autocomplete_120x30
+permission_prompt_120x30
+jnoccio_dashboard_160x40
+```
+
+### 18.2 PTY tests
+
+Keep the spirit of current TUI tests, but boot the Rust binary:
+
+```bash
+JEKKO_BIN="$(cargo run -q -p xtask -- host-binary-path)" \
+cargo test -p tuiwright-jekko-unlock
+```
+
+Or replace with a Rust integration test that launches `target/debug/jekko` under a pseudo-terminal.
+
+### 18.3 Unit tests to port
+
+Port these existing test areas:
+
+```text
+keybind parsing/printing
+terminal tokenization
+YAML tokenization
+theme resolution
+startup preflight
+prompt usage
+prompt history
+prompt part assignment
+dialog provider logic
+dialog workspace create logic
+session command transcript
+daemon banner/dialog
+Jnoccio snapshot/ws/model panels
+Jankurai baseline/history/delta/sparkline
+plugin install/add/toggle/lifecycle
+slot replace/single winner behavior
+revert diff
+thread/session validation/transcript
+```
+
+### 18.4 Golden visual baselines
+
+Before deleting OpenTUI, capture baseline screen dumps at these sizes:
+
+```text
+80x24
+100x30
+120x30
+160x40
+200x60
+```
+
+For each screen:
+
+```text
+splash
+home
+shell
+session with user/assistant/tool/diff
+prompt autocomplete
+command dialog
+model/provider dialogs
+permission/question prompt
+Jnoccio dashboard
+```
+
+Use those as visual reference for Ratatui snapshots.
+
+---
+
+## 19. Detailed migration phases
+
+### Phase 0 — Repository cleanup and guardrails
+
+Deliverables:
+
+```text
+Cargo workspace added
+Ratatui proof-of-life binary
+dependency residue CI guard
+Vite guard
+OpenTUI guard
+Bun guard
+```
+
+Actions:
+
+```text
+Add Cargo.toml workspace
+Add crates/jekko-cli
+Add crates/jekko-tui
+Add crates/jekko-core
+Add crates/jekko-sdk
+Add crates/xtask
+Add strict grep guard script
+Add rust-toolchain.toml
+Add .cargo/config.toml if needed
+```
+
+Do not delete OpenTUI yet. First prove Ratatui binary can render splash/home.
+
+### Phase 1 — Rust app shell
+
+Port:
+
+```text
+app.tsx
+app-view.tsx
+context/route.tsx
+context/exit.tsx
+context/args.tsx
+startup-preflight.ts
+win32.ts
+```
+
+Deliverables:
+
+```text
+jekko tui launches in alternate screen
+raw mode restoration works
+Ctrl+C and q startup quit behavior works
+resize events work
+navigation route model works
+fatal startup error restores terminal
+```
+
+### Phase 2 — Theme system
+
+Port:
+
+```text
+context/theme-core.ts
+context/theme-presets.ts
+context/theme-syntax.ts
+context/theme/*.json
+```
+
+Deliverables:
+
+```text
+theme JSON parser
+dark/light variants
+color references/defs
+transparent/none handling
+ANSI color mapping
+selected foreground logic
+tint function
+syntax token style map
+```
+
+### Phase 3 — Navigation, splash, home
+
+Port:
+
+```text
+component/navigation-header.tsx
+component/splash-screen.tsx
+component/logo.tsx
+component/logo-ansi.ts
+component/footer-band.tsx
+routes/home.tsx
+ui/toast.tsx
+```
+
+Deliverables:
+
+```text
+pixel-matched splash
+navigation header Ctrl+H/Ctrl+J
+home logo/hints/footer
+toast rendering
+snapshot tests for 80/120/160 widths
+```
+
+### Phase 4 — Shell route and built-in panels
+
+Port:
+
+```text
+routes/shell/shell-view.tsx
+feature-plugins/shell/*
+feature-plugins/sidebar/*
+feature-plugins/home/*
+feature-plugins/system/plugins.tsx
+```
+
+Deliverables:
+
+```text
+responsive left panel
+overlay behavior at 80..99 columns
+footer hints
+activity feed fallback
+sidebar context/mcp/lsp/todo/files panels
+plugin manager as Rust internal screen/dialog
+```
+
+### Phase 5 — Dialog framework
+
+Port:
+
+```text
+ui/dialog.tsx
+ui/dialog-frame.tsx
+ui/dialog-alert.tsx
+ui/dialog-confirm.tsx
+ui/dialog-prompt.tsx
+ui/dialog-secret-prompt.tsx
+ui/dialog-select.tsx
+ui/dialog-help.tsx
+ui/dialog-export-options.tsx
+component/dialog-*.tsx
+```
+
+Deliverables:
+
+```text
+dialog stack
+Esc close
+centered sizing
+select dialog filtering/grouping/current marker
+prompt/secret prompt
+confirm/alert
+model/provider/theme/session dialogs
+mouse interaction map
+```
+
+### Phase 6 — Prompt
+
+Port:
+
+```text
+component/prompt/index.tsx
+component/prompt/autocomplete.tsx
+component/prompt/history.tsx
+component/prompt/frecency.tsx
+component/prompt/stash.tsx
+component/prompt/part.ts
+component/prompt/traits.ts
+component/prompt/usage.ts
+component/textarea-keybindings.ts
+```
+
+Deliverables:
+
+```text
+multi-line textarea
+max height 6
+shell mode detection
+slash autocomplete
+@ file/agent autocomplete
+prompt history/stash
+paste handling
+file/image/pdf prompt parts
+editor context injection
+ZYAL detection/preview
+usage row
+metadata row
+right slot replacement
+interrupt/abort behavior
+Ctrl+C double quit
+```
+
+### Phase 7 — Session transcript and tools
+
+Port:
+
+```text
+routes/session/index.tsx
+routes/session/session-view.tsx
+routes/session/session-body*.tsx
+routes/session/session-renderers.tsx
+routes/session/session-helpers.ts
+routes/session/session-command-transcript.tsx
+routes/session/session-commands.tsx
+routes/session/sidebar.tsx
+routes/session/footer.tsx
+routes/session/daemon-banner.tsx
+routes/session/subagent-footer.tsx
+util/revert-diff.ts
+util/terminal-tokenize.ts
+util/yaml-tokenize.ts
+util/transcript.ts
+```
+
+Deliverables:
+
+```text
+sticky-bottom transcript
+scroll acceleration
+user message cards
+assistant message blocks
+reasoning/text/tool parts
+terminal token coloring
+YAML token coloring
+diff unified/split rendering
+reverted messages card
+session commands
+sidebar
+daemon/subagent footer
+```
+
+### Phase 8 — Permission and question flows
+
+Port:
+
+```text
+routes/session/permission.tsx
+routes/session/question.tsx
+routes/session/question-controller.ts
+routes/session/question-view.tsx
+```
+
+Deliverables:
+
+```text
+permission prompt with allow/always/reject
+edit/diff body
+question tabs/options/custom textarea
+keyboard/mouse options
+snapshot tests
+```
+
+### Phase 9 — Jnoccio and Jankurai
+
+Port:
+
+```text
+context/jnoccio-*.ts
+context/jankurai-*.ts
+feature-plugins/jnoccio/*
+feature-plugins/jankurai/*
+context/zyal-*.ts
+feature-plugins/sidebar/zyal*
+```
+
+Deliverables:
+
+```text
+Jnoccio boot status service
+Jnoccio dashboard
+tabs and detail drawer
+latency/limits/model/vault panels
+Jankurai sidebar/panel/sparkline
+ZYAL palette/sidebar
+```
+
+### Phase 10 — Plugin API
+
+Port or replace:
+
+```text
+plugin/runtime*.ts
+plugin/api*.tsx
+plugin/slots.tsx
+plugin/internal.ts
+packages/plugin/src/tui.ts
+packages/jekko/specs/tui-plugins.md
+```
+
+Deliverables:
+
+```text
+Rust internal plugin registry
+slot registry
+command registry
+route registry
+theme-only external plugin support
+declarative external plugin support, or explicit removal
+updated plugin docs
+no OpenTUI/Solid public API
+```
+
+### Phase 11 — SDK, sync, config, KV, local state
+
+Port:
+
+```text
+context/sdk.tsx
+context/sync*.tsx
+context/sync-store.tsx
+context/project.tsx
+context/kv.tsx
+context/local.tsx
+context/tui-config.tsx
+config/*.ts
+thread.ts
+worker.ts
+attach.ts
+```
+
+Deliverables:
+
+```text
+HTTP client
+WebSocket event stream
+sync store
+config load/migrate
+KV store
+local model/provider/agent selection
+project/workspace state
+session validation
+```
+
+### Phase 12 — Bun deletion
+
+Delete/rewrite all Bun files:
+
+```text
+bun.lock
+bunfig.toml
+packages/jekko/bunfig.toml
+.github/actions/setup-bun/action.yml
+nix/node_modules.nix
+nix/scripts/canonicalize-node-modules.ts
+nix/scripts/normalize-bun-binaries.ts
+packages/jekko/script/upgrade-opentui.ts
+packages/jekko/script/fix-node-pty.ts
+packages/jekko/script/build.ts
+```
+
+Rewrite:
+
+```text
+package.json
+packages/jekko/package.json
+.github/workflows/*.yml
+ops/ci/*.sh
+.husky/pre-push
+docs/*.md
+nix/jekko.nix
+```
+
+Final guard must pass:
+
+```bash
+grep -RInE '@opentui|opentui-spinner|solid-js|bunfig|bun\.lock|bun:test|Bun\.|#!/usr/bin/env bun|\bbun\b|\bvite\b|@vite|vite.config' .
+```
+
+---
+
+## 20. Dependencies to remove
+
+Remove these from every JS manifest:
+
+```text
+@opentui/core
+@opentui/solid
+opentui-spinner
+solid-js
+@solid-primitives/event-bus
+@solid-primitives/scheduled
+@types/bun
+@tsconfig/bun
+bun-pty
+```
+
+Likely remove or replace:
+
+```text
+@lydell/node-pty      -> portable-pty or tokio-pty-process
+clipboardy           -> arboard or terminal OSC52 helper
+cli-sound            -> rodio or platform command, or remove
+fuzzysort            -> nucleo-matcher / sublime_fuzzy / custom fuzzy
+diff                 -> similar
+strip-ansi           -> strip-ansi-escapes or ansi-parser
+yaml                 -> serde_yaml / yaml-rust2
+jsonc-parser         -> json_comments + serde_json, or jsonc-parser equivalent crate
+xdg-basedir          -> directories
+chokidar             -> notify
+glob/minimatch       -> globset / ignore / walkdir
+drizzle/sqlite       -> rusqlite or sqlx sqlite
+```
+
+Add Rust dependencies:
+
+```text
+ratatui
+crossterm
+tokio
+ratatui-textarea
+unicode-width
+unicode-segmentation
+similar
+serde
+serde_json
+serde_yaml
+clap
+anyhow
+thiserror
+tracing
+tracing-subscriber
+directories
+notify
+ignore
+globset
+reqwest
+tokio-tungstenite
+futures
+arboard
+rusqlite or sqlx
+insta
+assert_cmd
+predicates
+portable-pty
+```
+
+---
+
+## 21. Final cutover checklist
+
+### Source cleanup
+
+```text
+[ ] No `@opentui/*`
+[ ] No `opentui-spinner`
+[ ] No `solid-js`
+[ ] No TSX TUI components
+[ ] No Bun package manager
+[ ] No `bun.lock`
+[ ] No `bunfig.toml`
+[ ] No `Bun.*`
+[ ] No `bun:test`
+[ ] No `#!/usr/bin/env bun`
+[ ] No Vite references
+[ ] No OpenTUI plugin API
+```
+
+### Functional parity
+
+```text
+[ ] Launch TUI
+[ ] Startup preflight
+[ ] Splash screen
+[ ] Quit during startup
+[ ] Theme loading/switching
+[ ] Navigation header
+[ ] Home route
+[ ] Shell route
+[ ] Session route
+[ ] Prompt submit
+[ ] Prompt history/stash
+[ ] Autocomplete
+[ ] Slash commands
+[ ] Command dialog
+[ ] Provider/model dialogs
+[ ] Permission prompt
+[ ] Question prompt
+[ ] Transcript scroll
+[ ] Tool rendering
+[ ] Diff rendering
+[ ] Toasts
+[ ] Footer bands
+[ ] Jnoccio dashboard
+[ ] Jankurai panels
+[ ] Plugin manager
+[ ] Theme-only plugins
+[ ] Terminal restore on panic/fatal error
+[ ] Mouse support
+[ ] Windows terminal handling
+```
+
+### Pixel parity
+
+```text
+[ ] 80x24 snapshots
+[ ] 100x30 snapshots
+[ ] 120x30 snapshots
+[ ] 160x40 snapshots
+[ ] 200x60 snapshots
+[ ] Dark theme snapshots
+[ ] Light theme snapshots
+[ ] Transparent/system theme fallback snapshots
+[ ] Unicode truncation verified
+[ ] Borders and footer bands verified
+[ ] Prompt max-height verified
+[ ] Shell breakpoints verified
+[ ] Jnoccio drawer breakpoint verified
+```
+
+### CI
+
+```text
+[ ] cargo fmt
+[ ] cargo clippy
+[ ] cargo test
+[ ] snapshot tests
+[ ] PTY smoke test
+[ ] Nix build
+[ ] release binary build
+[ ] forbidden dependency guard
+```
+
+---
+
+## 22. Recommended end state
+
+The final result should have **no OpenTUI, no Bun, no Vite, and no TSX-rendered TUI**.
+
+The Rust TUI should be organized like this:
+
+```text
+Ratatui immediate-mode renderer
+Crossterm terminal/input backend
+Tokio background services
+Component/Action architecture
+Theme tokens ported exactly
+Prompt rebuilt around ratatui-textarea plus custom Jekko prompt parts
+Dialogs rebuilt as Ratatui overlays
+Session transcript rendered as styled line streams
+Diffs rendered with similar
+Plugins converted to Rust internal modules plus declarative external view models
+CI/Nix/scripts moved to Cargo/xtask
+```
+
+The most important architectural decision is the plugin one: **external TSX/OpenTUI plugins must be treated as incompatible with this migration**. Preserve plugin behavior through a new declarative or Rust-native API, but do not keep the old TSX renderer hidden behind another JavaScript runtime. That is the only way to satisfy the “remove OpenTUI and Bun 100%” requirement cleanly.
+
+[1]: https://docs.rs/ratatui/latest/ratatui/ "ratatui - Rust"
+[2]: https://ratatui.rs/concepts/application-patterns/component-architecture/ "Component Architecture | Ratatui"
+[3]: https://docs.rs/ratatui/latest/ratatui/backend/struct.CrosstermBackend.html "CrosstermBackend in ratatui::backend - Rust"
+[4]: https://docs.rs/ratatui-textarea "ratatui_textarea - Rust"
+

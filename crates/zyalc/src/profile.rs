@@ -42,8 +42,7 @@ pub struct ProfileInfo {
 }
 
 pub fn detect(path: &Path) -> Result<ProfileInfo> {
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let (profile, _consumed_pragma_bytes) = parse_header(&raw)?;
     Ok(ProfileInfo { profile, raw })
 }
@@ -64,7 +63,9 @@ pub fn parse_header(raw: &str) -> Result<(Profile, usize)> {
         };
         let kind = attrs.get("").map(String::as_str).unwrap_or("declarative");
         if kind != "declarative" {
-            return Err(anyhow!("unsupported pragma kind '{kind}' in: {pragma_line}"));
+            return Err(anyhow!(
+                "unsupported pragma kind '{kind}' in: {pragma_line}"
+            ));
         }
         let profile = match target.as_str() {
             "toml" => Profile::DeclarativeToml { schema },

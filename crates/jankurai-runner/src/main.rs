@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use jankurai_runner::bootstrap_check;
-use jankurai_runner::runner::{RunnerConfig, run_once};
+use jankurai_runner::runner::{run_once, RunnerConfig};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -55,7 +55,10 @@ fn main() {
 }
 
 fn dispatch(cli: Cli) -> Result<i32> {
-    let repo = cli.repo.canonicalize().with_context(|| format!("canonicalize repo: {}", cli.repo.display()))?;
+    let repo = cli
+        .repo
+        .canonicalize()
+        .with_context(|| format!("canonicalize repo: {}", cli.repo.display()))?;
 
     // Bootstrap precondition mirrors the TS detect.ts check from PR1.
     let readiness = bootstrap_check::is_ready(&repo);
@@ -84,7 +87,9 @@ fn dispatch(cli: Cli) -> Result<i32> {
         dry_run: cli.dry_run,
     };
 
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     runtime.block_on(async move {
         if cli.once {
             run_once(&config).await

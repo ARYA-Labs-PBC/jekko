@@ -27,8 +27,7 @@ use tuiwright::{Key, Page};
 
 mod test_helpers;
 use test_helpers::{
-    copy_jekko_logs, ensure_artifact_dir, jekko_bin, prepare_workspace, spawn_jekko_with_size,
-    spawn_jekko_with_size_env,
+    copy_jekko_logs, ensure_artifact_dir, jekko_bin, prepare_workspace, spawn_jekko_with_size_env,
 };
 
 const ARTIFACT_SUBDIR: &str = "jnoccio-tui";
@@ -150,6 +149,7 @@ fn write_jnoccio_home_key(home: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn spawn_jekko_with_jnoccio_enabled(
     parent: &tempfile::TempDir,
     jekko: &std::path::Path,
@@ -250,7 +250,10 @@ fn jnoccio_dashboard_hidden_when_server_offline() -> Result<()> {
         200,
         60,
         "jnoccio-hidden-offline",
-        &[("JEKKO_MODEL_KEYS_FILE", model_keys_path.to_string_lossy().as_ref())],
+        &[(
+            "JEKKO_MODEL_KEYS_FILE",
+            model_keys_path.to_string_lossy().as_ref(),
+        )],
     )?;
 
     // Wait for TUI boot
@@ -295,7 +298,10 @@ fn jnoccio_ctrl_j_noop_when_offline() -> Result<()> {
         200,
         60,
         "jnoccio-ctrl-j-offline",
-        &[("JEKKO_MODEL_KEYS_FILE", model_keys_path.to_string_lossy().as_ref())],
+        &[(
+            "JEKKO_MODEL_KEYS_FILE",
+            model_keys_path.to_string_lossy().as_ref(),
+        )],
     )?;
     wait_for_boot(&page, &workspace, &artifact_dir, "jnoccio-ctrl-j-offline")?;
 
@@ -347,7 +353,10 @@ fn jnoccio_header_shortcut_visible_when_model_enabled() -> Result<()> {
         60,
         "jnoccio-header-shortcut-ready",
         &[
-            ("JEKKO_MODEL_KEYS_FILE", model_keys_path.to_string_lossy().as_ref()),
+            (
+                "JEKKO_MODEL_KEYS_FILE",
+                model_keys_path.to_string_lossy().as_ref(),
+            ),
             ("JNOCCIO_DEFAULT_API_KEY", FAKE_API_KEY),
         ],
     )?;
@@ -406,7 +415,10 @@ fn jnoccio_build_contains_dashboard_plugin() -> Result<()> {
         200,
         60,
         "jnoccio-command-palette",
-        &[("JEKKO_MODEL_KEYS_FILE", model_keys_path.to_string_lossy().as_ref())],
+        &[(
+            "JEKKO_MODEL_KEYS_FILE",
+            model_keys_path.to_string_lossy().as_ref(),
+        )],
     )?;
     wait_for_boot(&page, &workspace, &artifact_dir, "jnoccio-command-palette")?;
 
@@ -429,5 +441,193 @@ fn jnoccio_build_contains_dashboard_plugin() -> Result<()> {
     std::thread::sleep(Duration::from_millis(300));
 
     page.screenshot(artifact_dir.join("05-palette-closed.png"))?;
+    Ok(())
+}
+
+// ── Test: "No agent connected" warning shows when server is offline ───
+//
+// Regression guard for the silent "0/0 models" bug: the Jnoccio panel
+// MUST render a visible warning when the server is unreachable, not just
+// silently show zero counts that look like valid data.
+
+#[test]
+#[ignore]
+#[serial]
+fn jnoccio_header_shows_no_agent_warning_when_offline() -> Result<()> {
+    if !enabled() {
+        eprintln!("skipped: set JNOCCIO_TUI_TEST=1");
+        return Ok(());
+    }
+    let Some(jekko) = jekko_bin() else {
+        eprintln!("skipped: set JEKKO_BIN");
+        return Ok(());
+    };
+    // Ensure no real Jnoccio server is already running.
+    if health_check() {
+        eprintln!("skipped: a Jnoccio server is already running at {JNOCCIO_ADDR}");
+        return Ok(());
+    }
+
+    let artifact_dir = ensure_artifact_dir()?.join(ARTIFACT_SUBDIR);
+    std::fs::create_dir_all(&artifact_dir)?;
+
+    let (workspace, _project, _, _, xdg_config, _) =
+        prepare_workspace("project", "# no-agent warning test\n")?;
+    write_jnoccio_home_key(workspace.path())?;
+    let model_keys_path = workspace.path().join("model-keys.env");
+    std::fs::write(&model_keys_path, "OPENAI_API_KEY=fake-openai-key\n")?;
+    write_jnoccio_model_config(&xdg_config)?;
+
+    // Spawn WITHOUT JEKKO_DISABLE_JNOCCIO_BOOT so the TUI actually probes.
+    let project = workspace.path().join("project");
+    let xdg = workspace.path().join("xdg");
+    let trace_dir = artifact_dir.join("traces");
+    std::fs::create_dir_all(&trace_dir)?;
+    let cfg = tuiwright::SpawnConfig::new(jekko.to_string_lossy().as_ref())
+        .arg("--pure")
+        .arg(project.to_string_lossy().as_ref())
+        .cwd(&project)
+        .size(200, 60)
+        .trace_path(trace_dir.join("jnoccio-no-agent-warning.trace.jsonl"))
+        .env("TERM", "xterm-256color")
+        .env("COLORTERM", "truecolor")
+        .env("HOME", workspace.path().to_string_lossy().as_ref())
+        .env("JEKKO_API_KEY", FAKE_API_KEY)
+        .env("JNOCCIO_DEFAULT_API_KEY", FAKE_API_KEY)
+        .env("JEKKO_DISABLE_AUTOUPDATE", "1")
+        .env("JEKKO_DISABLE_LSP_DOWNLOAD", "1")
+        .env("JEKKO_DISABLE_MODELS_FETCH", "1")
+        .env("JEKKO_DISABLE_PRUNE", "1")
+        .env(
+            "JEKKO_MODEL_KEYS_FILE",
+            model_keys_path.to_string_lossy().as_ref(),
+        )
+        .env("XDG_DATA_HOME", xdg.join("data").to_string_lossy().as_ref())
+        .env(
+            "XDG_CACHE_HOME",
+            xdg.join("cache").to_string_lossy().as_ref(),
+        )
+        .env(
+            "XDG_CONFIG_HOME",
+            xdg.join("config").to_string_lossy().as_ref(),
+        )
+        .env(
+            "XDG_STATE_HOME",
+            xdg.join("state").to_string_lossy().as_ref(),
+        )
+        .timeout(Duration::from_secs(60));
+    let page = Page::spawn(cfg).context("spawn jekko for no-agent warning test")?;
+
+    wait_for_boot(&page, &workspace, &artifact_dir, "jnoccio-no-agent-warning")?;
+    page.screenshot(artifact_dir.join("08-home-no-agent.png"))?;
+
+    // Open the Jnoccio panel via Ctrl+J — it should open even offline (panel shows the error).
+    page.press(Key::Ctrl('j'))?;
+    std::thread::sleep(Duration::from_millis(1500));
+    page.screenshot(artifact_dir.join("08-jnoccio-panel-offline.png"))?;
+
+    // The panel MUST show the ⚠ warning — NOT silent "0/0 models".
+    page.wait_for_text("No agent connected", Duration::from_secs(8))
+        .with_context(|| {
+            let _ = page.screenshot(artifact_dir.join("08-no-agent-missing.png"));
+            let _ = copy_jekko_logs(&workspace, "jnoccio-no-agent-warning");
+            "⚠ 'No agent connected' warning did NOT appear in Jnoccio panel when server is offline. \
+             This is the silent-zeros regression — fix render_header() / dashboard-view.tsx"
+        })?;
+
+    page.screenshot(artifact_dir.join("08-no-agent-warning-confirmed.png"))?;
+    Ok(())
+}
+
+// ── Test: Model count shows real number when mock server is live ──────
+//
+// Guards against the inverse failure: when the server IS up, the model
+// count must reflect the server response (not show "0/0").
+
+#[test]
+#[ignore]
+#[serial]
+fn jnoccio_header_shows_model_count_when_server_live() -> Result<()> {
+    if !enabled() {
+        eprintln!("skipped: set JNOCCIO_TUI_TEST=1");
+        return Ok(());
+    }
+    let Some(jekko) = jekko_bin() else {
+        eprintln!("skipped: set JEKKO_BIN");
+        return Ok(());
+    };
+
+    // Start the mock server — it responds with keyed_models=1 on /health.
+    let _mock = start_mock_jnoccio_server()?;
+
+    let artifact_dir = ensure_artifact_dir()?.join(ARTIFACT_SUBDIR);
+    std::fs::create_dir_all(&artifact_dir)?;
+
+    let (workspace, _project, _, _, xdg_config, _) =
+        prepare_workspace("project", "# model count test\n")?;
+    write_jnoccio_home_key(workspace.path())?;
+    let model_keys_path = workspace.path().join("model-keys.env");
+    std::fs::write(&model_keys_path, "OPENAI_API_KEY=fake-openai-key\n")?;
+    write_jnoccio_model_config(&xdg_config)?;
+
+    let project = workspace.path().join("project");
+    let xdg = workspace.path().join("xdg");
+    let trace_dir = artifact_dir.join("traces");
+    std::fs::create_dir_all(&trace_dir)?;
+    let cfg = tuiwright::SpawnConfig::new(jekko.to_string_lossy().as_ref())
+        .arg("--pure")
+        .arg(project.to_string_lossy().as_ref())
+        .cwd(&project)
+        .size(200, 60)
+        .trace_path(trace_dir.join("jnoccio-model-count-live.trace.jsonl"))
+        .env("TERM", "xterm-256color")
+        .env("COLORTERM", "truecolor")
+        .env("HOME", workspace.path().to_string_lossy().as_ref())
+        .env("JEKKO_API_KEY", FAKE_API_KEY)
+        .env("JNOCCIO_DEFAULT_API_KEY", FAKE_API_KEY)
+        .env("JEKKO_DISABLE_AUTOUPDATE", "1")
+        .env("JEKKO_DISABLE_LSP_DOWNLOAD", "1")
+        .env("JEKKO_DISABLE_MODELS_FETCH", "1")
+        .env("JEKKO_DISABLE_PRUNE", "1")
+        .env(
+            "JEKKO_MODEL_KEYS_FILE",
+            model_keys_path.to_string_lossy().as_ref(),
+        )
+        .env("XDG_DATA_HOME", xdg.join("data").to_string_lossy().as_ref())
+        .env(
+            "XDG_CACHE_HOME",
+            xdg.join("cache").to_string_lossy().as_ref(),
+        )
+        .env(
+            "XDG_CONFIG_HOME",
+            xdg.join("config").to_string_lossy().as_ref(),
+        )
+        .env(
+            "XDG_STATE_HOME",
+            xdg.join("state").to_string_lossy().as_ref(),
+        )
+        .timeout(Duration::from_secs(60));
+    let page = Page::spawn(cfg).context("spawn jekko for model-count-live test")?;
+
+    wait_for_boot(&page, &workspace, &artifact_dir, "jnoccio-model-count-live")?;
+
+    // Open the Jnoccio panel
+    page.press(Key::Ctrl('j'))?;
+    page.wait_for_text("Jnoccio Fusion", Duration::from_secs(10))
+        .context("dashboard did not open after Ctrl+J")?;
+    page.screenshot(artifact_dir.join("09-dashboard-live.png"))?;
+
+    // The mock server returns keyed_models=1, so the model count must NOT be "0/0".
+    // We assert "1/1 models" appears (matching the mock server /health response).
+    page.wait_for_text("1/1 models", Duration::from_secs(15))
+        .with_context(|| {
+            let _ = page.screenshot(artifact_dir.join("09-model-count-wrong.png"));
+            let _ = copy_jekko_logs(&workspace, "jnoccio-model-count-live");
+            "Jnoccio dashboard shows '0/0 models' even with mock server running. \
+             Either the TUI is not reading from /health, or the model count is not \
+             propagated to the panel snapshot."
+        })?;
+
+    page.screenshot(artifact_dir.join("09-model-count-confirmed.png"))?;
     Ok(())
 }

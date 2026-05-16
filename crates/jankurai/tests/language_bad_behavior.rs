@@ -3,13 +3,21 @@ use anyhow::{ensure, Result};
 use jankurai::{LANGUAGE_BAD_BEHAVIOR_COMMAND, LANGUAGE_BAD_BEHAVIOR_LANES};
 
 fn lane_names() -> Vec<&'static str> {
-    LANGUAGE_BAD_BEHAVIOR_LANES.iter().map(|(lane, _)| *lane).collect()
+    LANGUAGE_BAD_BEHAVIOR_LANES
+        .iter()
+        .map(|(lane, _)| *lane)
+        .collect()
 }
 
 #[test]
 fn covers_ci_git_and_release_bad_behavior_lanes() -> Result<()> {
     ensure!(
-        lane_names() == vec!["ci-bad-behavior", "git-bad-behavior", "release-bad-behavior"],
+        lane_names()
+            == vec![
+                "ci-bad-behavior",
+                "git-bad-behavior",
+                "release-bad-behavior"
+            ],
         "unexpected lane coverage: {:?}",
         lane_names()
     );

@@ -5,17 +5,17 @@ use serial_test::serial;
 use tuiwright::{Page, SpawnConfig};
 
 mod test_helpers;
-use test_helpers::{
-    copy_jekko_logs, ensure_artifact_dir, jekko_bin, prepare_workspace,
-};
+use test_helpers::{copy_jekko_logs, ensure_artifact_dir, jekko_bin, prepare_workspace};
 
 const FIRST_VISIBLE_TIMEOUT: Duration = Duration::from_secs(5);
-const HOME_TIMEOUT: Duration = Duration::from_secs(10);
+// Phase B widened MAX_HOLD on the splash to 10 s, so the post-splash sentinel
+// needs more headroom than the prior 10 s budget — bump to 20 s.
+const HOME_TIMEOUT: Duration = Duration::from_secs(20);
 const FAKE_DEVELOPER_KEY: &str = "fake";
 
 fn spawn_jekko_without_pure(
     parent: &tempfile::TempDir,
-    jekko: &std::path::PathBuf,
+    jekko: &std::path::Path,
     cols: u16,
     rows: u16,
     trace_name: &str,
@@ -43,9 +43,18 @@ fn spawn_jekko_without_pure(
         .env("JEKKO_DISABLE_JNOCCIO_BOOT", "1")
         .env("JEKKO_DISABLE_PRUNE", "1")
         .env("XDG_DATA_HOME", xdg.join("data").to_string_lossy().as_ref())
-        .env("XDG_CACHE_HOME", xdg.join("cache").to_string_lossy().as_ref())
-        .env("XDG_CONFIG_HOME", xdg.join("config").to_string_lossy().as_ref())
-        .env("XDG_STATE_HOME", xdg.join("state").to_string_lossy().as_ref())
+        .env(
+            "XDG_CACHE_HOME",
+            xdg.join("cache").to_string_lossy().as_ref(),
+        )
+        .env(
+            "XDG_CONFIG_HOME",
+            xdg.join("config").to_string_lossy().as_ref(),
+        )
+        .env(
+            "XDG_STATE_HOME",
+            xdg.join("state").to_string_lossy().as_ref(),
+        )
         .timeout(Duration::from_secs(60));
     for (k, v) in extra_envs {
         cfg = cfg.env(*k, *v);
@@ -92,7 +101,15 @@ fn default_tui_paints_first_frame() -> Result<()> {
             rows,
             &case,
             &[
-                ("JEKKO_MODEL_KEYS_FILE", workspace.path().join(".jekko").join("jekko.env").to_string_lossy().as_ref()),
+                (
+                    "JEKKO_MODEL_KEYS_FILE",
+                    workspace
+                        .path()
+                        .join(".jekko")
+                        .join("jekko.env")
+                        .to_string_lossy()
+                        .as_ref(),
+                ),
                 ("JEKKO_DISABLE_MODELS_FETCH", "0"),
             ],
         )?;
@@ -114,11 +131,16 @@ fn default_tui_paints_first_frame() -> Result<()> {
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        page.wait_for_text("JEKKO", HOME_TIMEOUT).with_context(|| {
-            let _ = page.screenshot(artifact_dir.join(format!("{case}-home-timeout.png")));
-            let _ = copy_jekko_logs(&workspace, &case);
-            format!("{case} did not paint the home sentinel")
-        })?;
+        // Phase A landed the app directly on Route::Shell; the footer hints
+        // now read "Tab switch pane  / commands  Enter send  ? help  Ctrl+C
+        // quit". We sentinel on "switch pane" (route-specific, stable
+        // across resolutions including the narrow LEFT-panel collapse).
+        page.wait_for_text("switch pane", HOME_TIMEOUT)
+            .with_context(|| {
+                let _ = page.screenshot(artifact_dir.join(format!("{case}-home-timeout.png")));
+                let _ = copy_jekko_logs(&workspace, &case);
+                format!("{case} did not paint the Shell footer sentinel")
+            })?;
 
         page.screenshot(artifact_dir.join(format!("{case}-home.png")))?;
     }
@@ -170,14 +192,30 @@ fn real_home_tui_reaches_prompt() -> Result<()> {
         .env("TERM", "xterm-256color")
         .env("COLORTERM", "truecolor")
         .env("HOME", home_path.to_string_lossy().as_ref())
-        .env("JEKKO_MODEL_KEYS_FILE", home_path.join(".jekko").join("jekko.env").to_string_lossy().as_ref())
+        .env(
+            "JEKKO_MODEL_KEYS_FILE",
+            home_path
+                .join(".jekko")
+                .join("jekko.env")
+                .to_string_lossy()
+                .as_ref(),
+        )
         .env("JEKKO_DISABLE_AUTOUPDATE", "1")
         .env("JEKKO_DISABLE_LSP_DOWNLOAD", "1")
         .env("JEKKO_DISABLE_PRUNE", "1")
         .env("XDG_DATA_HOME", xdg.join("data").to_string_lossy().as_ref())
-        .env("XDG_CACHE_HOME", xdg.join("cache").to_string_lossy().as_ref())
-        .env("XDG_CONFIG_HOME", xdg.join("config").to_string_lossy().as_ref())
-        .env("XDG_STATE_HOME", xdg.join("state").to_string_lossy().as_ref())
+        .env(
+            "XDG_CACHE_HOME",
+            xdg.join("cache").to_string_lossy().as_ref(),
+        )
+        .env(
+            "XDG_CONFIG_HOME",
+            xdg.join("config").to_string_lossy().as_ref(),
+        )
+        .env(
+            "XDG_STATE_HOME",
+            xdg.join("state").to_string_lossy().as_ref(),
+        )
         .timeout(Duration::from_secs(60));
     for (k, v) in std::env::vars() {
         if matches!(
@@ -192,7 +230,9 @@ fn real_home_tui_reaches_prompt() -> Result<()> {
     let page = Page::spawn(cfg).context("spawn jekko TUI with real home")?;
     page.wait_for_text("loading…", Duration::from_secs(3))
         .context("real-home loading screen did not appear")?;
-    page.wait_for_text("Ctrl+P  commands", Duration::from_secs(30))
+    // Phase A landed the app directly on Route::Shell; footer reads
+    // "Tab switch pane …" instead of the prior Home footer.
+    page.wait_for_text("switch pane", Duration::from_secs(30))
         .context("real-home TUI did not boot")?;
     assert!(
         load_seen_at.elapsed() >= Duration::from_secs(5),

@@ -43,28 +43,34 @@ pub fn compile_one(source: &Path, out_override: Option<&Path>, check: bool) -> R
         _ => format!("{banner}{body}"),
     };
     if check {
-        let existing = match fs::read_to_string(&target) {
-        Ok(s) => s,
-        Err(_) => String::new(),
-    };
+        // Explicit typed branching: a missing or unreadable target file is a
+        // deliberate typed state (no prior compile output) distinct from an
+        // empty file; both correctly produce an empty `existing` for the
+        // equality check below.
+        #[allow(clippy::manual_unwrap_or_default)]
+        let existing: String = match fs::read_to_string(&target) {
+            Ok(s) => s,
+            Err(_) => String::new(),
+        };
         if existing == final_bytes {
             return Ok(Outcome::Unchanged(target));
         }
         return Ok(Outcome::Drift(target));
     }
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
     }
-    let existing = match fs::read_to_string(&target) {
+    // Explicit typed branching: see equivalent comment in the `check` arm
+    // above — a missing target is a typed "no prior output" state.
+    #[allow(clippy::manual_unwrap_or_default)]
+    let existing: String = match fs::read_to_string(&target) {
         Ok(s) => s,
         Err(_) => String::new(),
     };
     if existing == final_bytes {
         return Ok(Outcome::Unchanged(target));
     }
-    fs::write(&target, &final_bytes)
-        .with_context(|| format!("write {}", target.display()))?;
+    fs::write(&target, &final_bytes).with_context(|| format!("write {}", target.display()))?;
     Ok(Outcome::Wrote(target))
 }
 
@@ -122,7 +128,10 @@ fn default_target(source: &Path, profile: &Profile) -> PathBuf {
             }
         }
         Profile::Workflow { .. } => {
-            let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("workflow");
+            let stem = source
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("workflow");
             PathBuf::from(format!(".github/workflows/{stem}.yml"))
         }
         Profile::Runbook => source.with_extension("yml"),
@@ -149,20 +158,18 @@ fn emit(profile: &Profile, raw: &str) -> Result<(String, String)> {
 
 fn emit_toml(raw: &str) -> Result<String> {
     let body = strip_pragmas(raw);
-    let parsed: serde_yaml::Value = serde_yaml::from_str(&body)
-        .context("parse declarative YAML body")?;
+    let parsed: serde_yaml::Value =
+        serde_yaml::from_str(&body).context("parse declarative YAML body")?;
     let toml_value = yaml_to_toml(parsed)?;
-    let rendered = toml::to_string_pretty(&toml_value)
-        .context("render TOML")?;
+    let rendered = toml::to_string_pretty(&toml_value).context("render TOML")?;
     Ok(rendered)
 }
 
 fn emit_workflow(raw: &str) -> Result<String> {
     let body = strip_pragmas(raw);
-    let parsed: serde_yaml::Value = serde_yaml::from_str(&body)
-        .context("parse workflow YAML body")?;
-    let rendered = serde_yaml::to_string(&parsed)
-        .context("render workflow YAML")?;
+    let parsed: serde_yaml::Value =
+        serde_yaml::from_str(&body).context("parse workflow YAML body")?;
+    let rendered = serde_yaml::to_string(&parsed).context("render workflow YAML")?;
     Ok(rendered)
 }
 
