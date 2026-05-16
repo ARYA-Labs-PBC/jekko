@@ -521,5 +521,16 @@ impl Widget for &Prompt {
         // Render the textarea directly — no internal block. The outer
         // panel_block in draw_shell_body provides the chrome already.
         Widget::render(&self.textarea, area, buf);
+        if let Some(label) = &self.model_label {
+            if area.width == 0 || area.height == 0 {
+                return;
+            }
+            let label_width = label.chars().count() as u16;
+            if label_width >= area.width {
+                return;
+            }
+            let x = area.x + area.width - label_width;
+            buf.set_string(x, area.y, label, Style::default());
+        }
     }
 }
