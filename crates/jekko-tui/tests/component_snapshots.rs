@@ -11,6 +11,7 @@ use jekko_tui::{
     CommandEntry, CommandPalette, Dialog, DialogStack, Logo, NavigationHeader, SelectDialog,
     SelectOption, Splash, Toast, ToastStack,
 };
+use jekko_core::theme::ThemeMode;
 
 fn buf_to_string<F: FnOnce(&mut ratatui::Frame)>(width: u16, height: u16, f: F) -> String {
     let backend = TestBackend::new(width, height);
@@ -56,6 +57,13 @@ fn logo_80x10() {
     let logo = Logo;
     let out = render_at(80, 10, |frame, area| frame.render_widget(&logo, area));
     assert_snapshot!("logo_80x10", out);
+}
+
+#[test]
+fn logo_light_mode_80x10() {
+    let logo = Logo::pixel().with_mode(ThemeMode::Light);
+    let out = render_at(80, 10, |frame, area| frame.render_widget(&logo, area));
+    assert_snapshot!("logo_light_mode_80x10", out);
 }
 
 #[test]

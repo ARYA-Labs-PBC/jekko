@@ -152,8 +152,6 @@ const PHASE_COL_WIDTH: usize = 12;
 const MESSAGE_COL_WIDTH: usize = 16;
 
 const NEVERHUMAN: &str = "N \u{00B7} E \u{00B7} V \u{00B7} E \u{00B7} R \u{00B7} H \u{00B7} U \u{00B7} M \u{00B7} A \u{00B7} N";
-const TAGLINE: &str = "the agentic gecko \u{00B7} climbs hard problems";
-
 // Theme — refined-amber dark. Mirrors `crates/jekko-core/src/theme`.
 const AMBER: Color = Color::Rgb(0xd4, 0xa8, 0x43);
 const AMBER_DIM: Color = Color::Rgb(0x8a, 0x6c, 0x2b);
@@ -278,38 +276,20 @@ impl SplashState {
     }
 
     fn render_two_pane(&self, frame: &mut Frame<'_>, area: Rect) {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(10), Constraint::Min(0)])
             .split(area);
 
-        let left_inner = pad(columns[0], 2, 1);
-        let right_inner = pad(columns[1], 2, 1);
+        frame.render_widget(&Logo::pixel().with_animation_tick(self.spinner_frame as u64), rows[0]);
 
-        let left_rows = Layout::default()
+        let bottom = pad(rows[1], 2, 1);
+        let bottom_rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(left_inner);
-        frame.render_widget(self.boot_log_paragraph(), left_rows[0]);
-        frame.render_widget(self.footer_paragraph(), left_rows[1]);
-
-        let right_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(0),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(0),
-            ])
-            .split(right_inner);
-        frame.render_widget(self.wordmark_paragraph(), right_rows[1]);
-        frame.render_widget(self.wordmark_underline_paragraph(), right_rows[2]);
-        frame.render_widget(self.tagline_paragraph(), right_rows[4]);
-        frame.render_widget(self.loading_paragraph(), right_rows[6]);
+            .split(bottom);
+        frame.render_widget(self.boot_log_paragraph(), bottom_rows[0]);
+        frame.render_widget(self.footer_paragraph(), bottom_rows[1]);
     }
 
     fn wordmark_paragraph(&self) -> Paragraph<'static> {
@@ -326,26 +306,6 @@ impl SplashState {
             underline,
             Style::default().fg(AMBER),
         )))
-        .alignment(Alignment::Center)
-    }
-
-    fn tagline_paragraph(&self) -> Paragraph<'static> {
-        Paragraph::new(Line::from(Span::styled(
-            TAGLINE,
-            Style::default()
-                .fg(TEXT_MUTED)
-                .add_modifier(Modifier::ITALIC),
-        )))
-        .alignment(Alignment::Center)
-    }
-
-    fn loading_paragraph(&self) -> Paragraph<'static> {
-        let spinner = self.spinner_glyph().to_string();
-        Paragraph::new(Line::from(vec![
-            Span::styled(spinner, Style::default().fg(AMBER)),
-            Span::raw(" "),
-            Span::styled("loading\u{2026}", Style::default().fg(TEXT_MUTED)),
-        ]))
         .alignment(Alignment::Center)
     }
 
@@ -527,7 +487,7 @@ mod tests {
             .draw(|frame| state.render(frame, frame.area()))
             .expect("draw");
         let text = terminal.backend().to_string();
-        assert!(text.contains("loading"));
+        assert!(text.contains("▓"));
         assert!(text.contains("runtime"));
     }
 

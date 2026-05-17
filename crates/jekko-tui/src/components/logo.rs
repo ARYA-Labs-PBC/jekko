@@ -1,9 +1,13 @@
 //! JEKKO logo cell renderer.
 //!
-//! This ports the retired OpenTUI logo algorithm into native Ratatui: fixed
-//! 80-column frame, crisp 5x7 half-block wordmark, and two amber shadow
-//! extrusion layers. The public `Logo` / `LogoBuilder` API is preserved for
-//! existing callers.
+//! This ports the historical ANSI-art logo into native Ratatui. The logo data
+//! is kept as the original bracket-style ANSI payload, parsed once into styled
+//! cells, then fit to the target rectangle at render time.
+
+use std::sync::OnceLock;
+
+#[path = "logo_ansi_art.rs"]
+mod logo_ansi_art;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
@@ -11,15 +15,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
+use crate::theme;
+use jekko_core::theme::ThemeMode;
+
+use logo_ansi_art::JEKKO_ANSI_ART;
+
 pub const INNER_WIDTH: usize = 78;
 pub const OUTER_WIDTH: usize = INNER_WIDTH + 2;
-
-const ASCII_LOGO: &str = r"
-   __  ___ _   _  _   __   __
-   \ \/ // | / \| | / / / /
-   _\ // /| |/ /\ |/ / / /
-   /_//_/ |_|_/  |_/  /_/
-";
 
 const AMBER_STOPS: [Color; 8] = [
     Color::Rgb(0x3d, 0x26, 0x06),
@@ -44,35 +46,6 @@ const AMBER_LIGHT_STOPS: [Color; 8] = [
 ];
 
 const TEXT_MUTED: Color = Color::Rgb(0x7d, 0x85, 0x90);
-
-type Glyph = [&'static str; 7];
-
-const GLYPH_J: Glyph = [
-    "11111", "00010", "00010", "00010", "00010", "10010", "01100",
-];
-const GLYPH_E: Glyph = [
-    "11111", "10000", "10000", "11110", "10000", "10000", "11111",
-];
-const GLYPH_K: Glyph = [
-    "10001", "10010", "10100", "11000", "10100", "10010", "10001",
-];
-const GLYPH_O: Glyph = [
-    "01110", "10001", "10001", "10001", "10001", "10001", "01110",
-];
-const GLYPH_SPACE: Glyph = [
-    "00000", "00000", "00000", "00000", "00000", "00000", "00000",
-];
-
-fn glyph_for(ch: char) -> &'static Glyph {
-    match ch {
-        'J' | 'j' => &GLYPH_J,
-        'E' | 'e' => &GLYPH_E,
-        'K' | 'k' => &GLYPH_K,
-        'O' | 'o' => &GLYPH_O,
-        _ => &GLYPH_SPACE,
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LogoLayer {
     Global,
@@ -101,46 +74,6 @@ impl LogoRow {
     }
 }
 
-fn render_pixel_word(text: &str, scale_x: usize, gap: usize) -> Vec<String> {
-    let glyphs: Vec<&'static Glyph> = text.chars().map(glyph_for).collect();
-    if glyphs.is_empty() {
-        return Vec::new();
-    }
-
-    let terminal_rows = 7usize.div_ceil(2);
-    let mut rows = Vec::with_capacity(terminal_rows);
-    for tr in 0..terminal_rows {
-        let top_row = 2 * tr;
-        let bot_row = 2 * tr + 1;
-        let mut pieces = Vec::with_capacity(glyphs.len());
-        for glyph in &glyphs {
-            let top = glyph.get(top_row).copied().unwrap_or("");
-            let bot = glyph.get(bot_row).copied().unwrap_or("");
-            let cols = top.len().max(bot.len()).max(5);
-            let mut piece = String::with_capacity(cols * scale_x);
-            for c in 0..cols {
-                let t = top.as_bytes().get(c).copied() == Some(b'1');
-                let b = bot.as_bytes().get(c).copied() == Some(b'1');
-                let ch = if t && b {
-                    '█'
-                } else if t {
-                    '▀'
-                } else if b {
-                    '▄'
-                } else {
-                    ' '
-                };
-                for _ in 0..scale_x {
-                    piece.push(ch);
-                }
-            }
-            pieces.push(piece);
-        }
-        rows.push(pieces.join(&" ".repeat(gap)));
-    }
-    rows
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LogoVariant {
     Ascii,
@@ -159,6 +92,8 @@ pub struct LogoBuilder {
     status: Option<&'static str>,
     alignment: Alignment,
     idle: bool,
+    mode: Option<ThemeMode>,
+    animation_tick: Option<u64>,
 }
 
 impl Logo {
@@ -171,15 +106,11 @@ impl Logo {
     }
 
     pub fn pixel_width(word: &str) -> usize {
-        render_pixel_word(word, 2, 2)
-            .iter()
-            .map(|r| r.chars().count())
-            .max()
-            .unwrap_or(0)
+        word.chars().count()
     }
 
     pub fn pick(area: Rect) -> LogoVariant {
-        if area.width >= OUTER_WIDTH as u16 && area.height >= 11 {
+        if area.width >= 48 && area.height >= 5 {
             LogoVariant::Pixel
         } else {
             LogoVariant::Ascii
@@ -200,6 +131,8 @@ impl LogoBuilder {
             status: None,
             alignment: Alignment::Center,
             idle: false,
+            mode: None,
+            animation_tick: None,
         }
     }
 
@@ -223,6 +156,16 @@ impl LogoBuilder {
         self
     }
 
+    pub fn with_mode(mut self, mode: ThemeMode) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+
+    pub fn with_animation_tick(mut self, tick: u64) -> Self {
+        self.animation_tick = Some(tick);
+        self
+    }
+
     pub fn variant(&self) -> Option<LogoVariant> {
         self.variant
     }
@@ -236,9 +179,16 @@ impl LogoBuilder {
     }
 }
 
+fn default_fg(mode: ThemeMode) -> Color {
+    if mode == ThemeMode::Light {
+        theme::palette(mode).text_muted
+    } else {
+        TEXT_MUTED
+    }
+}
+
 fn fit(text: &str, width: usize, alignment: Alignment) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let clipped: String = chars.iter().take(width).collect();
+    let clipped: String = text.chars().take(width).collect();
     let len = clipped.chars().count();
     let remaining = width.saturating_sub(len);
     match alignment {
@@ -252,40 +202,7 @@ fn fit(text: &str, width: usize, alignment: Alignment) -> String {
     }
 }
 
-fn pair(left: &str, right: &str, width: usize) -> String {
-    let left: String = left.chars().take(width).collect();
-    let right: String = right.chars().take(width).collect();
-    let left_len = left.chars().count();
-    let right_len = right.chars().count();
-    let gap = width.saturating_sub(left_len + right_len);
-    if gap < 1 {
-        fit(&format!("{left} {right}"), width, Alignment::Left)
-    } else {
-        format!("{left}{}{right}", " ".repeat(gap))
-    }
-}
-
-fn framed(content: &str, alignment: Alignment) -> String {
-    format!("│{}│", fit(content, INNER_WIDTH, alignment))
-}
-
-fn framed_pair(left: &str, right: &str) -> String {
-    format!("│{}│", pair(left, right, INNER_WIDTH))
-}
-
-fn top_border() -> String {
-    format!("╭{}╮", "─".repeat(INNER_WIDTH))
-}
-
-fn divider() -> String {
-    format!("├{}┤", "─".repeat(INNER_WIDTH))
-}
-
-fn bottom_border() -> String {
-    format!("╰{}╯", "─".repeat(INNER_WIDTH))
-}
-
-fn row_from_text(text: String, bold: bool, dim: bool) -> LogoRow {
+fn row_from_text(text: String, bold: bool, dim: bool, mode: ThemeMode) -> LogoRow {
     let len = text.chars().count().max(1);
     let cells = text
         .chars()
@@ -293,9 +210,9 @@ fn row_from_text(text: String, bold: bool, dim: bool) -> LogoRow {
         .map(|(x, ch)| LogoCell {
             ch,
             fg: if dim {
-                TEXT_MUTED
+                default_fg(mode)
             } else {
-                amber_at(x, 0, len, 1, false)
+                amber_at(x, 0, len, 1, false, mode)
             },
             bg: None,
             bold,
@@ -305,131 +222,422 @@ fn row_from_text(text: String, bold: bool, dim: bool) -> LogoRow {
     LogoRow { cells }
 }
 
-fn empty_cell() -> LogoCell {
-    LogoCell {
-        ch: ' ',
-        fg: TEXT_MUTED,
-        bg: None,
-        bold: false,
-        layer: LogoLayer::Global,
-    }
-}
-
-fn frame_cells(cells: Vec<LogoCell>) -> LogoRow {
-    let mut inner = cells.into_iter().take(INNER_WIDTH).collect::<Vec<_>>();
-    while inner.len() < INNER_WIDTH {
-        inner.push(empty_cell());
-    }
-    let mut out = Vec::with_capacity(OUTER_WIDTH);
-    out.push(LogoCell {
-        ch: '│',
-        fg: AMBER_STOPS[4],
-        bg: None,
-        bold: false,
-        layer: LogoLayer::Global,
-    });
-    out.extend(inner);
-    out.push(LogoCell {
-        ch: '│',
-        fg: AMBER_STOPS[4],
-        bg: None,
-        bold: false,
-        layer: LogoLayer::Global,
-    });
-    LogoRow { cells: out }
-}
-
-fn shadowed_wordmark_rows(word: &str) -> Vec<LogoRow> {
-    let art = render_pixel_word(word, 2, 2);
-    let art_width = art.iter().map(|r| r.chars().count()).max().unwrap_or(0);
-    let visual_width = art_width + 2;
-    let visual_height = art.len() + 1;
-    let left = INNER_WIDTH.saturating_sub(visual_width) / 2;
-    let mut canvas = vec![vec![empty_cell(); INNER_WIDTH]; visual_height];
-
-    for (dx, dy, layer) in [
-        (2usize, 1usize, LogoLayer::WordmarkShadowMid),
-        (1usize, 1usize, LogoLayer::WordmarkShadowNear),
-    ] {
-        for (y, line) in art.iter().enumerate() {
-            for (x, ch) in line.chars().enumerate() {
-                if ch == ' ' {
+fn apply_sgr(token: &str, state: &mut SgrState) {
+    let mut values = token.split(';').peekable();
+    while let Some(value) = values.next() {
+        match value.parse::<u16>() {
+            Ok(0) => *state = SgrState::default(),
+            Ok(1) => state.bold = true,
+            Ok(22) => state.bold = false,
+            Ok(38) => {
+                if values.next() != Some("2") {
                     continue;
                 }
-                let px = left + x + dx;
-                let py = y + dy;
-                if py < canvas.len() && px < INNER_WIDTH {
-                    canvas[py][px] = LogoCell {
-                        ch: '█',
-                        fg: shadow_color(x, y, art_width, art.len(), layer),
-                        bg: None,
-                        bold: false,
-                        layer,
-                    };
+                let Some(r) = values.next().and_then(parse_u8) else { continue };
+                let Some(g) = values.next().and_then(parse_u8) else { continue };
+                let Some(b) = values.next().and_then(parse_u8) else { continue };
+                state.fg = Some(Color::Rgb(r, g, b));
+            }
+            Ok(48) => {
+                if values.next() != Some("2") {
+                    continue;
                 }
+                let Some(r) = values.next().and_then(parse_u8) else { continue };
+                let Some(g) = values.next().and_then(parse_u8) else { continue };
+                let Some(b) = values.next().and_then(parse_u8) else { continue };
+                state.bg = Some(Color::Rgb(r, g, b));
             }
+            Ok(39) => state.fg = None,
+            Ok(49) => state.bg = None,
+            _ => {}
         }
     }
-
-    for (y, line) in art.iter().enumerate() {
-        for (x, ch) in line.chars().enumerate() {
-            if ch == ' ' {
-                continue;
-            }
-            let px = left + x;
-            if px < INNER_WIDTH {
-                canvas[y][px] = LogoCell {
-                    ch,
-                    fg: amber_at(x, y, art_width, art.len(), false),
-                    bg: None,
-                    bold: true,
-                    layer: LogoLayer::Wordmark,
-                };
-            }
-        }
-    }
-
-    canvas.into_iter().map(frame_cells).collect()
 }
 
-fn build_logo_rows(builder: &LogoBuilder) -> Vec<LogoRow> {
+fn parse_u8(value: &str) -> Option<u8> {
+    value.parse::<u8>().ok()
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SgrState {
+    fg: Option<Color>,
+    bg: Option<Color>,
+    bold: bool,
+}
+
+fn next_char(source: &str, index: usize) -> Option<(char, usize)> {
+    let ch = source[index..].chars().next()?;
+    Some((ch, ch.len_utf8()))
+}
+
+fn parse_bracket_ansi_art(source: &str) -> Vec<LogoRow> {
+    let mut rows = Vec::new();
+    let mut current = LogoRow { cells: Vec::new() };
+    let mut state = SgrState::default();
+    let mut index = 0;
+
+    while index < source.len() {
+        let Some((ch, ch_len)) = next_char(source, index) else {
+            break;
+        };
+
+        match ch {
+            '\r' => {
+                index += ch_len;
+            }
+            '\n' => {
+                rows.push(current);
+                current = LogoRow { cells: Vec::new() };
+                index += ch_len;
+            }
+            '[' => {
+                let mut token_end = index + ch_len;
+                while token_end < source.len() {
+                    let Some((next, next_len)) = next_char(source, token_end) else {
+                        break;
+                    };
+                    if next.is_ascii_digit() || next == ';' {
+                        token_end += next_len;
+                    } else {
+                        break;
+                    }
+                }
+                let term = source[token_end..].chars().next();
+                match term {
+                    Some('m') => {
+                        let token = &source[index + ch_len..token_end];
+                        apply_sgr(token, &mut state);
+                        index = token_end + 1;
+                    }
+                    Some('J') | Some('H') => {
+                        index = token_end + 1;
+                    }
+                    _ => {
+                        current.cells.push(LogoCell {
+                            ch,
+                            fg: state.fg.unwrap_or(TEXT_MUTED),
+                            bg: state.bg,
+                            bold: state.bold,
+                            layer: LogoLayer::Global,
+                        });
+                        index += ch_len;
+                    }
+                }
+            }
+            _ => {
+                current.cells.push(LogoCell {
+                    ch,
+                    fg: state.fg.unwrap_or(TEXT_MUTED),
+                    bg: state.bg,
+                    bold: state.bold,
+                    layer: LogoLayer::Global,
+                });
+                index += ch_len;
+            }
+        }
+    }
+
+    if !current.cells.is_empty() || rows.is_empty() {
+        rows.push(current);
+    }
+
+    rows
+}
+
+fn ansi_rows() -> &'static [LogoRow] {
+    static ROWS: OnceLock<Vec<LogoRow>> = OnceLock::new();
+    ROWS.get_or_init(|| parse_bracket_ansi_art(JEKKO_ANSI_ART))
+}
+
+fn row_is_blank(row: &LogoRow) -> bool {
+    row.cells.iter().all(|cell| cell.ch == ' ')
+}
+
+fn trim_rows(rows: &[LogoRow]) -> &[LogoRow] {
+    let Some(first) = rows.iter().position(|row| !row_is_blank(row)) else {
+        return rows;
+    };
+    let last = rows
+        .iter()
+        .rposition(|row| !row_is_blank(row))
+        .unwrap_or(first);
+    &rows[first..=last]
+}
+
+fn mix_u8(left: u8, right: u8, t: f32) -> u8 {
+    let t = t.clamp(0.0, 1.0);
+    (left as f32 + (right as f32 - left as f32) * t).round() as u8
+}
+
+fn blend_colors(left: Color, right: Color, t: f32) -> Color {
+    match (left, right) {
+        (Color::Rgb(lr, lg, lb), Color::Rgb(rr, rg, rb)) => {
+            Color::Rgb(mix_u8(lr, rr, t), mix_u8(lg, rg, t), mix_u8(lb, rb, t))
+        }
+        _ => right,
+    }
+}
+
+fn color_luma(color: Color) -> f32 {
+    match color {
+        Color::Rgb(r, g, b) => (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0,
+        _ => 0.5,
+    }
+}
+
+fn theme_logo_color(color: Color, mode: ThemeMode, background: bool) -> Color {
+    if mode == ThemeMode::Dark {
+        return color;
+    }
+
+    let pal = theme::palette(mode);
+    let target = if background { pal.surface } else { pal.text };
+    let luma = color_luma(color);
+    let blend = if background {
+        if luma < 0.25 {
+            0.78
+        } else if luma < 0.5 {
+            0.42
+        } else {
+            0.15
+        }
+    } else if luma < 0.25 {
+        0.52
+    } else if luma < 0.5 {
+        0.24
+    } else {
+        0.08
+    };
+    blend_colors(color, target, blend)
+}
+
+fn theme_row(row: LogoRow, mode: ThemeMode) -> LogoRow {
+    let cells = row
+        .cells
+        .into_iter()
+        .map(|cell| LogoCell {
+            fg: theme_logo_color(cell.fg, mode, false),
+            bg: cell.bg.map(|bg| theme_logo_color(bg, mode, true)),
+            ..cell
+        })
+        .collect();
+    LogoRow { cells }
+}
+
+fn animate_row(row: LogoRow, mode: ThemeMode, tick: u64) -> LogoRow {
+    let pal = theme::palette(mode);
+    let cells = row
+        .cells
+        .into_iter()
+        .enumerate()
+        .map(|(x, cell)| {
+            if cell.ch == ' ' {
+                return cell;
+            }
+
+            let phase = ((tick as usize).wrapping_add(x)) % 12;
+            let pulse = match phase {
+                0 => 0.22,
+                1 | 2 => 0.16,
+                3 | 4 => 0.10,
+                5..=7 => 0.05,
+                _ => 0.0,
+            };
+
+            let mut fg = cell.fg;
+            if pulse > 0.0 {
+                fg = blend_colors(fg, pal.accent, pulse as f32);
+            }
+
+            LogoCell { fg, ..cell }
+        })
+        .collect();
+    LogoRow { cells }
+}
+
+fn footer_rows(builder: &LogoBuilder, mode: ThemeMode) -> Vec<LogoRow> {
     let support = builder.support.unwrap_or("ZYAL");
     let status = builder.status.unwrap_or(if builder.idle {
         "camouflage idle • watching the wall"
     } else {
         "safe autonomous coding ready"
     });
-    let header_right = if builder.idle {
-        "gecko mode idle   ● ● ●"
-    } else {
-        "gecko mode active ● ● ●"
-    };
 
-    let mut rows = vec![
-        row_from_text(top_border(), false, false),
-        row_from_text(framed_pair(" ›_ JEKKO", header_right), true, false),
-        row_from_text(divider(), false, false),
-        row_from_text(framed("", Alignment::Center), false, false),
-    ];
-    rows.extend(shadowed_wordmark_rows(builder.word));
+    let mut rows = Vec::new();
     rows.push(row_from_text(
-        framed(
+        fit(
             &format!("AI coding gecko • {support} support • climbs hard problems"),
+            INNER_WIDTH,
             Alignment::Center,
         ),
         false,
         false,
+        mode,
     ));
     rows.push(row_from_text(
-        framed(&format!("gecko:// {status}"), Alignment::Center),
+        fit(&format!("gecko:// {status}"), INNER_WIDTH, Alignment::Center),
         false,
         builder.idle,
+        mode,
     ));
-    rows.push(row_from_text(bottom_border(), false, false));
     rows
 }
 
-fn amber_at(x: usize, y: usize, width: usize, height: usize, light: bool) -> Color {
+fn build_logo_rows(builder: &LogoBuilder) -> Vec<LogoRow> {
+    let mode = builder.mode.unwrap_or(ThemeMode::Dark);
+    match builder.variant.unwrap_or(Logo::pick(Rect::new(0, 0, 80, 10))) {
+        LogoVariant::Ascii => ascii_lines(mode)
+            .into_iter()
+            .map(line_to_row)
+            .collect(),
+        LogoVariant::Pixel => {
+            let mut rows = trim_rows(ansi_rows())
+                .iter()
+                .cloned()
+                .map(|row| theme_row(row, mode))
+                .collect::<Vec<_>>();
+            rows.extend(footer_rows(builder, mode));
+            if let Some(tick) = builder.animation_tick {
+                rows = rows
+                    .into_iter()
+                    .map(|row| animate_row(row, mode, tick))
+                    .collect();
+            }
+            rows
+        }
+    }
+}
+
+fn line_to_row(line: Line<'static>) -> LogoRow {
+    let mut cells = Vec::new();
+    for span in line.spans {
+        let fg = span.style.fg.unwrap_or(TEXT_MUTED);
+        let bg = span.style.bg;
+        let bold = span.style.add_modifier.contains(Modifier::BOLD);
+        cells.extend(span.content.chars().map(|ch| LogoCell {
+            ch,
+            fg,
+            bg,
+            bold,
+            layer: LogoLayer::Global,
+        }));
+    }
+    LogoRow { cells }
+}
+
+fn max_width(rows: &[LogoRow]) -> usize {
+    rows.iter().map(|row| row.cells.len()).max().unwrap_or(0)
+}
+
+fn render_rows(rows: &[LogoRow], area: Rect, buf: &mut Buffer) {
+    if area.width == 0 || area.height == 0 || rows.is_empty() {
+        return;
+    }
+
+    let source_width = max_width(rows).max(1);
+    let source_height = rows.len().max(1);
+
+    let width_scale = area.width as f32 / source_width as f32;
+    let height_scale = area.height as f32 / source_height as f32;
+    let scale = width_scale.min(height_scale).min(1.0);
+
+    let target_width = ((source_width as f32 * scale).floor() as usize).max(1);
+    let target_height = ((source_height as f32 * scale).floor() as usize).max(1);
+
+    let x = area.x + (area.width.saturating_sub(target_width as u16)) / 2;
+    let y = area.y + (area.height.saturating_sub(target_height as u16)) / 2;
+    let render_area = Rect::new(x, y, target_width as u16, target_height as u16);
+
+    let mut lines = Vec::with_capacity(target_height);
+    for ty in 0..target_height {
+        let sy = ty * source_height / target_height;
+        let source_row = &rows[sy.min(rows.len().saturating_sub(1))];
+        let mut spans = Vec::with_capacity(target_width);
+        for tx in 0..target_width {
+            let sx = tx * source_width / target_width;
+            let cell = source_row
+                .cells
+                .get(sx.min(source_row.cells.len().saturating_sub(1)))
+                .cloned()
+                .unwrap_or(LogoCell {
+                    ch: ' ',
+                    fg: TEXT_MUTED,
+                    bg: None,
+                    bold: false,
+                    layer: LogoLayer::Global,
+                });
+            let mut style = Style::default().fg(cell.fg);
+            if let Some(bg) = cell.bg {
+                style = style.bg(bg);
+            }
+            if cell.bold {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            spans.push(Span::styled(cell.ch.to_string(), style));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    Paragraph::new(lines).render(render_area, buf);
+}
+
+fn ascii_lines(mode: ThemeMode) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            "╭──────────────────────────────────────────────────────────────────────────╮",
+            Style::default().fg(if mode == ThemeMode::Light {
+                AMBER_LIGHT_STOPS[1]
+            } else {
+                AMBER_STOPS[1]
+            }),
+        )),
+        Line::from(Span::styled(
+            "│  █▀▀█ █▀▀▀ █ █▀    █ █▀ █▀▀█                                              │",
+            Style::default()
+                .fg(if mode == ThemeMode::Light {
+                    AMBER_LIGHT_STOPS[4]
+                } else {
+                    AMBER_STOPS[4]
+                })
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "│  __█ █^^^ ██▀     ██▀  █__█                                              │",
+            Style::default()
+                .fg(if mode == ThemeMode::Light {
+                    AMBER_LIGHT_STOPS[4]
+                } else {
+                    AMBER_STOPS[4]
+                })
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "│  ▀▀▀  ▀▀▀▀ ▀ ▀▀    ▀ ▀▀ ▀▀▀▀                                             │",
+            Style::default().fg(if mode == ThemeMode::Light {
+                AMBER_LIGHT_STOPS[4]
+            } else {
+                AMBER_STOPS[4]
+            }),
+        )),
+        Line::from(Span::styled(
+            "╰──────────────────────────────────────────────────────────────────────────╯",
+            Style::default().fg(if mode == ThemeMode::Light {
+                AMBER_LIGHT_STOPS[1]
+            } else {
+                AMBER_STOPS[1]
+            }),
+        )),
+    ]
+}
+
+fn amber_at(
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    light: bool,
+    mode: ThemeMode,
+) -> Color {
     let tx = if width <= 1 {
         0.0
     } else {
@@ -442,7 +650,7 @@ fn amber_at(x: usize, y: usize, width: usize, height: usize, light: bool) -> Col
     };
     let t = (tx * 0.74 + ty * 0.26).clamp(0.0, 1.0);
     color_stop(
-        if light {
+        if light || mode == ThemeMode::Light {
             &AMBER_LIGHT_STOPS
         } else {
             &AMBER_STOPS
@@ -451,85 +659,25 @@ fn amber_at(x: usize, y: usize, width: usize, height: usize, light: bool) -> Col
     )
 }
 
-fn shadow_color(x: usize, y: usize, width: usize, height: usize, layer: LogoLayer) -> Color {
-    let base = amber_at(x, y, width, height, false);
-    let amount = match layer {
-        LogoLayer::WordmarkShadowMid => 0.80,
-        LogoLayer::WordmarkShadowNear => 0.70,
-        _ => 0.0,
-    };
-    dim_color(base, amount)
-}
-
 fn color_stop(stops: &[Color], t: f32) -> Color {
     let idx = ((stops.len().saturating_sub(1)) as f32 * t).round() as usize;
     stops[idx.min(stops.len().saturating_sub(1))]
 }
 
-fn dim_color(color: Color, amount: f32) -> Color {
-    match color {
-        Color::Rgb(r, g, b) => {
-            let k = (1.0 - amount).clamp(0.0, 1.0);
-            Color::Rgb(
-                (r as f32 * k) as u8,
-                (g as f32 * k) as u8,
-                (b as f32 * k) as u8,
-            )
-        }
-        other => other,
-    }
-}
-
-fn pixel_lines(builder: &LogoBuilder) -> Vec<Line<'static>> {
-    build_logo_rows(builder)
-        .into_iter()
-        .map(|row| {
-            Line::from(
-                row.cells
-                    .into_iter()
-                    .map(|cell| {
-                        let mut style = Style::default().fg(cell.fg);
-                        if let Some(bg) = cell.bg {
-                            style = style.bg(bg);
-                        }
-                        if cell.bold {
-                            style = style.add_modifier(Modifier::BOLD);
-                        }
-                        Span::styled(cell.ch.to_string(), style)
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect()
-}
-
-fn ascii_lines() -> Vec<Line<'static>> {
-    ASCII_LOGO
-        .lines()
-        .map(|line| {
-            Line::from(line.to_string()).style(
-                Style::default()
-                    .fg(AMBER_STOPS[4])
-                    .add_modifier(Modifier::BOLD),
-            )
-        })
-        .collect()
-}
-
 fn render_variant(variant: LogoVariant, builder: &LogoBuilder, area: Rect, buf: &mut Buffer) {
-    let lines = match variant {
-        LogoVariant::Pixel => pixel_lines(builder),
-        LogoVariant::Ascii => ascii_lines(),
-    };
-    Paragraph::new(lines)
-        .alignment(builder.alignment)
-        .render(area, buf);
+    let mode = builder.mode.unwrap_or(ThemeMode::Dark);
+    match variant {
+        LogoVariant::Pixel => render_rows(&build_logo_rows(builder), area, buf),
+        LogoVariant::Ascii => Paragraph::new(ascii_lines(mode))
+            .alignment(builder.alignment)
+            .render(area, buf),
+    }
 }
 
 impl Widget for &Logo {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let variant = Logo::pick(area);
         let builder = LogoBuilder::new(None);
+        let variant = Logo::pick(area);
         render_variant(variant, &builder, area, buf);
     }
 }
@@ -546,39 +694,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pixel_word_renders_four_rows() {
-        assert_eq!(render_pixel_word("JEKKO", 2, 2).len(), 4);
+    fn parses_historical_ansi_logo() {
+        let rows = ansi_rows();
+        assert!(rows.len() >= 10);
+        let rendered = rows.iter().map(LogoRow::text).collect::<String>();
+        assert!(rendered.contains('█') || rendered.contains('░') || rendered.contains('◆'));
     }
 
     #[test]
-    fn logo_rows_match_old_frame_text() {
-        let rows = Logo::pixel().rows();
-        assert_eq!(rows.len(), 11);
-        assert_eq!(rows[0].text(), format!("╭{}╮", "─".repeat(78)));
-        assert!(rows[1].text().starts_with("│ ›_ JEKKO"));
-        assert_eq!(rows[2].text(), format!("├{}┤", "─".repeat(78)));
-        assert!(rows[9]
-            .text()
-            .contains("gecko:// safe autonomous coding ready"));
-        assert_eq!(rows[10].text(), format!("╰{}╯", "─".repeat(78)));
+    fn logo_rows_include_footer_when_requested() {
+        let rows = Logo::pixel()
+            .with_support("ZYAL")
+            .with_status("safe autonomous coding ready")
+            .rows();
+        assert!(rows.len() >= 12);
+        let rendered = rows.iter().map(|row| row.text()).collect::<String>();
+        assert!(rendered.contains("ZYAL"));
+        assert!(rendered.contains("gecko:// safe autonomous coding ready"));
     }
 
     #[test]
-    fn wordmark_contains_shadow_layers() {
-        let rows = Logo::pixel().rows();
-        assert!(rows
-            .iter()
-            .flat_map(|row| row.cells.iter())
-            .any(|cell| cell.layer == LogoLayer::WordmarkShadowNear));
-        assert!(rows
-            .iter()
-            .flat_map(|row| row.cells.iter())
-            .any(|cell| cell.layer == LogoLayer::WordmarkShadowMid));
+    fn light_mode_rethemes_the_historical_art() {
+        let dark = Logo::pixel().with_mode(ThemeMode::Dark).rows();
+        let light = Logo::pixel().with_mode(ThemeMode::Light).rows();
+
+        assert_ne!(dark[0].cells[0].fg, light[0].cells[0].fg);
+        assert_ne!(dark[0].cells[0].bg, light[0].cells[0].bg);
+    }
+
+    #[test]
+    fn animation_tick_changes_the_logo_palette() {
+        let still = Logo::pixel().rows();
+        let shimmer = Logo::pixel().with_animation_tick(1).rows();
+
+        assert!(still.iter().zip(shimmer.iter()).any(|(a, b)| {
+            a.cells
+                .iter()
+                .zip(&b.cells)
+                .any(|(left, right)| left.fg != right.fg || left.bg != right.bg)
+        }));
     }
 
     #[test]
     fn auto_picks_pixel_for_full_logo_area() {
-        assert_eq!(Logo::pick(Rect::new(0, 0, 80, 11)), LogoVariant::Pixel);
+        assert_eq!(Logo::pick(Rect::new(0, 0, 80, 10)), LogoVariant::Pixel);
     }
 
     #[test]
