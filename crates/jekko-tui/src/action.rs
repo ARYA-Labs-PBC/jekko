@@ -4,8 +4,9 @@ use crossterm::event::{KeyEvent, MouseEvent};
 use jekko_core::keybind::Chord;
 use jekko_core::session::SessionId;
 use jekko_core::theme::ThemeMode;
+use serde::{Deserialize, Serialize};
 
-use crate::feature_plugins::ShellTab;
+use crate::activity::ActivityKind;
 
 /// Live status of the Jnoccio Fusion server, forwarded from the boot thread.
 ///
@@ -17,6 +18,8 @@ use crate::feature_plugins::ShellTab;
 pub enum JnoccioBootStatus {
     #[default]
     Idle,
+    Disabled,
+    NotInstalled,
     Checking,
     Starting,
     /// Server is reachable. `model_count` is the number of routable models.
@@ -24,8 +27,43 @@ pub enum JnoccioBootStatus {
         enabled_models: u32,
         total_models: u32,
     },
-    Unavailable,
     Failed,
+}
+
+impl JnoccioBootStatus {
+    /// Compact human-readable label for status surfaces.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Idle => "idle".to_string(),
+            Self::Disabled => "disabled".to_string(),
+            Self::NotInstalled => "not installed".to_string(),
+            Self::Checking => "checking".to_string(),
+            Self::Starting => "booting".to_string(),
+            Self::Ready {
+                enabled_models,
+                total_models,
+            } => format!("ready {enabled_models}/{total_models}"),
+            Self::Failed => "failed".to_string(),
+        }
+    }
+
+    /// Short detail block for `/status` and `/panels` output.
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::Idle => None,
+            Self::Disabled => Some("jnoccio boot disabled".to_string()),
+            Self::NotInstalled => Some("jnoccio-fusion not installed or not unlocked".to_string()),
+            Self::Checking => Some("jnoccio checking local health".to_string()),
+            Self::Starting => Some("jnoccio booting local server".to_string()),
+            Self::Ready {
+                enabled_models,
+                total_models,
+            } => Some(format!(
+                "jnoccio ready\n  enabled models: {enabled_models}\n  total models:    {total_models}"
+            )),
+            Self::Failed => Some("jnoccio boot failed".to_string()),
+        }
+    }
 }
 
 /// Top-level route discriminator for the TUI app.
@@ -48,12 +86,38 @@ pub enum Route {
 pub enum RuntimeEvent {
     SessionStarted {
         session_id: SessionId,
+        title: Option<String>,
     },
     SessionEnded {
         session_id: SessionId,
     },
     DaemonStatus {
-        online: bool,
+        session_id: Option<SessionId>,
+        status: String,
+        message: Option<String>,
+    },
+    PermissionAsked {
+        request_id: String,
+        session_id: SessionId,
+        permission: String,
+        patterns: Vec<String>,
+        always: Vec<String>,
+    },
+    PermissionReplied {
+        request_id: String,
+        session_id: SessionId,
+        reply: String,
+    },
+    QuestionAsked {
+        question_id: String,
+        session_id: SessionId,
+        prompt: String,
+        choices: Vec<String>,
+    },
+    QuestionReplied {
+        question_id: String,
+        session_id: SessionId,
+        answer: String,
     },
     Tick,
     /// Streaming assistant text delta. The first delta after a `PromptSubmit`
@@ -80,10 +144,38 @@ pub enum RuntimeEvent {
         reasoning_id: String,
         text: String,
     },
+    /// Tool-call lifecycle event (start/stdout/stderr/complete/fail).
+    Tool(ToolEvent),
+}
+
+/// Streaming tool-call event, surfaced by the chat-bridge SSE worker and
+/// rendered as a live status chip / tool card in the inline runtime.
+#[derive(Clone, Debug)]
+pub enum ToolEvent {
+    Start {
+        id: String,
+        name: String,
+        input: Option<String>,
+    },
+    StdoutChunk {
+        id: String,
+        chunk: String,
+    },
+    StderrChunk {
+        id: String,
+        chunk: String,
+    },
+    Complete {
+        id: String,
+    },
+    Fail {
+        id: String,
+        error: String,
+    },
 }
 
 /// A single actionable finding from a jankurai audit.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditFinding {
     /// Severity: "critical", "high", "medium", "low".
     pub severity: String,
@@ -100,7 +192,7 @@ pub struct AuditFinding {
 }
 
 /// Parsed summary of a jankurai audit run, extracted from `agent/repo-score.json`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditSummary {
     /// Final score after caps (0-100).
     pub score: u64,
@@ -143,31 +235,33 @@ pub enum Action {
     /// The user pressed `Ctrl+C` in the prompt with a non-empty buffer; the
     /// host should clear local state in response.
     PromptCancel,
-    /// Cycle the Shell route's LEFT tab cluster. `forward = true` for `Tab`,
-    /// `false` for `Shift+Tab`.
-    ShellTabCycle {
-        forward: bool,
-    },
-    /// Jump the Shell route to a specific tab (`1` / `2` / `3`).
-    ShellTabSet(ShellTab),
-    /// Toggle the Shell/Session sidebar (`Ctrl+B`).
-    SidebarToggle,
-    /// Begin the empty-state engagement animation. Fired by the Enter key on
-    /// the Shell route when the prompt buffer is empty (and the engagement
-    /// state is still `Idle`). Idempotent — the slide does not restart once
-    /// it has begun.
-    EngageSession,
     /// Jnoccio boot thread reported a status change.
     JnoccioBootUpdate(JnoccioBootStatus),
+    /// Long-running activity began or progressed.
+    ActivityUpdated {
+        id: String,
+        kind: ActivityKind,
+        label: Option<String>,
+        status: Option<String>,
+        progress: Option<(u64, u64)>,
+    },
+    /// Long-running activity finished.
+    ActivityFinished {
+        id: String,
+        kind: ActivityKind,
+        label: Option<String>,
+        status: Option<String>,
+        success: bool,
+    },
     /// User requested a jankurai audit (via `/audit` slash command or chat intercept).
     RunJankuraiAudit,
-    /// User requested a full jankurai cycle: audit → analyze → fix → verify → reaudit.
+    /// User requested the compatibility Jankurai action; this runs an external audit.
     RunJankuraiCycle,
-    /// User explicitly confirmed the mutating jankurai cycle.
+    /// User explicitly confirmed the compatibility Jankurai action.
     RunJankuraiCycleConfirmed,
     /// A single progress line from the running jankurai audit subprocess.
     JankuraiAuditLine(String),
-    /// A single progress line from the jankurai-runner subprocess during a cycle.
+    /// A single progress line from a compatibility Jankurai action.
     JankuraiRunnerLine(String),
     /// Background audit thread finished. `success` is false on non-zero exit.
     /// When successful, `summary` carries the parsed audit results so the app
@@ -176,8 +270,8 @@ pub enum Action {
         success: bool,
         summary: Option<AuditSummary>,
     },
-    /// Full jankurai cycle completed. `improved` is true if the re-audit showed
-    /// a better score than the initial audit.
+    /// Compatibility Jankurai action completed. `improved` is retained for old
+    /// callers and is always false for read-only external audits.
     JankuraiCycleComplete {
         improved: bool,
     },

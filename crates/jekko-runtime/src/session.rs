@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::bus::Bus;
 use crate::error::{RuntimeError, RuntimeResult};
 
 /// Input passed to [`SessionService::create`].
@@ -174,6 +175,7 @@ impl SessionStore for InMemorySessionStore {
 #[derive(Debug)]
 pub struct SessionService {
     store: Arc<dyn SessionStore>,
+    bus: Option<Arc<Bus>>,
 }
 
 impl Default for SessionService {
@@ -187,12 +189,29 @@ impl SessionService {
     pub fn new() -> Self {
         Self {
             store: Arc::new(InMemorySessionStore::default()),
+            bus: None,
         }
     }
 
     /// Construct with a caller-supplied store.
     pub fn with_store(store: Arc<dyn SessionStore>) -> Self {
-        Self { store }
+        Self { store, bus: None }
+    }
+
+    /// Construct with the default in-memory backing store and a bus.
+    pub fn with_bus(bus: Arc<Bus>) -> Self {
+        Self {
+            store: Arc::new(InMemorySessionStore::default()),
+            bus: Some(bus),
+        }
+    }
+
+    /// Construct with a caller-supplied store and bus.
+    pub fn with_store_and_bus(store: Arc<dyn SessionStore>, bus: Arc<Bus>) -> Self {
+        Self {
+            store,
+            bus: Some(bus),
+        }
     }
 
     /// Create a session and persist it via the backing store.
@@ -225,6 +244,18 @@ impl SessionService {
             time_updated: now,
         };
         self.store.put_session(&info).await?;
+        if let Some(bus) = &self.bus {
+            let _ = bus
+                .publish(
+                    "session.started",
+                    serde_json::json!({
+                        "sessionID": info.id.as_str(),
+                        "session_id": info.id.as_str(),
+                        "session": info.clone(),
+                    }),
+                )
+                .await;
+        }
         Ok(info)
     }
 
@@ -247,7 +278,37 @@ impl SessionService {
             time_updated: now,
         };
         self.store.put_message(&message).await?;
+        if let Some(bus) = &self.bus {
+            let _ = bus
+                .publish(
+                    "session.message.appended",
+                    serde_json::to_value(&message).map_err(RuntimeError::Json)?,
+                )
+                .await;
+        }
         Ok(message)
+    }
+
+    /// Mark a session as ended. This is the explicit lifecycle hook used by
+    /// attach/daemon code when a session stream closes cleanly.
+    pub async fn end(&self, session_id: &SessionId) -> RuntimeResult<()> {
+        let info = match self.store.get_session(session_id).await? {
+            Some(info) => info,
+            None => return Err(RuntimeError::not_found("session", session_id.as_str())),
+        };
+        if let Some(bus) = &self.bus {
+            let _ = bus
+                .publish(
+                    "session.ended",
+                    serde_json::json!({
+                        "sessionID": info.id.as_str(),
+                        "session_id": info.id.as_str(),
+                        "session": info,
+                    }),
+                )
+                .await;
+        }
+        Ok(())
     }
 
     /// List messages for `session_id` ordered by `(time_created, id)`.
@@ -315,6 +376,43 @@ mod tests {
         assert_eq!(msg.role, "user");
         let listed = svc.messages(&info.id).await.unwrap();
         assert_eq!(listed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_events_publish_when_bus_is_present() {
+        let bus = Arc::new(Bus::new());
+        let svc = SessionService::with_bus(bus.clone());
+        let mut started = bus.subscribe("session.started").await;
+        let mut appended = bus.subscribe("session.message.appended").await;
+        let mut ended = bus.subscribe("session.ended").await;
+
+        let info = svc
+            .create(CreateSessionInput {
+                project_id: "proj_1".into(),
+                workspace_id: None,
+                parent_id: None,
+                directory: "/tmp".into(),
+                title: Some("hello".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(started.recv().await.unwrap().kind, "session.started");
+
+        let _ = svc
+            .append(AppendMessageInput {
+                session_id: info.id.clone(),
+                role: "user".into(),
+                data: serde_json::json!({ "text": "hi" }),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            appended.recv().await.unwrap().kind,
+            "session.message.appended"
+        );
+
+        svc.end(&info.id).await.unwrap();
+        assert_eq!(ended.recv().await.unwrap().kind, "session.ended");
     }
 
     #[tokio::test]

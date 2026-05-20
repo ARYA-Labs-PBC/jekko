@@ -99,6 +99,7 @@ macro_rules! string_newtype {
 pub mod config;
 pub mod error;
 pub mod github;
+pub mod jankurai;
 pub mod keybind;
 pub mod permission;
 pub mod project;

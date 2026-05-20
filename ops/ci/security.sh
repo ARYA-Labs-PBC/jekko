@@ -4,4 +4,4 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-bash tools/security-lane.sh
+cargo run -p xtask --locked -- security-lane --out target/jankurai/security

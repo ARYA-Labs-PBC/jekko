@@ -6,7 +6,9 @@
 
 use anyhow::Result;
 use clap::Args;
-use jekko_tui::{action::JnoccioBootStatus, TuiOptions};
+use jekko_tui::action::JnoccioBootStatus;
+use jekko_tui::chat_bridge_backend::{ChatBridgeBackend, ChatBridgeConfig};
+use jekko_tui::inline_runtime::{run_inline, InlineRuntimeOptions};
 
 use crate::cli::GlobalOpts;
 
@@ -32,17 +34,21 @@ pub fn run(global: &GlobalOpts, args: &TuiArgs) -> Result<()> {
         eprintln!("note: --continue not yet wired through TuiOptions");
     }
 
-    let opts = TuiOptions {
-        pure: global.pure,
-        headless: global.headless,
-    };
-
     // Spawn the Jnoccio boot thread unless explicitly disabled (PTY tests,
     // CI, or environments without jnoccio-fusion configured).
     let jnoccio_rx = spawn_jnoccio_boot_bridge();
 
-    jekko_tui::run_with_jnoccio(opts, None, jnoccio_rx)?;
-    Ok(())
+    let opts = InlineRuntimeOptions {
+        no_alt_screen: global.headless,
+        jnoccio_boot_status: if jnoccio_rx.is_some() {
+            JnoccioBootStatus::Checking
+        } else {
+            JnoccioBootStatus::Disabled
+        },
+        jnoccio_boot_rx: jnoccio_rx,
+        ..InlineRuntimeOptions::default()
+    };
+    run_inline(ChatBridgeBackend::new(ChatBridgeConfig::default()), opts)
 }
 
 /// Spawn the Jnoccio boot thread and return a channel receiver that delivers
@@ -86,7 +92,7 @@ fn spawn_jnoccio_boot_bridge() -> Option<std::sync::mpsc::Receiver<JnoccioBootSt
                                 enabled_models,
                                 total_models,
                             },
-                            BootStatus::Unavailable => JnoccioBootStatus::Unavailable,
+                            BootStatus::Unavailable => JnoccioBootStatus::NotInstalled,
                             BootStatus::Failed => JnoccioBootStatus::Failed,
                         };
                         if tui_tx.send(tui_status).is_err() {

@@ -87,7 +87,7 @@ pub struct KeysUsersArgs {
 }
 
 pub fn run(_global: &GlobalOpts, args: &KeysArgs) -> Result<()> {
-    migrate_legacy_jekko_env()?;
+    migrate_existing_jekko_env()?;
     enforce_user_gate(&args.user, jekko_jnoccio_boot::unlock::is_unlocked())?;
     match &args.command {
         KeysCommand::Set(opts) => set(&args.user, opts),
@@ -120,40 +120,40 @@ fn enforce_user_gate(user_id: &str, unlocked: bool) -> Result<()> {
     ))
 }
 
-/// Move legacy `~/.jekko/jekko.env` to `~/.jekko/users/user/llm.env` on the
-/// first invocation after upgrade. Leaves `~/.jekko/jekko.env.bak` behind so
-/// the original is recoverable. Idempotent — does nothing once `users/` exists
-/// or the legacy file is already gone.
-fn migrate_legacy_jekko_env() -> Result<()> {
+/// Move an existing single-user `~/.jekko/jekko.env` into
+/// `~/.jekko/users/user/llm.env` on the first invocation after upgrade. Leaves
+/// `~/.jekko/jekko.env.bak` behind so the original is recoverable. Idempotent:
+/// does nothing once `users/` exists or the source file is already gone.
+fn migrate_existing_jekko_env() -> Result<()> {
     let Some(users) = users_root() else {
         return Ok(());
     };
     if users.exists() {
         return Ok(());
     }
-    let legacy = users
-        .parent()
-        .map(|jekko| jekko.join("jekko.env"))
-        .unwrap_or_default();
-    if !legacy.is_file() {
+    let source = match users.parent() {
+        Some(jekko) => jekko.join("jekko.env"),
+        None => PathBuf::new(),
+    };
+    if !source.is_file() {
         return Ok(());
     }
     let default = user_dir(&users, DEFAULT_USER_ID);
     fs::create_dir_all(&default.dir)
         .with_context(|| format!("create default user dir at {}", default.dir.display()))?;
-    fs::rename(&legacy, &default.llm_env_path).with_context(|| {
+    fs::rename(&source, &default.llm_env_path).with_context(|| {
         format!(
             "move {} to {}",
-            legacy.display(),
+            source.display(),
             default.llm_env_path.display()
         )
     })?;
-    let backup = legacy.with_extension("env.bak");
+    let backup = source.with_extension("env.bak");
     fs::copy(&default.llm_env_path, &backup)
-        .with_context(|| format!("write legacy backup at {}", backup.display()))?;
+        .with_context(|| format!("write previous-key backup at {}", backup.display()))?;
     eprintln!(
         "migrated {} → {} (backup at {})",
-        legacy.display(),
+        source.display(),
         default.llm_env_path.display(),
         backup.display()
     );
@@ -378,14 +378,14 @@ mod tests {
     }
 
     #[test]
-    fn migrates_legacy_jekko_env_into_default_user_dir() {
+    fn migrates_existing_jekko_env_into_default_user_dir() {
         let tmp = TempDir::new().unwrap();
         let jekko = tmp.path().join(".jekko");
         fs::create_dir_all(&jekko).unwrap();
         fs::write(jekko.join("jekko.env"), "OPENAI_API_KEY=k\n").unwrap();
         let _guard = EnvGuard::install(&jekko, None);
 
-        migrate_legacy_jekko_env().unwrap();
+        migrate_existing_jekko_env().unwrap();
 
         let new_path = jekko.join("users").join("user").join("llm.env");
         assert!(new_path.is_file(), "new keys file missing");
@@ -394,11 +394,11 @@ mod tests {
         assert!(backup.is_file(), "backup missing");
         assert!(
             !jekko.join("jekko.env").exists(),
-            "legacy file should be moved"
+            "source file should be moved"
         );
 
         // Idempotent: second run is a no-op.
-        migrate_legacy_jekko_env().unwrap();
+        migrate_existing_jekko_env().unwrap();
         assert!(new_path.is_file());
     }
 

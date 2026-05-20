@@ -1,50 +1,22 @@
-//! Phase 10 / Packet I — Rust port of the JS session transcript.
+//! Transcript rendering primitives for the Claude/Codex-style chat surface.
 //!
-//! Ports the following TS sources into a cohesive Ratatui module:
-//!
-//! * `packages/jekko/src/cli/cmd/tui/routes/session/session-renderers.tsx` and
-//!   `session-view.tsx` — the cards that compose a transcript.
-//! * `packages/jekko/src/cli/cmd/tui/routes/session/permission.tsx` and
-//!   `question-view.tsx` — inline permission and question prompts.
-//! * `packages/jekko/src/cli/cmd/tui/util/transcript.ts`,
-//!   `util/revert-diff.ts`, `util/terminal-tokenize.ts`,
-//!   `util/yaml-tokenize.ts` — supporting utilities.
-//! * `packages/jekko/src/cli/cmd/tui/routes/session/sidebar.tsx`,
-//!   `subagent-footer.tsx`, `daemon-banner.tsx`, `footer.tsx` —
-//!   surrounding chrome.
-//!
-//! No persistence and no IO live in this module. Callers in `jekko-cli` and
-//! `jekko-server` push state in via the public `Transcript` API.
-//!
-//! ## Dependencies
-//!
-//! The orchestrator will wire `similar = "2"` (for unified diff parsing) and
-//! optionally `vte = "0.13"` (for ANSI escape parsing) into `Cargo.toml` after
-//! this packet lands. Until then, this module ships its own minimal parsers
-//! (see [`diff`] and [`terminal_tokenize`]).
+//! The legacy session-route cards (`cards/`, `permission`, `question`,
+//! `route`, `sidebar`, and the wrapper `Transcript` container) were removed
+//! in the R3 legacy purge. The inline renderer in [`inline_cards`] is the
+//! only public card grammar now; supporting diff/syntax/terminal/yaml
+//! tokenizers remain because the inline renderer leans on them.
 
-pub mod cards;
 pub mod diff;
-pub mod permission;
-pub mod question;
-pub mod route;
-pub mod sidebar;
+/// Claude/Codex-style inline-viewport renderer (used by both the fullscreen
+/// alt-screen runtime and the `--no-alt-screen` compatibility path).
+pub mod inline_cards;
+pub mod markup;
+pub mod runtime;
+pub mod syntax;
 pub mod terminal_tokenize;
-#[allow(clippy::module_inception)]
-pub mod transcript;
 pub mod yaml_tokenize;
 
-pub use cards::{
-    AssistantCard, AssistantPart, AssistantPartKind, ReasoningCard, SystemCard, SystemKind,
-    ToolCard, ToolStatus, UserCard,
-};
 pub use diff::{parse_unified_diff, DiffFile, DiffHunk, DiffLine, DiffLineKind};
-pub use permission::{
-    PermissionAction, PermissionCard, PermissionChoice, PermissionDecisionEvent, PermissionStage,
-};
-pub use question::{QuestionCard, QuestionChoice, QuestionEvent, QuestionMode};
-pub use route::SessionRoute;
-pub use sidebar::{DaemonStatus, SidebarPanel, StickyBottomIndicator, SubagentFooter};
+pub use runtime::{IntoTranscriptEvent, Transcript, TranscriptEvent};
 pub use terminal_tokenize::{tokenize_terminal, TerminalScope, TerminalSpan};
-pub use transcript::{ScrollIntent, Transcript, TranscriptEntry};
 pub use yaml_tokenize::{tokenize_yaml, YamlScope, YamlSpan};

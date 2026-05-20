@@ -131,11 +131,10 @@ fn default_tui_paints_first_frame() -> Result<()> {
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        // Phase A landed the app directly on Route::Shell; the footer hints
-        // now read "Tab switch pane  / commands  Enter send  ? help  Ctrl+C
-        // quit". We sentinel on "switch pane" (route-specific, stable
-        // across resolutions including the narrow LEFT-panel collapse).
-        page.wait_for_text("switch pane", HOME_TIMEOUT)
+        // Phase A landed the app directly on Route::Shell; the shell banner
+        // now reads "bypass permissions  · 1 local agent · ↓ to manage".
+        // We sentinel on the stable banner text across resolutions.
+        page.wait_for_text("bypass permissions", HOME_TIMEOUT)
             .with_context(|| {
                 let _ = page.screenshot(artifact_dir.join(format!("{case}-home-timeout.png")));
                 let _ = copy_jekko_logs(&workspace, &case);
@@ -230,9 +229,9 @@ fn real_home_tui_reaches_prompt() -> Result<()> {
     let page = Page::spawn(cfg).context("spawn jekko TUI with real home")?;
     page.wait_for_text("loading…", Duration::from_secs(3))
         .context("real-home loading screen did not appear")?;
-    // Phase A landed the app directly on Route::Shell; footer reads
-    // "Tab switch pane …" instead of the prior Home footer.
-    page.wait_for_text("switch pane", Duration::from_secs(30))
+    // Phase A landed the app directly on Route::Shell; the shell banner
+    // text is stable enough to sentinel on directly.
+    page.wait_for_text("bypass permissions", Duration::from_secs(30))
         .context("real-home TUI did not boot")?;
     assert!(
         load_seen_at.elapsed() >= Duration::from_secs(5),
