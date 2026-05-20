@@ -693,6 +693,7 @@ async fn run_loop_async<B: ChatBackend>(
                                         .map(|l| l.to_string())
                                         .collect::<Vec<_>>()
                                 });
+                            #[allow(clippy::manual_unwrap_or_default)]
                             let lines = match live {
                                 Some(lines) if !lines.is_empty() => lines,
                                 _ => match transcript.last_tool_buffer_lines() {
@@ -784,10 +785,10 @@ async fn run_loop_async<B: ChatBackend>(
                         (KeyCode::Down, _) if composer.slash.active => {
                             composer.slash.move_next(&catalog);
                         }
-                        (KeyCode::Up, _) if composer.mention.active => {
-                            if composer.mention.cursor > 0 {
-                                composer.mention.cursor -= 1;
-                            }
+                        (KeyCode::Up, _)
+                            if composer.mention.active && composer.mention.cursor > 0 =>
+                        {
+                            composer.mention.cursor -= 1;
                         }
                         (KeyCode::Down, _) if composer.mention.active => {
                             let max = composer.mention.filtered.len().saturating_sub(1);
@@ -1520,11 +1521,11 @@ async fn run_loop_async<B: ChatBackend>(
                             dirty = true;
                         }
                         (KeyCode::Home, KeyModifiers::CONTROL) => {
-                            scroll.to_top(&transcript, terminal.size()?.width);
+                            scroll.scroll_to_top(&transcript, terminal.size()?.width);
                             dirty = true;
                         }
                         (KeyCode::End, KeyModifiers::CONTROL) => {
-                            scroll.to_bottom();
+                            scroll.scroll_to_bottom();
                             dirty = true;
                         }
                         (KeyCode::Down, _)

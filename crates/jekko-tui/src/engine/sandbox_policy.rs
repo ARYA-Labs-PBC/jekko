@@ -36,17 +36,12 @@ use portable_pty::CommandBuilder;
 ///   in the parent are silently skipped.
 /// - `Empty`: clear the env entirely. The child sees only what the runner
 ///   itself sets (today: nothing).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum SandboxEnv {
+    #[default]
     Inherit,
     Allowlist(Vec<String>),
     Empty,
-}
-
-impl Default for SandboxEnv {
-    fn default() -> Self {
-        Self::Inherit
-    }
 }
 
 /// Minimal sandbox policy applied to a runner-launched child process.

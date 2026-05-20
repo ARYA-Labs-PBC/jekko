@@ -109,6 +109,7 @@ fn render_status_snapshot(
     out.join("\n")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_panels_snapshot(
     ctx: &BootContext,
     in_flight: Option<&InFlight>,

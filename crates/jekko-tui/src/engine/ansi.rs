@@ -33,6 +33,7 @@ pub fn parse_bytes(bytes: &[u8]) -> Vec<Span<'static>> {
             let style = cell_style(cell);
             if cur_style.map(|s| s != style).unwrap_or(true) {
                 if !cur_text.is_empty() {
+                    #[allow(clippy::manual_unwrap_or_default)]
                     let span_style = match cur_style {
                         Some(style) => style,
                         None => Style::default(),
@@ -41,13 +42,14 @@ pub fn parse_bytes(bytes: &[u8]) -> Vec<Span<'static>> {
                 }
                 cur_style = Some(style);
             }
-            cur_text.push_str(&contents);
+            cur_text.push_str(contents);
         }
         if !cur_text.is_empty() {
             cur_text.push('\n');
         }
     }
     if !cur_text.is_empty() {
+        #[allow(clippy::manual_unwrap_or_default)]
         let span_style = match cur_style {
             Some(style) => style,
             None => Style::default(),

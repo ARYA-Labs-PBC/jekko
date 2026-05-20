@@ -46,11 +46,11 @@ impl ScrollState {
         self.offset_from_bottom = self.offset_from_bottom.saturating_sub(page);
     }
 
-    fn to_top(&mut self, transcript: &Transcript, width: u16) {
+    fn scroll_to_top(&mut self, transcript: &Transcript, width: u16) {
         self.offset_from_bottom = transcript.row_count(width);
     }
 
-    fn to_bottom(&mut self) {
+    fn scroll_to_bottom(&mut self) {
         self.offset_from_bottom = 0;
     }
 

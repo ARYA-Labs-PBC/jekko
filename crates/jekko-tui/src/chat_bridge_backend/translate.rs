@@ -68,11 +68,19 @@ fn translate_tool_event(
             vec![ChatEvent::Tool(event)]
         }
         ToolEvent::StdoutChunk { id, chunk } => {
-            tool_stdout.entry(id.clone()).or_default().push_str(chunk);
+            match tool_stdout.entry(id.clone()) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().push_str(chunk);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(chunk.to_string());
+                }
+            }
             vec![ChatEvent::Tool(event)]
         }
         ToolEvent::StderrChunk { .. } => vec![ChatEvent::Tool(event)],
         ToolEvent::Complete { id } => {
+            #[allow(clippy::manual_unwrap_or_default)]
             let buf = match tool_stdout.remove(id) {
                 Some(value) => value,
                 None => String::new(),

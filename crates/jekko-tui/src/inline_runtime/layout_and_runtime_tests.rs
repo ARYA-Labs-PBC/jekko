@@ -237,8 +237,9 @@ mod layout_and_runtime_tests {
     #[test]
     fn scroll_line_down_by_clamps_at_bottom() {
         // T-INLINE-CLUSTER #3: line_down_by saturates at zero, never wraps.
-        let mut s = ScrollState::default();
-        s.offset_from_bottom = 5;
+        let mut s = ScrollState {
+            offset_from_bottom: 5,
+        };
         s.line_down_by(2);
         assert_eq!(s.offset_from_bottom, 3);
         s.line_down_by(100);

@@ -32,7 +32,7 @@ impl BalancerStore {
             *guard = Some(conn);
         }
         let conn = guard.as_ref().expect("conn just initialised");
-        Ok(f(conn).context("balancer state query failed")?)
+        f(conn).context("balancer state query failed")
     }
 
     /// Fetch all usage rows for a given `provider`. Returns rows keyed by
@@ -83,9 +83,16 @@ impl BalancerStore {
                     })
                 })
                 .ok();
+            #[allow(clippy::manual_unwrap_or_default)]
             Ok(match opt {
                 Some(usage) => usage,
-                None => KeyUsage::default(),
+                None => KeyUsage {
+                    attempts: 0,
+                    failures: 0,
+                    last_failure_at: None,
+                    cooldown_until: None,
+                    status: KeyHealth::Ready,
+                },
             })
         })
     }

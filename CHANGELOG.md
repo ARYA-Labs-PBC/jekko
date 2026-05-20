@@ -10,6 +10,8 @@ releases, see `UPCOMING_CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-20
+
 ### Changed
 - Full rewrite of Jekko in Rust. Replaces the previous TypeScript terminal runtime.
 - TUI now built on Ratatui + Crossterm.
@@ -17,6 +19,9 @@ releases, see `UPCOMING_CHANGELOG.md`.
 - SQLite via rusqlite (bundled); migration journal byte-compatible with legacy databases.
 - Provider streaming via reqwest + tokio with full transform parity.
 - Plugin contract is now Rust (`JekkoPlugin` trait + declarative TOML manifest); JS plugin v1 still loaded but with migration warnings.
+- Jnoccio runtime access now requires an explicit `JNOCCIO_DEVELOPER_KEY` unlock from process env or `~/.env.jnoccio`; plaintext checkout signals remain diagnostic only.
+- Local submit and CI gates now verify protected `jnoccio-fusion/**` blobs are tracked and git-crypt encrypted.
+- Release confidence gates now include encrypted-path checks before `just fast`.
 
 ### Added
 - Workspace: 8 `jekko-*` crates + xtask + tuiwright-jekko-unlock.
@@ -33,6 +38,7 @@ releases, see `UPCOMING_CHANGELOG.md`.
 - Legacy SQLite databases open cleanly under Rust via `jekko_store::Db::open` — the `__drizzle_migrations` table is byte-identical and the migration hash algorithm matches.
 - v1 JS plugins are detected and surface a `MigrationWarning` rather than executing. Convert to declarative TOML manifest under `crates/jekko-plugin-api`.
 - Old JavaScript test and run lanes are replaced by `cargo` / `just` / `xtask`. See `docs/testing.md`.
+- Multi-user key pools remain locked to `~/.jekko/users/user/llm.env` unless `JNOCCIO_DEVELOPER_KEY` is present.
 
 ## [Unreleased] — `codex/jnoccio-unlock-flow`
 

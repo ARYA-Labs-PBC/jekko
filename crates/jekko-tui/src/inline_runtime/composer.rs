@@ -93,22 +93,24 @@ pub fn render_composer_row(
     };
 
     let composer_line = if streaming {
+        #[allow(clippy::manual_unwrap_or_default)]
         let preview = match streaming_preview.map(|s| {
+            #[allow(clippy::manual_unwrap_or)]
             let last_line = match s.lines().last() {
                 Some(line) => line,
                 None => "",
             };
-            let max = (body_area.width as usize).saturating_sub(12);
-            if last_line.len() > max && max > 1 {
-                // T-GLYPH-WAVE2: ellipsis chrome glyph defers to GlyphMode.
-                format!(
-                    "{}{}",
-                    glyph_set::current().ellipsis,
-                    &last_line[last_line.len() - (max - 1)..]
-                )
-            } else {
-                last_line.to_string()
-            }
+                let max = (body_area.width as usize).saturating_sub(12);
+                if last_line.len() > max && max > 1 {
+                    // T-GLYPH-WAVE2: ellipsis chrome glyph defers to GlyphMode.
+                    format!(
+                        "{}{}",
+                        glyph_set::current().ellipsis,
+                        &last_line[last_line.len() - (max - 1)..]
+                    )
+                } else {
+                    last_line.to_string()
+                }
         }) {
             Some(preview) => preview,
             None => String::new(),

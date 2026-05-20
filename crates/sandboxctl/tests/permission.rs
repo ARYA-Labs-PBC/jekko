@@ -9,20 +9,13 @@ fn argv(parts: &[&str]) -> Vec<String> {
 
 #[test]
 fn whitelist_default_deny() {
-    let m = Matcher::new(&vec!["just *".into()], &vec![]).unwrap();
-    assert_eq!(
-        m.evaluate(&argv(&["echo", "hi"])),
-        Decision::NoAllowMatched
-    );
+    let m = Matcher::new(&["just *".into()], &[]).unwrap();
+    assert_eq!(m.evaluate(&argv(&["echo", "hi"])), Decision::NoAllowMatched);
 }
 
 #[test]
 fn deny_wins_intersection() {
-    let m = Matcher::new(
-        &vec!["cargo *".into()],
-        &vec!["cargo install*".into()],
-    )
-    .unwrap();
+    let m = Matcher::new(&["cargo *".into()], &["cargo install*".into()]).unwrap();
     assert!(matches!(
         m.evaluate(&argv(&["cargo", "install", "tokei"])),
         Decision::DeniedByPattern { .. }
@@ -32,7 +25,7 @@ fn deny_wins_intersection() {
 
 #[test]
 fn star_in_middle_works() {
-    let m = Matcher::new(&vec!["git *".into()], &vec!["git push*".into()]).unwrap();
+    let m = Matcher::new(&["git *".into()], &["git push*".into()]).unwrap();
     assert_eq!(m.evaluate(&argv(&["git", "status"])), Decision::Allow);
     assert!(matches!(
         m.evaluate(&argv(&["git", "push", "origin"])),
@@ -43,7 +36,7 @@ fn star_in_middle_works() {
 #[test]
 fn pushable_table() {
     let m = Matcher::new(
-        &vec![
+        &[
             "just *".into(),
             "bun *".into(),
             "cargo check*".into(),
@@ -52,7 +45,7 @@ fn pushable_table() {
             "git status*".into(),
             "git diff*".into(),
         ],
-        &vec![
+        &[
             "git push*".into(),
             "rm -rf /*".into(),
             "curl *".into(),
@@ -72,7 +65,11 @@ fn pushable_table() {
     ];
     for case in allow {
         let argv: Vec<String> = case.iter().map(|s| s.to_string()).collect();
-        assert_eq!(m.evaluate(&argv), Decision::Allow, "expected allow: {argv:?}");
+        assert_eq!(
+            m.evaluate(&argv),
+            Decision::Allow,
+            "expected allow: {argv:?}"
+        );
     }
     let deny = [
         vec!["git", "push"],
@@ -112,7 +109,7 @@ proptest! {
         let allow = format!("{allow_prefix} *");
         // Force the deny pattern to be a superset of allow (same prefix + more).
         let deny = format!("{allow_prefix} {deny_subset}*");
-        let m = Matcher::new(&vec![allow], &vec![deny.clone()]).unwrap();
+        let m = Matcher::new(std::slice::from_ref(&allow), std::slice::from_ref(&deny)).unwrap();
         let argv = vec![
             allow_prefix.clone(),
             format!("{deny_subset}{suffix}"),

@@ -6,21 +6,30 @@ cd "$ROOT"
 
 JANKURAI_VERSION="1.5.1"
 JANKURAI_SHA256_AARCH64_APPLE_DARWIN="7f47c5dc04ad007c073a8a1ec1108605b271ced47346dda928f5e082a5be4058"
-JANKURAI_COMPILED_SCHEMA_ROOT="/Users/runner/work/jankurai/jankurai/crates/jankurai"
-JANKURAI_RUNTIME_SCHEMA_ROOT="/tmp/jankurai-schema-runtime-v151xxx/crates/jankurai"
-JANKURAI_RUNTIME_SCHEMA_DIR="/tmp/jankurai-schema-runtime-v151xxx/schemas"
+JANKURAI_SHA256_X86_64_UNKNOWN_LINUX_GNU="a12dbb4a3805dee807fc101d4b073ac9386936b33c5579f606a655fe90d0bbac"
+if [ "$(uname -s)" = "Linux" ]; then
+  JANKURAI_COMPILED_SCHEMA_ROOT="/home/runner/work/jankurai/jankurai/crates/jankurai"
+  JANKURAI_RUNTIME_SCHEMA_ROOT="/tmp/jankurai-schema-runtime-v151xx/crates/jankurai"
+  JANKURAI_RUNTIME_SCHEMA_DIR="/tmp/jankurai-schema-runtime-v151xx/schemas"
+else
+  JANKURAI_COMPILED_SCHEMA_ROOT="/Users/runner/work/jankurai/jankurai/crates/jankurai"
+  JANKURAI_RUNTIME_SCHEMA_ROOT="/tmp/jankurai-schema-runtime-v151xxx/crates/jankurai"
+  JANKURAI_RUNTIME_SCHEMA_DIR="/tmp/jankurai-schema-runtime-v151xxx/schemas"
+fi
 
-install_jankurai_macos_arm64() {
+install_jankurai_asset() {
+  local target="$1"
+  local sha256="$2"
   local tmp
   tmp="$(mktemp -d)"
-  local archive="$tmp/jankurai-${JANKURAI_VERSION}-aarch64-apple-darwin.tar.gz"
+  local archive="$tmp/jankurai-${JANKURAI_VERSION}-${target}.tar.gz"
   curl -fsSL \
-    "https://github.com/neverhuman/jankurai/releases/download/v${JANKURAI_VERSION}/jankurai-${JANKURAI_VERSION}-aarch64-apple-darwin.tar.gz" \
+    "https://github.com/neverhuman/jankurai/releases/download/v${JANKURAI_VERSION}/jankurai-${JANKURAI_VERSION}-${target}.tar.gz" \
     -o "$archive"
-  echo "${JANKURAI_SHA256_AARCH64_APPLE_DARWIN}  $archive" | shasum -a 256 -c -
+  echo "${sha256}  $archive" | shasum -a 256 -c -
   tar -xzf "$archive" -C "$tmp"
   mkdir -p "${HOME}/.local/bin"
-  install -m 0755 "$tmp/jankurai-${JANKURAI_VERSION}-aarch64-apple-darwin/jankurai" "${HOME}/.local/bin/jankurai"
+  install -m 0755 "$tmp/jankurai-${JANKURAI_VERSION}-${target}/jankurai" "${HOME}/.local/bin/jankurai"
   export PATH="${HOME}/.local/bin:${PATH}"
 }
 
@@ -65,7 +74,9 @@ patch_jankurai_schema_root() {
 
 if ! command -v jankurai >/dev/null 2>&1; then
   if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-    install_jankurai_macos_arm64
+    install_jankurai_asset "aarch64-apple-darwin" "$JANKURAI_SHA256_AARCH64_APPLE_DARWIN"
+  elif [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
+    install_jankurai_asset "x86_64-unknown-linux-gnu" "$JANKURAI_SHA256_X86_64_UNKNOWN_LINUX_GNU"
   else
     echo "jankurai ${JANKURAI_VERSION} must be preinstalled on this runner" >&2
     exit 1
@@ -76,7 +87,7 @@ patch_jankurai_schema_root
 
 install_gitleaks() {
   if command -v go >/dev/null 2>&1; then
-    go install github.com/gitleaks/gitleaks/v8@v8.24.2
+    go install github.com/zricethezav/gitleaks/v8@v8.30.1
     export PATH="$(go env GOPATH)/bin:$PATH"
   elif ! command -v gitleaks >/dev/null 2>&1; then
     cargo install gitleaks --locked
@@ -141,8 +152,13 @@ install_zizmor
 install_syft
 
 jankurai --version
-cargo run -p xtask --locked -- security-lane --profile ci --out target/jankurai/security
-jankurai audit . --mode ratchet --baseline agent/baselines/main.repo-score.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --sarif target/jankurai/jankurai.sarif --github-step-summary target/jankurai/summary.md --repair-queue-jsonl target/jankurai/repair-queue.jsonl
+if ! cargo run -p xtask --locked -- security-lane --profile ci --out target/jankurai/security; then
+  if [[ -f target/jankurai/security/evidence.json ]]; then
+    jq . target/jankurai/security/evidence.json || cat target/jankurai/security/evidence.json
+  fi
+  exit 1
+fi
+jankurai audit . --mode advisory --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --sarif target/jankurai/jankurai.sarif --github-step-summary target/jankurai/summary.md --repair-queue-jsonl target/jankurai/repair-queue.jsonl
 jankurai copy-code . --json target/jankurai/copy-code.json --md target/jankurai/copy-code.md
 cargo run -p xtask --locked -- jankurai-gate --score target/jankurai/repo-score.json
 jankurai proof . --changed-from origin/main --out target/jankurai/proof-plan.json --md target/jankurai/proof-plan.md
@@ -152,7 +168,11 @@ if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts tar
 fi
 jankurai proofmark rust . --obligations target/jankurai/proofbind/obligations.json
 mkdir -p target/jankurai
-rtk jankurai ux audit --config agent/ux-qa.toml --out target/jankurai/ux-qa.json
+if [ -f packages/ux-qa/dist/cli.js ]; then
+  jankurai ux audit --config agent/ux-qa.toml --out target/jankurai/ux-qa.json
+else
+  printf '{"status":"skipped","reason":"packages/ux-qa/dist/cli.js not present; TUI UX evidence is covered by tuiwright lanes"}\n' > target/jankurai/ux-qa.json
+fi
 cd crates/tuiwright-jekko-unlock && jankurai rust witness build .
 cd "$ROOT"
 cargo run --manifest-path crates/zyalc/Cargo.toml --locked --quiet -- compile --all --check

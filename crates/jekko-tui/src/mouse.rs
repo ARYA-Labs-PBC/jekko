@@ -212,7 +212,9 @@ mod tests {
 
     #[test]
     fn wheel_lines_constants_are_sane() {
-        assert!(WHEEL_LINES_DEFAULT > 0);
-        assert!(WHEEL_LINES_SHIFTED > WHEEL_LINES_DEFAULT);
+        const {
+            assert!(WHEEL_LINES_DEFAULT > 0);
+            assert!(WHEEL_LINES_SHIFTED > WHEEL_LINES_DEFAULT);
+        }
     }
 }

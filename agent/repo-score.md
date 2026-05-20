@@ -7,9 +7,9 @@
 - Target stack ID: `rust-ratatui-docker`
 - Target stack: `Rust core + TypeScript/React/Vite + PostgreSQL + generated contracts + exception-only Python AI/data service`
 - Repo: `.`
-- Run ID: `1779292628`
-- Started at: `1779292628`
-- Elapsed: `3302` ms
+- Run ID: `1779306881`
+- Started at: `1779306881`
+- Elapsed: `3043` ms
 - Scope: `full`
 - Raw score: `93`
 - Final score: `93`
@@ -118,7 +118,7 @@
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 5 | `crates/jekko-provider/src/transform/variants/efforts.rs:65-66, crates/jekko-provider/src/transform/variants/efforts.rs:90-91` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 4 | `crates/qbank-builder/src/paper_tournament/provenance.rs:202-203, crates/qbank-builder/src/paper_tournament/summary.rs:114-115` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 1 | 4 | `crates/xtask/src/close_stale_prs.rs:225-226, crates/xtask/src/pr_compliance.rs:208-209` | `same-name semantic unit copied across multiple files` |
-| `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 4 | `crates/jekko-tui/src/engine/ansi.rs:131-132, crates/jekko-tui/src/engine/ansi.rs:155-156` | `same body appears under different names across files` |
+| `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 4 | `crates/jekko-tui/src/engine/ansi.rs:133-134, crates/jekko-tui/src/engine/ansi.rs:157-158` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 3 | `crates/jekko-tui/src/transcript/syntax/renderer.rs:189-190, crates/jekko-tui/src/transcript/syntax/renderer.rs:194-195` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 2 | `crates/jekko-tui/src/anim/glyphs.rs:11-12, crates/jekko-tui/src/anim/glyphs.rs:27-28` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 1 | 2 | `crates/memory-benchmark/src/types.rs:263-264, crates/memory-benchmark/src/types.rs:302-303` | `same-name semantic unit copied across multiple files` |
@@ -221,8 +221,8 @@ No audited runtime boundary reclassifications declared.
    Reason: `Code shape and semantic surface` scored 80 below the standard floor of 85
    Fix: split large or ambiguous authored code into smaller semantic modules with focused tests
    Rerun: `just fast`
-   Fingerprint: `sha256:e435cb301a95fde5f376b89c7dcff9441d7ca8ef19a1efc43b004e1e900444c9`
-   Evidence: largest authored code file: crates/jekko-tui/src/components/splash.rs (475 LOC), most code files stay under 300 LOC, copy-code advisory classes found: 45 (advisory only, no score impact), rust bad-behavior advisory signals: 1668
+   Fingerprint: `sha256:98a79f14e1646e3e7794487cdd33ced7a2432f6ee3f81da436f957db64172a66`
+   Evidence: largest authored code file: crates/jekko-tui/src/components/splash.rs (475 LOC), most code files stay under 300 LOC, copy-code advisory classes found: 45 (advisory only, no score impact), rust bad-behavior advisory signals: 1678
 2. `medium` `proof` `Justfile`
    Rule: `HLT-018-PERF-CONCURRENCY-DRIFT`
    Check: `HLT-018-PERF-CONCURRENCY-DRIFT:proof` `soft` confidence `0.76`

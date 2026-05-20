@@ -49,10 +49,7 @@ impl KeyBalancer {
         let mut weights = Vec::with_capacity(candidates.len());
         for cand in &candidates {
             let store = self.store_for(&cand.user_id);
-            let usage = match store.get(provider_id, model_id) {
-                Ok(value) => value,
-                Err(_) => KeyUsage::default(),
-            };
+            let usage = stored_usage(store.get(provider_id, model_id));
             let weight = score(&usage, now);
             weights.push(weight);
         }
@@ -68,10 +65,7 @@ impl KeyBalancer {
     /// Record a successful turn against `(provider, user, model)`.
     pub fn record_success(&mut self, provider_id: &str, user_id: &str, model_id: &str) {
         let store = self.store_for(user_id);
-        let mut usage = match store.get(provider_id, model_id) {
-            Ok(value) => value,
-            Err(_) => KeyUsage::default(),
-        };
+        let mut usage = stored_usage(store.get(provider_id, model_id));
         usage.attempts = usage.attempts.saturating_add(1);
         usage.status = KeyHealth::Ready;
         usage.cooldown_until = None;
@@ -87,10 +81,7 @@ impl KeyBalancer {
         kind: FailureKind,
     ) {
         let store = self.store_for(user_id);
-        let mut usage = match store.get(provider_id, model_id) {
-            Ok(value) => value,
-            Err(_) => KeyUsage::default(),
-        };
+        let mut usage = stored_usage(store.get(provider_id, model_id));
         let now = unix_now();
         usage.attempts = usage.attempts.saturating_add(1);
         usage.failures = usage.failures.saturating_add(1);
@@ -119,5 +110,19 @@ impl KeyBalancer {
             let dir = user_dir(&self.users_root, user_id);
             BalancerStore::new(dir.dir.join(STATE_DB_FILENAME))
         })
+    }
+}
+
+#[allow(clippy::manual_unwrap_or_default)]
+fn stored_usage(result: Result<KeyUsage>) -> KeyUsage {
+    match result {
+        Ok(value) => value,
+        Err(_) => KeyUsage {
+            attempts: 0,
+            failures: 0,
+            last_failure_at: None,
+            cooldown_until: None,
+            status: KeyHealth::Ready,
+        },
     }
 }

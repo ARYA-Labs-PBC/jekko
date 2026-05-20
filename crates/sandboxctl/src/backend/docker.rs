@@ -4,8 +4,8 @@
 //! Implementation calls the `docker`/`podman` CLI directly (no bollard
 //! dependency) so the crate stays light and works with either engine.
 
-use anyhow::{Context, Result};
 use crate::spec::{Lane, NetworkPolicy};
+use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
 

@@ -75,11 +75,11 @@ pub fn parse(input: &str) -> Vec<Span<'static>> {
 
 fn find_tag_close(input: &str, start: usize) -> Option<usize> {
     let bytes = input.as_bytes();
-    for j in start..bytes.len() {
-        if bytes[j] == b'}' {
+    for (j, byte) in bytes.iter().enumerate().skip(start) {
+        if *byte == b'}' {
             return Some(j);
         }
-        if bytes[j] == b'{' {
+        if *byte == b'{' {
             return None;
         }
     }

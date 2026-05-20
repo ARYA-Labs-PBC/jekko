@@ -224,13 +224,13 @@ mod tests {
     #[test]
     fn rotating_verb_with_thinking_verbs_cycles_seven() {
         let period = Duration::from_secs(4);
-        for i in 0..THINKING_VERBS.len() {
+        for (i, expected) in THINKING_VERBS.iter().enumerate() {
             let elapsed = Duration::from_secs((i as u64) * period.as_secs());
             assert_eq!(
                 rotating_verb(elapsed, THINKING_VERBS, period),
-                THINKING_VERBS[i],
+                *expected,
                 "bucket {i} should map to {:?}",
-                THINKING_VERBS[i]
+                expected
             );
         }
         let one_cycle = Duration::from_secs((THINKING_VERBS.len() as u64) * period.as_secs());

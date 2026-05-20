@@ -1,3 +1,5 @@
+#![allow(clippy::manual_unwrap_or)]
+
 mod cli;
 
 #[tokio::main]

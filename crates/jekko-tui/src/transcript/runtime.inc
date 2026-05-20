@@ -328,7 +328,7 @@ impl Transcript {
         for event in self.events.iter().rev() {
             if let TranscriptEvent::Tool { tool_id, .. } = event {
                 if let Some(buf) = self.tool_buffers.get(tool_id) {
-                    return Some(buf.all_lines().iter().cloned().collect());
+                    return Some(buf.all_lines().to_vec());
                 }
             }
         }

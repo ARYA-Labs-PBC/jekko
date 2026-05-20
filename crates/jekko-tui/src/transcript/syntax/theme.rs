@@ -15,15 +15,19 @@ fn syntax_theme(mode: ThemeMode) -> &'static Theme {
 
 fn build_theme(mode: ThemeMode) -> Theme {
     let pal = theme::palette(mode);
-    let mut theme = Theme::default();
-    theme.name = Some(match mode {
-        ThemeMode::Dark => "jekko-dark".to_string(),
-        ThemeMode::Light => "jekko-light".to_string(),
-    });
-    theme.author = Some("Jekko".to_string());
-    let mut settings = ThemeSettings::default();
-    settings.foreground = Some(syn_color(pal.text));
-    settings.background = None;
+    let mut theme = Theme {
+        name: Some(match mode {
+            ThemeMode::Dark => "jekko-dark".to_string(),
+            ThemeMode::Light => "jekko-light".to_string(),
+        }),
+        author: Some("Jekko".to_string()),
+        ..Default::default()
+    };
+    let settings = ThemeSettings {
+        foreground: Some(syn_color(pal.text)),
+        background: None,
+        ..Default::default()
+    };
     theme.settings = settings;
     theme.scopes = vec![
         theme_item(
@@ -73,6 +77,7 @@ fn build_theme(mode: ThemeMode) -> Theme {
 
 fn theme_item(scope: &str, fg: Color, font_style: Option<FontStyle>) -> ThemeItem {
     ThemeItem {
+        #[allow(clippy::manual_unwrap_or_default)]
         scope: match ScopeSelectors::from_str(scope) {
             Ok(selectors) => selectors,
             Err(_) => ScopeSelectors::default(),

@@ -22,10 +22,7 @@ pub enum Decision {
 }
 
 impl Matcher {
-    pub fn new(
-        allowed: &[String],
-        denied: &[String],
-    ) -> Result<Self, globset::Error> {
+    pub fn new(allowed: &[String], denied: &[String]) -> Result<Self, globset::Error> {
         let allowed_set = build_set(allowed)?;
         let denied_set = build_set(denied)?;
         Ok(Self {

@@ -31,7 +31,11 @@ pub fn run(args: &Args, default_lanes: Option<&Path>, json: bool) -> Result<i32>
     let lane = match doc.lanes.iter().find(|l| l.name == args.lane) {
         Some(l) => l.clone(),
         None => {
-            eprintln!("sandboxctl: lane '{}' not found in {}", args.lane, path.display());
+            eprintln!(
+                "sandboxctl: lane '{}' not found in {}",
+                args.lane,
+                path.display()
+            );
             return Ok(exit::LANE_NOT_FOUND);
         }
     };

@@ -33,9 +33,15 @@ pub fn run(args: &Args, json: bool) -> Result<i32> {
     resolved.destroy(&workspace, args.keep_logs || !args.force)?;
     index::remove(&sandbox_root, &args.run_id)?;
     if json {
-        println!("{}", serde_json::json!({"run_id": entry.run_id, "destroyed": true}));
+        println!(
+            "{}",
+            serde_json::json!({"run_id": entry.run_id, "destroyed": true})
+        );
     } else {
-        println!("sandboxctl: destroyed {} (logs kept: {})", entry.run_id, args.keep_logs);
+        println!(
+            "sandboxctl: destroyed {} (logs kept: {})",
+            entry.run_id, args.keep_logs
+        );
     }
     Ok(exit::OK)
 }

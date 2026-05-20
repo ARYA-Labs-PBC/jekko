@@ -17,6 +17,7 @@ fn footer_info_for(
     jnoccio_boot_label: Option<&str>,
 ) -> FooterInfo {
     let model = env_or("JEKKO_MODEL", "(default)");
+    #[allow(clippy::manual_unwrap_or_default)]
     let effort = match std::env::var("JEKKO_EFFORT") {
         Ok(effort) => effort,
         Err(_) => String::new(),
@@ -237,7 +238,7 @@ where
             let was_sticky = scroll.sticky_bottom();
             transcript.push_event(event);
             if was_sticky {
-                scroll.to_bottom();
+                scroll.scroll_to_bottom();
             } else {
                 scroll.clamp(transcript, width);
             }

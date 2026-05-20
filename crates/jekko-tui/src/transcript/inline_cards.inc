@@ -253,13 +253,12 @@ pub fn render_tool_call_live(
     } else {
         call
     };
-    let header = render_tool_call_with(
+    render_tool_call_with(
         effective_call,
         effective_call.status.bullet_at(elapsed, motion_enabled),
         Style::default().fg(verb_color).add_modifier(Modifier::BOLD),
         Some(elapsed_label(elapsed)),
-    );
-    header
+    )
 }
 
 fn render_tool_call_with(
@@ -613,12 +612,16 @@ fn syntect_assets() -> &'static SyntectAssets {
 /// by `transcript::syntax::build_theme` so diff highlighting matches fenced
 /// code blocks.
 fn build_diff_theme() -> Theme {
-    let mut theme = Theme::default();
-    theme.name = Some("jekko-diff-dark".to_string());
-    theme.author = Some("Jekko".to_string());
-    let mut settings = ThemeSettings::default();
-    settings.foreground = Some(syn_color(codex_fg()));
-    settings.background = None;
+    let mut theme = Theme {
+        name: Some("jekko-diff-dark".to_string()),
+        author: Some("Jekko".to_string()),
+        ..Default::default()
+    };
+    let settings = ThemeSettings {
+        foreground: Some(syn_color(codex_fg())),
+        background: None,
+        ..Default::default()
+    };
     theme.settings = settings;
     theme.scopes = vec![
         scope_item(
@@ -663,6 +666,7 @@ fn build_diff_theme() -> Theme {
 
 fn scope_item(scope: &str, fg: Color, font_style: Option<FontStyle>) -> ThemeItem {
     ThemeItem {
+        #[allow(clippy::manual_unwrap_or_default)]
         scope: match ScopeSelectors::from_str(scope) {
             Ok(selectors) => selectors,
             Err(_) => ScopeSelectors::default(),

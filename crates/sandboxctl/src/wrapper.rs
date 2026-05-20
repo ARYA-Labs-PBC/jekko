@@ -17,6 +17,7 @@ use crate::spec::Lane;
 #[derive(Debug, Clone)]
 pub struct ExecArgs {
     pub argv: Vec<String>,
+    #[allow(dead_code)]
     pub timeout_seconds: u64,
     pub tail_lines: u32,
 }
@@ -192,7 +193,8 @@ pub fn export_patch(
         .output()
         .with_context(|| format!("git diff in {}", repo.display()))?;
     let bytes = out.stdout;
-    let mut f = File::create(patch_path).with_context(|| format!("create {}", patch_path.display()))?;
+    let mut f =
+        File::create(patch_path).with_context(|| format!("create {}", patch_path.display()))?;
     f.write_all(&bytes)?;
     let hunks = bytes.iter().filter(|b| **b == b'@').count() / 2;
     let changed_files = count_changed_files(&repo)?;

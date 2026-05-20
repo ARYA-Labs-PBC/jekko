@@ -267,9 +267,11 @@ impl KeyPool {
 }
 
 fn read_env(path: &Path) -> BTreeMap<String, String> {
-    fs::read_to_string(path)
-        .map(|text| parse_env_lines(&text).into_iter().collect())
-        .unwrap_or_default()
+    #[allow(clippy::manual_unwrap_or_default)]
+    match fs::read_to_string(path) {
+        Ok(text) => parse_env_lines(&text).into_iter().collect(),
+        Err(_) => BTreeMap::new(),
+    }
 }
 
 #[cfg(test)]

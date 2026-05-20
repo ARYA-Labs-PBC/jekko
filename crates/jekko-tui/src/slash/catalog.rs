@@ -81,9 +81,7 @@ impl SlashCatalog {
     }
 
     pub fn submenu_for(&self, id: &str) -> Option<&'static SlashSubmenu> {
-        if self.find(id).is_none() {
-            return None;
-        }
+        self.find(id)?;
         SLASH_SUBMENUS
             .iter()
             .find(|submenu| submenu.parent_id == id)

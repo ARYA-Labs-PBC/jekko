@@ -38,6 +38,7 @@ struct DrawContext<'a> {
     motion_enabled: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw(
     terminal: &mut Tty,
     mode: RuntimeMode,

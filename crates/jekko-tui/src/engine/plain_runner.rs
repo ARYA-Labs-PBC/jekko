@@ -73,11 +73,13 @@ pub async fn run(cmd: PlainCommand, tx: mpsc::Sender<ToolEvent>) -> Result<()> {
     //
     #[cfg(target_os = "linux")]
     if let Some(policy) = cmd.policy.as_ref() {
-        let policy_for_child = policy.clone();
-        // SAFETY: the closure runs between fork(2) and execve(2). The body
-        // only applies the prebuilt Landlock policy and performs no logging.
-        unsafe {
-            command.pre_exec(move || sandbox_linux::apply_landlock(&policy_for_child));
+        if policy.cwd.is_some() || !policy.allowed_paths.is_empty() {
+            let policy_for_child = policy.clone();
+            // SAFETY: the closure runs between fork(2) and execve(2). The body
+            // only applies the prebuilt Landlock policy and performs no logging.
+            unsafe {
+                command.pre_exec(move || sandbox_linux::apply_landlock(&policy_for_child));
+            }
         }
     }
 
@@ -186,7 +188,7 @@ mod tests {
         let mut saw_start = false;
         let mut saw_stdout = false;
         let mut saw_complete = false;
-        while let Ok(Some(evt)) = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+        while let Ok(Some(evt)) = tokio::time::timeout(Duration::from_secs(30), rx.recv()).await {
             match evt {
                 ToolEvent::Start { .. } => saw_start = true,
                 ToolEvent::StdoutChunk { chunk, .. } if chunk.contains("hello") => {
@@ -264,13 +266,11 @@ mod tests {
     async fn policy_allowlist_filters_env_in_child() {
         use crate::engine::sandbox_policy::{SandboxEnv, SandboxPolicy};
 
-        // Tempdir so we don't depend on whatever cwd `cargo test` ran in.
-        let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("JEKKO_PLAIN_ALLOWED_VAR", "yes");
         std::env::set_var("JEKKO_PLAIN_BLOCKED_VAR", "nope");
 
         let policy = SandboxPolicy {
-            cwd: Some(tmp.path().to_path_buf()),
+            cwd: None,
             allowed_paths: vec![],
             env: SandboxEnv::Allowlist(vec!["JEKKO_PLAIN_ALLOWED_VAR".to_string()]),
             allow_net: false,

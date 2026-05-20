@@ -92,6 +92,11 @@ impl ActivityTracker {
         self.active.len()
     }
 
+    /// True when no operations are active.
+    pub fn is_empty(&self) -> bool {
+        self.active.is_empty()
+    }
+
     /// Best-effort primary kind for the prompt sweep.
     pub fn primary_kind(&self) -> Option<ActivityKind> {
         self.active.last().map(|op| op.kind)
