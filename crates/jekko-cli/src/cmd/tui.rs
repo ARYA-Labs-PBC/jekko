@@ -64,6 +64,9 @@ fn spawn_jnoccio_boot_bridge() -> Option<std::sync::mpsc::Receiver<JnoccioBootSt
     if std::env::var("JEKKO_DISABLE_JNOCCIO_BOOT").as_deref() == Ok("1") {
         return None;
     }
+    if !jekko_jnoccio_boot::unlock::is_unlocked() {
+        return None;
+    }
 
     let (boot_tx, boot_rx) = std::sync::mpsc::channel::<jekko_jnoccio_boot::BootEvent>();
     let (tui_tx, tui_rx) = std::sync::mpsc::channel::<JnoccioBootStatus>();
@@ -106,4 +109,63 @@ fn spawn_jnoccio_boot_bridge() -> Option<std::sync::mpsc::Receiver<JnoccioBootSt
         .ok();
 
     Some(tui_rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        prev_home: Option<std::ffi::OsString>,
+        prev_dev: Option<std::ffi::OsString>,
+        prev_disable: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn locked(home: &std::path::Path) -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let prev_home = std::env::var_os("HOME");
+            let prev_dev = std::env::var_os("JNOCCIO_DEVELOPER_KEY");
+            let prev_disable = std::env::var_os("JEKKO_DISABLE_JNOCCIO_BOOT");
+            std::env::set_var("HOME", home);
+            std::env::remove_var("JNOCCIO_DEVELOPER_KEY");
+            std::env::remove_var("JEKKO_DISABLE_JNOCCIO_BOOT");
+            Self {
+                prev_home,
+                prev_dev,
+                prev_disable,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.prev_dev {
+                Some(v) => std::env::set_var("JNOCCIO_DEVELOPER_KEY", v),
+                None => std::env::remove_var("JNOCCIO_DEVELOPER_KEY"),
+            }
+            match &self.prev_disable {
+                Some(v) => std::env::set_var("JEKKO_DISABLE_JNOCCIO_BOOT", v),
+                None => std::env::remove_var("JEKKO_DISABLE_JNOCCIO_BOOT"),
+            }
+        }
+    }
+
+    #[test]
+    fn jnoccio_boot_bridge_stays_disabled_when_locked() {
+        let home = TempDir::new().unwrap();
+        let _guard = EnvGuard::locked(home.path());
+
+        assert!(spawn_jnoccio_boot_bridge().is_none());
+    }
 }

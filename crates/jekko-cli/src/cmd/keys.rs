@@ -2,7 +2,7 @@
 //!
 //! Keys live in `~/.jekko/users/<user_id>/llm.env`. The default user dir is
 //! `user`, used by every install. Additional dirs (`user_1`, `user_2`, ...)
-//! only unlock when jnoccio is unlocked
+//! only unlock when the Jnoccio developer unlock is present
 //! ([`jekko_jnoccio_boot::unlock::is_unlocked`]). When more than one user
 //! dir is present, the runtime load-balances across the cross-product of
 //! `(provider, user, model)` via [`jekko_provider::key_pool::KeyPool`] +
@@ -32,7 +32,7 @@ use crate::cli::GlobalOpts;
 #[derive(Args, Debug)]
 pub struct KeysArgs {
     /// User dir under `~/.jekko/users/<user>/`. Defaults to `user`. Extra
-    /// user dirs require jnoccio unlock.
+    /// user dirs require the Jnoccio developer unlock.
     #[arg(long, global = true, default_value = DEFAULT_USER_ID)]
     pub user: String,
 
@@ -109,14 +109,14 @@ fn keys_path(user_id: &str) -> Result<PathBuf> {
     Ok(user_dir(&root, user_id).llm_env_path)
 }
 
-/// Reject non-default user ids unless jnoccio is unlocked. `unlocked` is
+/// Reject non-default user ids unless Jnoccio developer unlock is present. `unlocked` is
 /// injected by callers so tests can drive both paths deterministically.
 fn enforce_user_gate(user_id: &str, unlocked: bool) -> Result<()> {
     if user_id == DEFAULT_USER_ID || unlocked {
         return Ok(());
     }
     Err(anyhow!(
-        "creating extra users requires jnoccio unlock; got user `{user_id}`"
+        "creating extra users requires JNOCCIO_DEVELOPER_KEY developer unlock; got user `{user_id}`"
     ))
 }
 
@@ -326,7 +326,7 @@ fn users(args: &KeysUsersArgs) -> Result<()> {
         );
     }
     if !unlocked {
-        println!("(unlock jnoccio to enable multi-user balancing)");
+        println!("(set JNOCCIO_DEVELOPER_KEY to enable multi-user balancing)");
     }
     Ok(())
 }
@@ -406,7 +406,7 @@ mod tests {
     fn enforce_user_gate_blocks_non_default_when_locked() {
         assert!(enforce_user_gate("user", false).is_ok());
         let err = enforce_user_gate("user_1", false).unwrap_err().to_string();
-        assert!(err.contains("requires jnoccio unlock"));
+        assert!(err.contains("requires JNOCCIO_DEVELOPER_KEY developer unlock"));
     }
 
     #[test]

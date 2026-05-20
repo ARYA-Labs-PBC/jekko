@@ -289,6 +289,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_env(tmp.path(), "user", "OPENAI_API_KEY=k0\n");
         write_env(tmp.path(), "user_1", "OPENAI_API_KEY=k1\n");
+        write_env(tmp.path(), "user_2", "OPENAI_API_KEY=k2\n");
         let dirs = discover_in(tmp.path(), false);
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].user_id, "user");

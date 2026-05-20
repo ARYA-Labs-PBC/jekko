@@ -31,10 +31,7 @@ pub(super) fn select_provider_id(request: &AgentTurnRequest) -> RuntimeResult<St
         return Ok(provider);
     }
     let snapshot = env_snapshot();
-    let developer_unlocked = snapshot
-        .get("JNOCCIO_DEVELOPER_KEY")
-        .and_then(|v| v.value.as_ref())
-        .is_some_and(|v| !v.trim().is_empty());
+    let developer_unlocked = jekko_jnoccio_boot::unlock::is_unlocked();
     let selection = choose_active_provider(&snapshot, developer_unlocked);
     match selection.active_provider_id {
         Some(id) => Ok(id),
@@ -102,6 +99,14 @@ pub(super) fn select_credential(
                     user_id: None,
                 }));
             }
+        }
+    }
+    if provider_id == "jnoccio" {
+        if let Some(value) = jekko_jnoccio_boot::unlock::developer_key() {
+            return Ok(Some(SelectedCredential {
+                credential: ProviderCredential::ApiKey { key: value },
+                user_id: None,
+            }));
         }
     }
     Ok(None)
@@ -266,5 +271,94 @@ fn env_snapshot() -> BTreeMap<String, EnvValue> {
             }
         }
     }
+    if values
+        .get("JNOCCIO_DEVELOPER_KEY")
+        .and_then(|v| v.value.as_ref())
+        .is_none()
+    {
+        if let Some(value) = jekko_jnoccio_boot::unlock::developer_key() {
+            values.insert(
+                "JNOCCIO_DEVELOPER_KEY".to_string(),
+                EnvValue {
+                    value: Some(value),
+                    source: None,
+                },
+            );
+        }
+    }
     values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        prev_home: Option<std::ffi::OsString>,
+        prev_dev: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn install(home: &std::path::Path, dev_key: Option<&str>) -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let prev_home = std::env::var_os("HOME");
+            let prev_dev = std::env::var_os("JNOCCIO_DEVELOPER_KEY");
+            std::env::set_var("HOME", home);
+            match dev_key {
+                Some(v) => std::env::set_var("JNOCCIO_DEVELOPER_KEY", v),
+                None => std::env::remove_var("JNOCCIO_DEVELOPER_KEY"),
+            }
+            Self {
+                prev_home,
+                prev_dev,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.prev_dev {
+                Some(v) => std::env::set_var("JNOCCIO_DEVELOPER_KEY", v),
+                None => std::env::remove_var("JNOCCIO_DEVELOPER_KEY"),
+            }
+        }
+    }
+
+    #[test]
+    fn provider_selection_skips_jnoccio_without_developer_unlock() {
+        let home = TempDir::new().unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+
+        let snapshot = env_snapshot();
+        let selection =
+            choose_active_provider(&snapshot, jekko_jnoccio_boot::unlock::is_unlocked());
+        assert_ne!(selection.active_provider_id.as_deref(), Some("jnoccio"));
+    }
+
+    #[test]
+    fn provider_selection_accepts_developer_key_from_home_env_file() {
+        let home = TempDir::new().unwrap();
+        fs::write(
+            home.path().join(".env.jnoccio"),
+            "JNOCCIO_DEVELOPER_KEY=file-secret\n",
+        )
+        .unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+
+        let snapshot = env_snapshot();
+        let selection =
+            choose_active_provider(&snapshot, jekko_jnoccio_boot::unlock::is_unlocked());
+        assert_eq!(selection.active_provider_id.as_deref(), Some("jnoccio"));
+    }
 }

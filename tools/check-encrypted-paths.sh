@@ -64,6 +64,14 @@ EXCEPTIONS=(
   "jnoccio-fusion/CHANGELOG.md"
 )
 
+REQUIRED_PROTECTED_FILES=(
+  "jnoccio-fusion/Cargo.toml"
+  "jnoccio-fusion/config/server.json"
+  "jnoccio-fusion/config/models.json"
+  "jnoccio-fusion/src/router.rs"
+  "jnoccio-fusion/src/routing.rs"
+)
+
 is_exception() {
   local path="$1"
   for exc in "${EXCEPTIONS[@]}"; do
@@ -96,6 +104,50 @@ blob_hex() {
 blob_exists() {
   local spec="$1"
   git cat-file -e "$spec" 2>/dev/null
+}
+
+tracked_in_index() {
+  local file="$1"
+  git ls-files --error-unmatch "$file" >/dev/null 2>&1
+}
+
+verify_required_protected_files() {
+  local file
+  for file in "${REQUIRED_PROTECTED_FILES[@]}"; do
+    case "$MODE" in
+      worktree)
+        if ! tracked_in_index "$file"; then
+          if [[ -e "$file" ]]; then
+            echo "❌ REQUIRED PROTECTED FILE IS UNTRACKED: $file" >&2
+          else
+            echo "❌ REQUIRED PROTECTED FILE IS MISSING: $file" >&2
+          fi
+          ERRORS=$((ERRORS + 1))
+          continue
+        fi
+        if [[ ! -f "$file" ]]; then
+          echo "❌ REQUIRED PROTECTED FILE IS MISSING FROM WORKTREE: $file" >&2
+          ERRORS=$((ERRORS + 1))
+        fi
+        ;;
+      index)
+        if ! blob_exists ":$file"; then
+          if [[ -e "$file" ]] && ! tracked_in_index "$file"; then
+            echo "❌ REQUIRED PROTECTED FILE IS UNTRACKED: $file" >&2
+          else
+            echo "❌ REQUIRED PROTECTED FILE IS MISSING FROM INDEX: $file" >&2
+          fi
+          ERRORS=$((ERRORS + 1))
+        fi
+        ;;
+      head)
+        if ! blob_exists "HEAD:$file"; then
+          echo "❌ REQUIRED PROTECTED FILE IS MISSING FROM HEAD: $file" >&2
+          ERRORS=$((ERRORS + 1))
+        fi
+        ;;
+    esac
+  done
 }
 
 verify_env_not_tracked() {
@@ -132,6 +184,7 @@ ERRORS=0
 CHECKED=0
 verify_worktree_not_unlocked_unless_forced
 verify_env_not_tracked
+verify_required_protected_files
 
 # Check every tracked protected file under jnoccio-fusion/
 while IFS= read -r file; do
