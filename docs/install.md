@@ -2,7 +2,8 @@
 
 Jekko ships as a Rust binary. Pick the install path that matches your
 environment. Pre-built binary distribution and the Nix flake are still being
-finalized as part of the Rust port; see the TBD notes below.
+finalized as part of the Rust port; source install is the canonical path for
+`v2.0.0`.
 
 ## Build from source
 
@@ -11,7 +12,7 @@ toolchain (see the workspace `rust-toolchain.toml` if pinned) and a working
 C toolchain for native crates.
 
 ```sh
-git clone https://github.com/<org>/jekko
+git clone https://github.com/neverhuman/jekko
 cd jekko
 cargo build -p jekko-cli --release --locked
 ```
@@ -26,17 +27,15 @@ target/release/jekko --help
 Drop it onto your `PATH` (for example into `~/.local/bin`) or invoke it
 directly.
 
-## cargo install (TBD)
+## cargo install
 
-Once tagged Rust releases are published, `cargo install` will pull the
-binary directly from the repo:
+Tagged Rust releases can be installed directly from the repo:
 
 ```sh
-cargo install --git https://github.com/<org>/jekko --tag <release>
+cargo install --git https://github.com/neverhuman/jekko --tag v2.0.0
 ```
 
-The exact tag scheme tracks the release flow in `docs/release.md`. This
-path is **TBD** until the first Rust-tagged release ships.
+The exact tag scheme tracks the release flow in `docs/release.md`.
 
 ## Nix flake (TBD)
 
@@ -44,7 +43,7 @@ A flake is checked in under `nix/`, but it is still being migrated to the
 Rust-only target. Once migrated:
 
 ```sh
-nix profile install github:<org>/jekko#jekko
+nix profile install github:neverhuman/jekko#jekko
 ```
 
 For now, prefer the build-from-source path until the flake migration
@@ -53,7 +52,8 @@ completes. Track progress in the Rust port plan.
 ## Pre-built binaries (TBD)
 
 Per-platform tarballs and zips are intended to be attached to each GitHub
-Release. Until the first Rust release ships, this path is **TBD**.
+Release. For `v2.0.0`, use the source or `cargo install --git` path unless
+the GitHub Release includes a matching archive for your platform.
 
 The expected layout is one archive per supported `(os, arch)` target with
 `jekko` (or `jekko.exe`) inside, plus checksums.

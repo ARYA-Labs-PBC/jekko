@@ -12,6 +12,7 @@
 //! No persistence happens in this module — JSONL load/save lives in the host
 //! crate.
 
+pub mod file_index;
 pub mod frecency;
 pub mod history;
 pub mod mentions;
@@ -28,4 +29,4 @@ pub use paste::{PasteBuffer, PasteRecord, PASTE_BYTE_THRESHOLD, PASTE_LINE_THRES
 pub use slash::{builtin_commands, SlashCommand, SlashPopup};
 pub use stash::{PromptStash, RouteKey};
 pub use unicode::{display_width, grapheme_count, grapheme_offsets, truncate_to_width};
-pub use widget::{Prompt, PromptOutcome, PromptSnapshot};
+pub use widget::{Prompt, PromptOutcome, PromptSnapshot, PROMPT_GLYPH, PROMPT_PREFIX_WIDTH};

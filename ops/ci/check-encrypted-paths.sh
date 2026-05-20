@@ -5,4 +5,4 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 chmod +x tools/check-encrypted-paths.sh
-./tools/check-encrypted-paths.sh
+bash tools/check-encrypted-paths.sh --head

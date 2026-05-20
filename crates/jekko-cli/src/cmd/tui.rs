@@ -6,7 +6,9 @@
 
 use anyhow::Result;
 use clap::Args;
-use jekko_tui::{action::JnoccioBootStatus, TuiOptions};
+use jekko_tui::action::JnoccioBootStatus;
+use jekko_tui::chat_bridge_backend::{ChatBridgeBackend, ChatBridgeConfig};
+use jekko_tui::inline_runtime::{run_inline, InlineRuntimeOptions};
 
 use crate::cli::GlobalOpts;
 
@@ -32,17 +34,21 @@ pub fn run(global: &GlobalOpts, args: &TuiArgs) -> Result<()> {
         eprintln!("note: --continue not yet wired through TuiOptions");
     }
 
-    let opts = TuiOptions {
-        pure: global.pure,
-        headless: global.headless,
-    };
-
     // Spawn the Jnoccio boot thread unless explicitly disabled (PTY tests,
     // CI, or environments without jnoccio-fusion configured).
     let jnoccio_rx = spawn_jnoccio_boot_bridge();
 
-    jekko_tui::run_with_jnoccio(opts, None, jnoccio_rx)?;
-    Ok(())
+    let opts = InlineRuntimeOptions {
+        no_alt_screen: global.headless,
+        jnoccio_boot_status: if jnoccio_rx.is_some() {
+            JnoccioBootStatus::Checking
+        } else {
+            JnoccioBootStatus::Disabled
+        },
+        jnoccio_boot_rx: jnoccio_rx,
+        ..InlineRuntimeOptions::default()
+    };
+    run_inline(ChatBridgeBackend::new(ChatBridgeConfig::default()), opts)
 }
 
 /// Spawn the Jnoccio boot thread and return a channel receiver that delivers
@@ -56,6 +62,9 @@ pub fn run(global: &GlobalOpts, args: &TuiArgs) -> Result<()> {
 /// distinguish "no channel" from "channel active but server unavailable".
 fn spawn_jnoccio_boot_bridge() -> Option<std::sync::mpsc::Receiver<JnoccioBootStatus>> {
     if std::env::var("JEKKO_DISABLE_JNOCCIO_BOOT").as_deref() == Ok("1") {
+        return None;
+    }
+    if !jekko_jnoccio_boot::unlock::is_unlocked() {
         return None;
     }
 
@@ -86,7 +95,7 @@ fn spawn_jnoccio_boot_bridge() -> Option<std::sync::mpsc::Receiver<JnoccioBootSt
                                 enabled_models,
                                 total_models,
                             },
-                            BootStatus::Unavailable => JnoccioBootStatus::Unavailable,
+                            BootStatus::Unavailable => JnoccioBootStatus::NotInstalled,
                             BootStatus::Failed => JnoccioBootStatus::Failed,
                         };
                         if tui_tx.send(tui_status).is_err() {
@@ -100,4 +109,63 @@ fn spawn_jnoccio_boot_bridge() -> Option<std::sync::mpsc::Receiver<JnoccioBootSt
         .ok();
 
     Some(tui_rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        prev_home: Option<std::ffi::OsString>,
+        prev_dev: Option<std::ffi::OsString>,
+        prev_disable: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn locked(home: &std::path::Path) -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let prev_home = std::env::var_os("HOME");
+            let prev_dev = std::env::var_os("JNOCCIO_DEVELOPER_KEY");
+            let prev_disable = std::env::var_os("JEKKO_DISABLE_JNOCCIO_BOOT");
+            std::env::set_var("HOME", home);
+            std::env::remove_var("JNOCCIO_DEVELOPER_KEY");
+            std::env::remove_var("JEKKO_DISABLE_JNOCCIO_BOOT");
+            Self {
+                prev_home,
+                prev_dev,
+                prev_disable,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.prev_dev {
+                Some(v) => std::env::set_var("JNOCCIO_DEVELOPER_KEY", v),
+                None => std::env::remove_var("JNOCCIO_DEVELOPER_KEY"),
+            }
+            match &self.prev_disable {
+                Some(v) => std::env::set_var("JEKKO_DISABLE_JNOCCIO_BOOT", v),
+                None => std::env::remove_var("JEKKO_DISABLE_JNOCCIO_BOOT"),
+            }
+        }
+    }
+
+    #[test]
+    fn jnoccio_boot_bridge_stays_disabled_when_locked() {
+        let home = TempDir::new().unwrap();
+        let _guard = EnvGuard::locked(home.path());
+
+        assert!(spawn_jnoccio_boot_bridge().is_none());
+    }
 }

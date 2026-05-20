@@ -58,7 +58,11 @@ mod tests {
     #[test]
     fn shape_is_stable() {
         let id = generate();
-        assert_eq!(id.len(), 16 + 1 + 8, "expected YYYYMMDDTHHMMSSZ-XXXXXXXX, got {id}");
+        assert_eq!(
+            id.len(),
+            16 + 1 + 8,
+            "expected YYYYMMDDTHHMMSSZ-XXXXXXXX, got {id}"
+        );
         assert!(id.contains('T'));
         assert!(id.contains('-'));
     }

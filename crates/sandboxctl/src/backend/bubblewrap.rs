@@ -98,7 +98,7 @@ impl BackendImpl for BubblewrapBackend {
         }
         cmd.args(["--setenv", "LANG", "C.UTF-8"]);
         for key in &lane.commands.allowed_env {
-            if let Some(v) = std::env::var(key).ok() {
+            if let Ok(v) = std::env::var(key) {
                 cmd.args(["--setenv", key, &v]);
             }
         }

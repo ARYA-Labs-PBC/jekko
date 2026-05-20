@@ -6,47 +6,69 @@
 //! # Unlock hierarchy (left-to-right, fast exit)
 //!
 //! 1. `JNOCCIO_DEVELOPER_KEY` env var is set and non-empty → unlocked.
-//! 2. `~/.env.jnoccio` file exists → unlocked (dev machine convention).
-//! 3. `<repo>/jnoccio-fusion/Cargo.toml` contains the expected `name = "jnoccio-fusion"` and
-//!    `<repo>/jnoccio-fusion/config/server.json` has the provider/model fields in plaintext →
-//!    unlocked (git-crypt was run, the encrypted subtree is now readable).
+//! 2. `~/.env.jnoccio` contains a non-empty `JNOCCIO_DEVELOPER_KEY=...` → unlocked.
+//!
+//! Plaintext `jnoccio-fusion/` files remain a diagnostic/configuration signal,
+//! but plaintext alone never unlocks developer-only runtime paths.
 //!
 //! Note: checks are read-only and cheap. No crypto is performed here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Returns `true` if any unlock signal is present, meaning the current machine
-/// has developer access to run a local Jnoccio Fusion server.
+/// Returns `true` if the developer unlock signal is present, meaning the
+/// current machine has explicit access to run local Jnoccio Fusion paths.
 pub fn is_unlocked() -> bool {
-    // Fast path 1: explicit env var
-    #[allow(clippy::manual_unwrap_or_default)]
-    let dev_key = match std::env::var("JNOCCIO_DEVELOPER_KEY") {
-        Ok(value) => value,
-        Err(_) => String::new(),
-    };
-    if !dev_key.trim().is_empty() {
-        tracing::debug!("jnoccio unlocked via JNOCCIO_DEVELOPER_KEY env var");
-        return true;
-    }
+    developer_key().is_some()
+}
 
-    // Fast path 2: ~/.env.jnoccio file exists
-    if let Some(home) = home_dir() {
-        let env_file = home.join(".env.jnoccio");
-        if env_file.exists() {
-            tracing::debug!("jnoccio unlocked via ~/.env.jnoccio");
-            return true;
+/// Returns the developer key when it is present in process env or
+/// `~/.env.jnoccio`. This is intentionally the only unlock source.
+pub fn developer_key() -> Option<String> {
+    if let Ok(value) = std::env::var("JNOCCIO_DEVELOPER_KEY") {
+        if !value.trim().is_empty() {
+            tracing::debug!("jnoccio unlocked via JNOCCIO_DEVELOPER_KEY env var");
+            return Some(value);
         }
     }
 
-    // Slower: walk for a jnoccio-fusion/ subtree with plaintext signals
+    let home = home_dir()?;
+    let env_file = home.join(".env.jnoccio");
+    let text = fs::read_to_string(&env_file).ok()?;
+    let key = developer_key_from_env_text(&text)?;
+    tracing::debug!("jnoccio unlocked via {}", env_file.display());
+    Some(key)
+}
+
+fn developer_key_from_env_text(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return None;
+        }
+        let trimmed = trimmed.strip_prefix("export ").unwrap_or(trimmed).trim();
+        let (name, value) = trimmed.split_once('=')?;
+        if name.trim() != "JNOCCIO_DEVELOPER_KEY" {
+            return None;
+        }
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value)
+            .trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+/// Returns `true` if the encrypted subtree is readable as plaintext. This is
+/// useful for diagnostics and setup status, but it does not unlock runtime
+/// developer behavior.
+pub fn has_plaintext_checkout() -> bool {
     if let Some(root) = find_repo_root() {
-        if has_plaintext_signals(&root) {
-            tracing::debug!("jnoccio unlocked via plaintext signals at {:?}", root);
-            return true;
-        }
+        return has_plaintext_signals(&root);
     }
-
     false
 }
 
@@ -127,7 +149,7 @@ pub fn jnoccio_env_path(repo_root: &Path) -> PathBuf {
     repo_root.join("jnoccio-fusion").join(".env.jnoccio")
 }
 
-/// Returns `true` if the repo is unlocked AND the `.env.jnoccio` file exists
+/// Returns `true` if the repo is readable AND the `.env.jnoccio` file exists
 /// (meaning `jekko jnoccio unlock` was previously completed successfully).
 pub fn is_configured(repo_root: &Path) -> bool {
     has_plaintext_signals(repo_root) && jnoccio_env_path(repo_root).exists()
@@ -144,7 +166,54 @@ fn home_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        prev_home: Option<std::ffi::OsString>,
+        prev_dev: Option<std::ffi::OsString>,
+        prev_cwd: PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn install(home: &Path, cwd: Option<&Path>, dev_key: Option<&str>) -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let prev_home = std::env::var_os("HOME");
+            let prev_dev = std::env::var_os("JNOCCIO_DEVELOPER_KEY");
+            let prev_cwd = std::env::current_dir().unwrap();
+            std::env::set_var("HOME", home);
+            match dev_key {
+                Some(v) => std::env::set_var("JNOCCIO_DEVELOPER_KEY", v),
+                None => std::env::remove_var("JNOCCIO_DEVELOPER_KEY"),
+            }
+            if let Some(cwd) = cwd {
+                std::env::set_current_dir(cwd).unwrap();
+            }
+            Self {
+                prev_home,
+                prev_dev,
+                prev_cwd,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.prev_cwd).unwrap();
+            match &self.prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.prev_dev {
+                Some(v) => std::env::set_var("JNOCCIO_DEVELOPER_KEY", v),
+                None => std::env::remove_var("JNOCCIO_DEVELOPER_KEY"),
+            }
+        }
+    }
 
     fn make_plaintext_signals(root: &Path) {
         let fusion = root.join("jnoccio-fusion");
@@ -156,13 +225,12 @@ mod tests {
         .unwrap();
         fs::write(
             fusion.join("config").join("server.json"),
-            r#"{"provider":"jnoccio","model":"jnoccio/jnoccio-fusion"}"#,
+            r#"{"provider":"jnoccio","model":"jnoccio-fusion"}"#,
         )
         .unwrap();
     }
 
     #[test]
-    #[ignore = "Pre-existing test-data drift in make_plaintext_signals fixture (model-id format mismatch with has_plaintext_signals contains-check); not caused by current work"]
     fn detects_plaintext_signals() {
         let tmp = TempDir::new().unwrap();
         make_plaintext_signals(tmp.path());
@@ -180,7 +248,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Pre-existing test-data drift in make_plaintext_signals fixture (model-id format mismatch); same root cause as detects_plaintext_signals"]
     fn is_configured_requires_env_file() {
         let tmp = TempDir::new().unwrap();
         make_plaintext_signals(tmp.path());
@@ -194,5 +261,48 @@ mod tests {
         )
         .unwrap();
         assert!(is_configured(tmp.path()));
+    }
+
+    #[test]
+    fn is_unlocked_requires_developer_key_even_with_plaintext_signals() {
+        let home = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        make_plaintext_signals(repo.path());
+        let _guard = EnvGuard::install(home.path(), Some(repo.path()), None);
+
+        assert!(has_plaintext_checkout());
+        assert!(!is_unlocked());
+    }
+
+    #[test]
+    fn env_file_existence_alone_does_not_unlock() {
+        let home = TempDir::new().unwrap();
+        fs::write(home.path().join(".env.jnoccio"), "# local jnoccio file\n").unwrap();
+        let _guard = EnvGuard::install(home.path(), None, None);
+
+        assert!(!is_unlocked());
+    }
+
+    #[test]
+    fn env_file_with_developer_key_unlocks() {
+        let home = TempDir::new().unwrap();
+        fs::write(
+            home.path().join(".env.jnoccio"),
+            "JNOCCIO_DEVELOPER_KEY=file-secret\n",
+        )
+        .unwrap();
+        let _guard = EnvGuard::install(home.path(), None, None);
+
+        assert_eq!(developer_key().as_deref(), Some("file-secret"));
+        assert!(is_unlocked());
+    }
+
+    #[test]
+    fn process_env_developer_key_unlocks() {
+        let home = TempDir::new().unwrap();
+        let _guard = EnvGuard::install(home.path(), None, Some("process-secret"));
+
+        assert_eq!(developer_key().as_deref(), Some("process-secret"));
+        assert!(is_unlocked());
     }
 }

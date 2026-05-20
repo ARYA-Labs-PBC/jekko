@@ -61,8 +61,8 @@ impl BackendImpl for WorktreeBackend {
         fs::create_dir_all(repo.join(".agent/runs")).ok();
         // Write a marker file the destroy path uses to recognise the worktree.
         let marker = workspace.root.join(".sandbox-meta");
-        let mut f = File::create(&marker)
-            .with_context(|| format!("create {}", marker.display()))?;
+        let mut f =
+            File::create(&marker).with_context(|| format!("create {}", marker.display()))?;
         writeln!(f, "run_id={}", workspace.run_id)?;
         writeln!(f, "backend=worktree")?;
         writeln!(f, "source={}", source.display())?;
@@ -119,9 +119,7 @@ impl BackendImpl for WorktreeBackend {
             fs::remove_dir_all(&workspace.root).ok();
         }
         // `git worktree prune` reconciles abandoned registry entries.
-        let _ = Command::new("git")
-            .args(["worktree", "prune"])
-            .status();
+        let _ = Command::new("git").args(["worktree", "prune"]).status();
         Ok(())
     }
 }
@@ -139,7 +137,11 @@ fn resolve_source_root(root: &std::path::Path) -> Result<std::path::PathBuf> {
 fn curated_env(lane: &Lane, workspace: &Workspace) -> Vec<(OsString, OsString)> {
     let home = expand_path(&lane.environment.home, &workspace.run_id, &workspace.root);
     let tmp = expand_path(&lane.environment.tmpdir, &workspace.run_id, &workspace.root);
-    let cache = expand_path(&lane.environment.cache_home, &workspace.run_id, &workspace.root);
+    let cache = expand_path(
+        &lane.environment.cache_home,
+        &workspace.run_id,
+        &workspace.root,
+    );
     fs::create_dir_all(&home).ok();
     fs::create_dir_all(&tmp).ok();
     fs::create_dir_all(&cache).ok();

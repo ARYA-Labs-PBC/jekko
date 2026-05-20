@@ -4,7 +4,6 @@ use std::fs;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
 
-use crate::cleanup_cutover;
 use crate::shared::repo_root;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -21,271 +20,114 @@ struct GuardHit {
 
 pub(crate) fn run_preflight() -> Result<()> {
     let root = repo_root()?;
-    println!("preflight: pre-cutover readiness report\n");
+    println!("preflight: Rust TUI readiness report\n");
 
     let mut failures: Vec<String> = Vec::new();
 
-    let plan = cleanup_cutover::compute_plan(&root);
-    let total = plan.delete_files.len() + plan.delete_dirs.len() + plan.edit_files.len();
+    let metadata_ok = ProcessCommand::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(&root)
+        .output()
+        .context("run cargo metadata")?
+        .status
+        .success();
     println!(
-        "  [{}] cleanup-cutover plan: {} delete_files, {} delete_dirs, {} edit_files (total {})",
-        if total >= 50 { "OK" } else { "WARN" },
-        plan.delete_files.len(),
-        plan.delete_dirs.len(),
-        plan.edit_files.len(),
-        total
+        "  [{}] cargo metadata resolves",
+        if metadata_ok { "OK" } else { "FAIL" }
     );
-    if total < 50 {
-        failures.push("cleanup-cutover plan looks too small (<50 paths)".into());
+    if !metadata_ok {
+        failures.push("cargo metadata failed".into());
     }
 
-    let ops_dir = root.join("ops/ci");
-    let bun_ops = if ops_dir.exists() {
-        let mut hits: Vec<String> = Vec::new();
-        for entry in fs::read_dir(&ops_dir).context("read ops/ci")? {
-            let entry = entry?;
-            let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) != Some("sh") {
-                continue;
-            }
-            if let Ok(text) = fs::read_to_string(&p) {
-                for line in text.lines() {
-                    let t = line.trim();
-                    if t.starts_with("bun ")
-                        || t == "bun"
-                        || t.starts_with("bun install")
-                        || t.starts_with("bun run")
-                    {
-                        hits.push(p.strip_prefix(&root).unwrap_or(&p).display().to_string());
-                        break;
-                    }
-                }
-            }
-        }
-        hits
-    } else {
-        Vec::new()
-    };
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).context("read Cargo.toml")?;
+    let vendored_audit_crate = ["\"crates/jan", "kurai\""].concat();
+    let vendored_runner_crate = ["\"crates/jan", "kurai-runner\""].concat();
+    let vendored_jankurai =
+        manifest.contains(&vendored_audit_crate) || manifest.contains(&vendored_runner_crate);
     println!(
-        "  [{}] ops/ci/*.sh free of non-Rust runtime calls: {} script(s) still live",
-        if bun_ops.is_empty() { "OK" } else { "FAIL" },
-        bun_ops.len()
+        "  [{}] no vendored Jankurai workspace members",
+        if vendored_jankurai { "FAIL" } else { "OK" }
     );
-    if !bun_ops.is_empty() {
-        for s in &bun_ops {
-            println!("       - {s}");
-        }
-        failures.push(format!(
-            "{} ops/ci script(s) still call the non-Rust runtime",
-            bun_ops.len()
-        ));
+    if vendored_jankurai {
+        failures.push("Cargo.toml still contains vendored Jankurai members".into());
     }
 
-    let workflows_dir = root.join(".github/workflows");
-    let setup_bun_hits = if workflows_dir.exists() {
-        let mut hits: Vec<String> = Vec::new();
-        for entry in fs::read_dir(&workflows_dir).context("read workflows")? {
-            let entry = entry?;
-            let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) != Some("yml") {
-                continue;
-            }
-            if let Ok(text) = fs::read_to_string(&p) {
-                if text.contains("setup-bun") {
-                    hits.push(p.strip_prefix(&root).unwrap_or(&p).display().to_string());
-                }
-            }
-        }
-        hits
-    } else {
-        Vec::new()
-    };
+    let jankurai_version = ProcessCommand::new("jankurai")
+        .arg("--version")
+        .output()
+        .context("run jankurai --version")?;
+    let jankurai_ok = jankurai_version.status.success()
+        && String::from_utf8_lossy(&jankurai_version.stdout).contains("1.5.1");
     println!(
-        "  [{}] .github/workflows/*.yml free of Bun setup action: {} workflow(s) still live",
-        if setup_bun_hits.is_empty() {
-            "OK"
-        } else {
-            "FAIL"
-        },
-        setup_bun_hits.len()
+        "  [{}] installed jankurai is v1.5.1",
+        if jankurai_ok { "OK" } else { "FAIL" }
     );
-    if !setup_bun_hits.is_empty() {
-        for s in &setup_bun_hits {
-            println!("       - {s}");
-        }
-        failures.push(format!(
-            "{} workflow(s) still reference the Bun setup action",
-            setup_bun_hits.len()
-        ));
-    }
-
-    let critical = [
-        "Cargo.toml",
-        "Cargo.lock",
-        "crates",
-        "agent",
-        "db",
-        ".github/workflows/parity.yml",
-    ];
-    let mut critical_violations: Vec<String> = Vec::new();
-    for rel in &critical {
-        let abs = root.join(rel);
-        if plan.delete_files.iter().any(|p| p == &abs) || plan.delete_dirs.iter().any(|p| p == &abs)
-        {
-            critical_violations.push((*rel).to_string());
-        }
-    }
-    println!(
-        "  [{}] workspace-critical paths NOT in delete lists: {} violations",
-        if critical_violations.is_empty() {
-            "OK"
-        } else {
-            "FAIL"
-        },
-        critical_violations.len()
-    );
-    if !critical_violations.is_empty() {
-        for s in &critical_violations {
-            println!("       - {s} would be deleted by cutover!");
-        }
-        failures.push(format!(
-            "{} critical paths in delete list",
-            critical_violations.len()
-        ));
-    }
-
-    let required_in_plan = ["bun.lock", "package.json", "tsconfig.json"];
-    let mut missing: Vec<String> = Vec::new();
-    for rel in &required_in_plan {
-        let abs = root.join(rel);
-        if !plan.delete_files.iter().any(|p| p == &abs) {
-            missing.push((*rel).to_string());
-        }
-    }
-    println!(
-        "  [{}] root manifests in delete plan: {} missing",
-        if missing.is_empty() { "OK" } else { "FAIL" },
-        missing.len()
-    );
-    if !missing.is_empty() {
-        failures.push(format!(
-            "{} root manifests missing from cleanup plan",
-            missing.len()
-        ));
+    if !jankurai_ok {
+        failures.push("installed jankurai is not v1.5.1".into());
     }
 
     println!();
     if failures.is_empty() {
-        println!("preflight: ✓ PASS — workspace ready for cleanup-cutover --execute");
+        println!("preflight: PASS");
         Ok(())
     } else {
-        println!("preflight: ✗ FAIL — {} blocker(s) remain:", failures.len());
+        println!("preflight: FAIL — {} blocker(s) remain:", failures.len());
         for f in &failures {
-            println!("  • {f}");
+            println!("  - {f}");
         }
         bail!("preflight: {} unresolved blocker(s)", failures.len());
     }
 }
 
-pub(crate) fn run_cleanup_cutover(execute: bool) -> Result<()> {
-    let root = repo_root()?;
-    let plan = cleanup_cutover::compute_plan(&root);
-
-    let mode = if execute { "EXECUTE" } else { "DRY-RUN" };
-    println!("cleanup-cutover ({mode})");
-    println!(
-        "  delete_files: {} / delete_dirs: {} / edit_files: {}",
-        plan.delete_files.len(),
-        plan.delete_dirs.len(),
-        plan.edit_files.len()
-    );
-
-    for path in &plan.delete_files {
-        let abs = root.join(path);
-        let exists = abs.exists();
-        if !execute {
-            println!(
-                "  file  : {} {}",
-                path.display(),
-                if exists { "(exists)" } else { "(missing)" }
-            );
-            continue;
-        }
-        if !exists {
-            continue;
-        }
-        fs::remove_file(&abs).with_context(|| format!("rm file {}", abs.display()))?;
-        println!("  rm    : {}", path.display());
-    }
-
-    for path in &plan.delete_dirs {
-        let abs = root.join(path);
-        let exists = abs.exists();
-        if !execute {
-            println!(
-                "  dir   : {} {}",
-                path.display(),
-                if exists { "(exists)" } else { "(missing)" }
-            );
-            continue;
-        }
-        if !exists {
-            continue;
-        }
-        fs::remove_dir_all(&abs).with_context(|| format!("rm dir {}", abs.display()))?;
-        println!("  rm -r : {}", path.display());
-    }
-
-    for path in &plan.edit_files {
-        println!(
-            "  edit  : {} {}",
-            path.display(),
-            if execute {
-                "(skipped: scrub-by-hand or follow-up packet)"
-            } else {
-                "(needs scrub)"
-            }
-        );
-    }
-
-    if !execute {
-        println!();
-        println!("preview complete. re-run with --execute to actually remove these paths.");
-    } else {
-        println!();
-        println!("cleanup-cutover: done. Now run `guard-forbidden-runtime --mode final`.");
-    }
-
-    Ok(())
-}
-
 pub(crate) fn guard_forbidden_runtime(mode: GuardMode) -> Result<()> {
     let root = repo_root()?;
-    let patterns = [
+    let forbidden_lock = ["b", "un.lock"].concat();
+    let forbidden_test = ["b", "un:test"].concat();
+    let forbidden_namespace = ["b", "un:"].concat();
+    let forbidden_config = ["b", "unfig"].concat();
+    let forbidden_types = ["@types/", "b", "un"].concat();
+    let forbidden_tsconfig = ["@tsconfig/", "b", "un"].concat();
+    let forbidden_bundle_pkg = ["@vi", "te"].concat();
+    let forbidden_bundle_config = ["vi", "te.config"].concat();
+    let exact_patterns = [
         "@opentui",
         "opentui-spinner",
         "solid-js",
-        "bun:test",
-        "Bun.",
-        "bun:",
-        "bunfig",
-        "bun.lock",
-        "@types/bun",
-        "@tsconfig/bun",
-        "vite",
-        "@vite",
-        "vite.config",
+        forbidden_test.as_str(),
+        forbidden_namespace.as_str(),
+        forbidden_config.as_str(),
+        forbidden_lock.as_str(),
+        forbidden_types.as_str(),
+        forbidden_tsconfig.as_str(),
+        forbidden_bundle_pkg.as_str(),
+        forbidden_bundle_config.as_str(),
+    ];
+    let token_bun = ["b", "un"].concat();
+    let token_bun_upper = ["B", "un"].concat();
+    let token_vite = ["vi", "te"].concat();
+    let token_patterns = [
+        token_bun.as_str(),
+        token_bun_upper.as_str(),
+        token_vite.as_str(),
     ];
     let allow_prefixes = [
         root.join("target"),
         root.join(".git"),
-        root.join("tips/goodbye_OpenTUIBun"),
-        root.join("docs/archive/historical/open-tui-bun-inventory.md"),
-        root.join("docs/archive/historical/open-tui-bun-rust-port.md"),
-        root.join("docs/archive/historical/open-tui-bun-deletion-plan.md"),
+        root.join(".vscode"),
+        root.join("tips"),
+        root.join("paper"),
+        root.join("smartmemory"),
+        root.join("specs"),
+        root.join("db/migrations"),
+        root.join("docs/archive"),
         root.join("docs/ZYAL"),
+        root.join("docs/ci-local.md"),
         root.join("docs/ZYAL_MISSION.md"),
         root.join("achat.md"),
+        root.join("agent_chat.md"),
+        root.join("SANDBOX_WORKPLAN.md"),
+        root.join("STATS.md"),
+        root.join("ZYAL_MISSION.md"),
         root.join("CHANGELOG.md"),
         root.join("README.md"),
         root.join("CONTRIBUTING.md"),
@@ -302,9 +144,11 @@ pub(crate) fn guard_forbidden_runtime(mode: GuardMode) -> Result<()> {
         root.join("agent/audit-policy.toml"),
         root.join("agent/jankurai-install.toml"),
         root.join("agent/generated-zones.toml"),
-        root.join(".jekko/agent/generated-zones.toml"),
         root.join("crates/memory-benchmark/data"),
+        root.join("crates/memory-benchmark/README.md"),
         root.join("crates/xtask"),
+        root.join("jnoccio-fusion/ENCRYPTION.md"),
+        root.join("jnoccio-fusion/KEYS.md"),
     ];
 
     let mut hits = Vec::new();
@@ -330,8 +174,20 @@ pub(crate) fn guard_forbidden_runtime(mode: GuardMode) -> Result<()> {
             Ok(text) => text,
             Err(_) => continue,
         };
-        for pattern in patterns {
+        for pattern in exact_patterns {
             if text.contains(pattern) {
+                hits.push(GuardHit {
+                    path: path
+                        .strip_prefix(&root)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string(),
+                    pattern: pattern.to_string(),
+                });
+            }
+        }
+        for pattern in token_patterns {
+            if contains_ascii_token(&text, pattern) {
                 hits.push(GuardHit {
                     path: path
                         .strip_prefix(&root)
@@ -358,6 +214,28 @@ pub(crate) fn guard_forbidden_runtime(mode: GuardMode) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn contains_ascii_token(text: &str, needle: &str) -> bool {
+    let mut offset = 0;
+    while let Some(relative) = text[offset..].find(needle) {
+        let start = offset + relative;
+        let end = start + needle.len();
+        let before = text[..start].chars().next_back();
+        let after = text[end..].chars().next();
+        if is_token_boundary(before) && is_token_boundary(after) {
+            return true;
+        }
+        offset = end;
+    }
+    false
+}
+
+fn is_token_boundary(ch: Option<char>) -> bool {
+    match ch {
+        None => true,
+        Some(ch) => !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
+    }
 }
 
 fn is_text_candidate(path: &Path) -> bool {

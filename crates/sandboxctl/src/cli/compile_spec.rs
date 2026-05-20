@@ -37,7 +37,9 @@ pub fn run(args: &Args, json: bool) -> Result<i32> {
             Ok(s.code().unwrap_or(exit::FS_ERROR))
         }
         Err(err) => {
-            eprintln!("sandboxctl: zyalc not on PATH ({err}); run `cargo build -p zyalc` and retry");
+            eprintln!(
+                "sandboxctl: zyalc not on PATH ({err}); run `cargo build -p zyalc` and retry"
+            );
             Ok(exit::FS_ERROR)
         }
     }
