@@ -7,9 +7,9 @@
 - Target stack ID: `rust-ratatui-docker`
 - Target stack: `Rust core + TypeScript/React/Vite + PostgreSQL + generated contracts + exception-only Python AI/data service`
 - Repo: `.`
-- Run ID: `1779306881`
-- Started at: `1779306881`
-- Elapsed: `3043` ms
+- Run ID: `1779336999`
+- Started at: `1779336999`
+- Elapsed: `3632` ms
 - Scope: `full`
 - Raw score: `93`
 - Final score: `93`
@@ -70,9 +70,9 @@
 
 ## Copy-Code Redundancy
 
-- Status: `review` hard=`0` warning=`45` files=`546`
+- Status: `review` hard=`0` warning=`42` files=`546`
 - Policy: min-lines=`10` min-tokens=`100` max-findings=`50` include-tests=`false` strict=`false`
-- Duplicate volume: lines=`128` tokens=`394` bytes=`3913`
+- Duplicate volume: lines=`125` tokens=`384` bytes=`3822`
 
 - Notes:
   - hard classes are limited to exact active-source file matches and substantial exact same-name units
@@ -81,16 +81,16 @@
 
 | Kind | Severity | Language | Lines | Tokens | Instances | Reason |
 | --- | --- | --- | ---: | ---: | --- | --- |
+| `ExactUnitSameName` | `Warning` | `rust` | 10 | 28 | `crates/xtask/src/compliance_close.rs:171-181, crates/xtask/src/pr_compliance.rs:130-140, crates/xtask/src/pr_standards.rs:241-251` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 17 | 54 | `crates/memory-benchmark/src/corpus/real_papers/model.rs:219-236, crates/qbank-builder/src/core_types.rs:80-97` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 4 | 8 | `crates/jekko-runtime/src/tool/edit/mod.rs:62-66, crates/jekko-runtime/src/tool/read.rs:55-59, crates/jekko-runtime/src/tool/task.rs:52-56, crates/jekko-runtime/src/tool/webfetch.rs:94-98, crates/jekko-runtime/src/tool/write.rs:48-52` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 4 | 12 | `crates/xtask/src/close_issues.rs:127-131, crates/xtask/src/compliance_close.rs:183-187, crates/xtask/src/pr_compliance.rs:142-146, crates/xtask/src/pr_standards.rs:143-147` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 6 | 18 | `crates/xtask/src/publish_release.rs:91-97, crates/xtask/src/publish_release_package.rs:183-189, crates/xtask/src/publish_release_registry.rs:229-235` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 10 | 31 | `crates/xtask/src/publish_npm_package.rs:44-54, crates/xtask/src/publish_release_package.rs:142-152` | `same-name semantic unit copied across multiple files` |
-| `ExactUnitSameName` | `Warning` | `rust` | 10 | 28 | `crates/xtask/src/compliance_close.rs:171-181, crates/xtask/src/pr_standards.rs:241-251` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 3 | 14 | `crates/xtask/src/commands/security_lane.rs:175-178, crates/xtask/src/commands/security_lane.rs:204-207, crates/xtask/src/commands/security_lane.rs:226-229, crates/xtask/src/commands/security_lane.rs:254-257` | `same body appears under different names across files` |
-| `ExactUnitSameName` | `Warning` | `rust` | 4 | 12 | `crates/xtask/src/close_issues.rs:127-131, crates/xtask/src/compliance_close.rs:183-187, crates/xtask/src/pr_standards.rs:143-147` | `same-name semantic unit copied across multiple files` |
-| `ExactUnitSameName` | `Warning` | `rust` | 7 | 18 | `crates/xtask/src/pr_compliance.rs:110-117, crates/xtask/src/pr_standards.rs:157-164` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 7 | 18 | `crates/xtask/src/pr_compliance.rs:83-90, crates/xtask/src/pr_standards.rs:157-164` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 6 | 23 | `crates/xtask/src/publish_npm_package.rs:56-62, crates/xtask/src/publish_release_package.rs:154-160` | `same-name semantic unit copied across multiple files` |
-| `ExactUnitSameName` | `Warning` | `rust` | 6 | 13 | `crates/xtask/src/pr_compliance.rs:102-108, crates/xtask/src/pr_standards.rs:149-155` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 6 | 13 | `crates/xtask/src/pr_compliance.rs:75-81, crates/xtask/src/pr_standards.rs:149-155` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 5 | `crates/jekko-tui/src/engine/output_collapse.rs:202-203, crates/jekko-tui/src/engine/output_collapse.rs:217-218, crates/jekko-tui/src/engine/output_collapse.rs:236-237, crates/jekko-tui/src/engine/output_collapse.rs:252-253, crates/jekko-tui/src/engine/output_collapse.rs:270-271, crates/jekko-tui/src/engine/output_collapse.rs:289-290` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 1 | 4 | `crates/jekko-runtime/src/tool/bash.rs:45-46, crates/jekko-runtime/src/tool/edit/mod.rs:58-59, crates/jekko-runtime/src/tool/read.rs:51-52, crates/jekko-runtime/src/tool/task.rs:48-49, crates/jekko-runtime/src/tool/webfetch.rs:90-91, crates/jekko-runtime/src/tool/write.rs:44-45` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 4 | `crates/jekko-runtime/src/tool/edit/mod.rs:105-106, crates/jekko-runtime/src/tool/edit/mod.rs:122-123, crates/jekko-runtime/src/tool/edit/mod.rs:137-138, crates/jekko-runtime/src/tool/read.rs:105-106, crates/jekko-runtime/src/tool/read.rs:122-123, crates/jekko-runtime/src/tool/write.rs:71-72` | `same body appears under different names across files` |
@@ -98,33 +98,30 @@
 | `ExactUnitDifferentName` | `Warning` | `rust` | 5 | 11 | `crates/jankurai-runner/src/locks.rs:53-58, crates/jankurai-runner/src/locks.rs:66-71` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 5 | `crates/jekko-tui/src/agents/mod.rs:270-271, crates/jekko-tui/src/agents/mod.rs:280-281, crates/jekko-tui/src/agents/mod.rs:295-296, crates/jekko-tui/src/agents/mod.rs:328-329, crates/jekko-tui/src/agents/mod.rs:337-338` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 4 | 19 | `crates/xtask/src/close_issues.rs:138-142, crates/xtask/src/compliance_close.rs:194-198` | `same-name semantic unit copied across multiple files` |
-| `ExactUnitSameName` | `Warning` | `rust` | 4 | 18 | `crates/xtask/src/pr_compliance.rs:119-123, crates/xtask/src/pr_management.rs:95-99` | `same-name semantic unit copied across multiple files` |
-| `ExactUnitSameName` | `Warning` | `rust` | 4 | 12 | `crates/xtask/src/pr_compliance.rs:96-100, crates/xtask/src/pr_standards.rs:137-141` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 4 | 18 | `crates/xtask/src/pr_compliance.rs:92-96, crates/xtask/src/pr_management.rs:95-99` | `same-name semantic unit copied across multiple files` |
+| `ExactUnitSameName` | `Warning` | `rust` | 4 | 12 | `crates/xtask/src/pr_compliance.rs:69-73, crates/xtask/src/pr_standards.rs:137-141` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 5 | `crates/xtask/src/commands/package.rs:252-253, crates/xtask/src/commands/package.rs:266-267, crates/xtask/src/commands/package.rs:276-277, crates/xtask/src/commands/package.rs:294-295` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 2 | `crates/jekko-tui/src/inline_runtime/state.rs:251-252, crates/jekko-tui/src/inline_runtime/state.rs:261-262, crates/memory-benchmark/src/types.rs:263-264, crates/memory-benchmark/src/types.rs:302-303` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 3 | 4 | `crates/jekko-tui/src/transcript/syntax/renderer.rs:147-150, crates/jekko-tui/src/transcript/syntax/renderer.rs:166-169` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 7 | `crates/jekko-tui/src/osc52.rs:131-132, crates/jekko-tui/src/osc52.rs:141-142, crates/jekko-tui/src/osc52.rs:149-150` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 4 | `crates/jekko-tui/src/agents/mod.rs:195-196, crates/jekko-tui/src/agents/mod.rs:210-211, crates/jekko-tui/src/agents/mod.rs:250-251` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 2 | 6 | `crates/qbank-builder/src/cli/discover.rs:224-226, crates/qbank-builder/src/full_text_import_detail_support.rs:161-163` | `same body appears under different names across files` |
-| `ExactUnitDifferentName` | `Warning` | `rust` | 2 | 5 | `crates/xtask/src/pr_compliance.rs:129-131, crates/xtask/src/pr_standards.rs:172-174` | `same body appears under different names across files` |
+| `ExactUnitDifferentName` | `Warning` | `rust` | 2 | 5 | `crates/xtask/src/pr_compliance.rs:102-104, crates/xtask/src/pr_standards.rs:172-174` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 2 | 4 | `crates/memory-benchmark/src/corpus/real_papers/model.rs:215-217, crates/qbank-builder/src/core_types.rs:50-52` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 2 | `crates/memory-benchmark/src/corpus/real_papers/json_helpers.rs:68-69, crates/memory-benchmark/src/corpus/real_papers/json_helpers.rs:89-90, crates/memory-benchmark/src/corpus/real_papers/json_helpers.rs:96-97` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 2 | 3 | `crates/jekko-core/src/keybind/chord.rs:106-108, crates/jekko-core/src/keybind/set.rs:62-64` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 2 | 1 | `crates/qbank-builder/src/fixture.rs:307-309, crates/sandboxctl/src/spec_types.rs:169-171` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 1 | 9 | `crates/jekko-tui/src/components/boot_inline.rs:125-126, crates/jekko-tui/src/components/splash.rs:238-239` | `same-name semantic unit copied across multiple files` |
-| `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 5 | `crates/xtask/src/close_stale_prs.rs:244-245, crates/xtask/src/pr_compliance.rs:196-197` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 5 | `crates/xtask/src/publish_build_plan.rs:157-158, crates/xtask/src/publish_build_plan.rs:191-192` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 1 | 5 | `crates/jekko-tui/src/components/boot_inline.rs:139-140, crates/jekko-tui/src/components/splash.rs:252-253` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 5 | `crates/jekko-provider/src/transform/variants/efforts.rs:65-66, crates/jekko-provider/src/transform/variants/efforts.rs:90-91` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 4 | `crates/qbank-builder/src/paper_tournament/provenance.rs:202-203, crates/qbank-builder/src/paper_tournament/summary.rs:114-115` | `same body appears under different names across files` |
-| `ExactUnitSameName` | `Warning` | `rust` | 1 | 4 | `crates/xtask/src/close_stale_prs.rs:225-226, crates/xtask/src/pr_compliance.rs:208-209` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 4 | `crates/jekko-tui/src/engine/ansi.rs:133-134, crates/jekko-tui/src/engine/ansi.rs:157-158` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 3 | `crates/jekko-tui/src/transcript/syntax/renderer.rs:189-190, crates/jekko-tui/src/transcript/syntax/renderer.rs:194-195` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 2 | `crates/jekko-tui/src/anim/glyphs.rs:11-12, crates/jekko-tui/src/anim/glyphs.rs:27-28` | `same body appears under different names across files` |
 | `ExactUnitSameName` | `Warning` | `rust` | 1 | 2 | `crates/memory-benchmark/src/types.rs:263-264, crates/memory-benchmark/src/types.rs:302-303` | `same-name semantic unit copied across multiple files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 1 | `crates/jekko-tui/src/agents/mod.rs:152-153, crates/jekko-tui/src/inline_runtime/state.rs:348-349` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 1 | `crates/jekko-provider/src/transform/variants/efforts.rs:49-50, crates/jekko-provider/src/transform/variants/efforts.rs:78-79` | `same body appears under different names across files` |
-| `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 1 | `crates/xtask/src/close_stale_prs.rs:146-147, crates/xtask/src/pr_compliance.rs:190-191` | `same body appears under different names across files` |
 | `ExactUnitDifferentName` | `Warning` | `rust` | 1 | 0 | `crates/xtask/src/close_stale_prs.rs:231-232, crates/xtask/src/shared.rs:173-174` | `same body appears under different names across files` |
 
 ## Dimensions
@@ -200,6 +197,14 @@
 | `release-readiness` | `release` | `auto` | `configured` | `manual launch checklist` | `agent/repo-score.json, agent/repo-score.md` |
 | `cost-budget` | `release` | `auto` | `configured` | `manual spend review` | `agent/repo-score.json, agent/repo-score.md` |
 
+## Security evidence (ingested)
+
+- Source: `target/jankurai/security/evidence.json`
+- Envelope exit code: `0` · elapsed: `121443` ms · strict: `true`
+- Commands — ran: `1`, skipped: `0`, failed: `0`
+- Generated at: `1779327074`
+- Git HEAD (envelope): `57153e883a581d58853448aa7ea0952eb1003e5c`
+
 ## Boundary manifest (ingested)
 
 - Path: `agent/boundaries.toml`
@@ -221,8 +226,8 @@ No audited runtime boundary reclassifications declared.
    Reason: `Code shape and semantic surface` scored 80 below the standard floor of 85
    Fix: split large or ambiguous authored code into smaller semantic modules with focused tests
    Rerun: `just fast`
-   Fingerprint: `sha256:98a79f14e1646e3e7794487cdd33ced7a2432f6ee3f81da436f957db64172a66`
-   Evidence: largest authored code file: crates/jekko-tui/src/components/splash.rs (475 LOC), most code files stay under 300 LOC, copy-code advisory classes found: 45 (advisory only, no score impact), rust bad-behavior advisory signals: 1678
+   Fingerprint: `sha256:c7e3eb18b39d5bc96796ddf403e596e32e89eca7c0a9d2b33c35e471654925d6`
+   Evidence: largest authored code file: crates/jekko-tui/src/components/splash.rs (475 LOC), most code files stay under 300 LOC, copy-code advisory classes found: 42 (advisory only, no score impact), rust bad-behavior advisory signals: 1678
 2. `medium` `proof` `Justfile`
    Rule: `HLT-018-PERF-CONCURRENCY-DRIFT`
    Check: `HLT-018-PERF-CONCURRENCY-DRIFT:proof` `soft` confidence `0.76`
