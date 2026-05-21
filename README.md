@@ -97,9 +97,9 @@ cargo run -p xtask -- package
 cargo run -p xtask -- guard-forbidden-runtime
 ```
 
-GitHub Actions is the merge gate. PRs run the remote CI suite on the
-pull request itself, and protected branches require those checks to pass
-before merge.
+GitHub Actions runs the remote CI suite on the pull request itself, and
+protected branches or rulesets should require those checks to pass before
+merge.
 
 ## Releasing
 
