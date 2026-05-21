@@ -14,19 +14,19 @@ single static binary.
 Current Rust release target: `v0.1.1`. Once tagged, install via Cargo:
 
 ```bash
-cargo install --git https://github.com/jeppsontaylor/jekko --tag v0.1.1 jekko-cli
+cargo install --git https://github.com/neverhuman/jekko --tag v0.1.1 jekko-cli
 ```
 
 Or via the Nix flake (provides `jekko` on `$PATH` and a dev shell):
 
 ```bash
-nix profile install github:jeppsontaylor/jekko
+nix profile install github:neverhuman/jekko
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/jeppsontaylor/jekko
+git clone https://github.com/neverhuman/jekko
 cd jekko
 cargo build -p jekko-cli --release --locked
 # Binary at target/release/jekko
