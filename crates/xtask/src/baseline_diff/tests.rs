@@ -81,6 +81,12 @@ fn collect_capture_keys_walks_screen_subdirs() {
     let dir = ScopedDir::new("walker");
     write_capture(dir.path(), "home", "80x24", "hello");
     write_capture(dir.path(), "home", "200x60", "wide");
+    write_capture(
+        dir.path(),
+        "home",
+        "80x24-boot-timeout",
+        "timeout diagnostic",
+    );
     write_capture(dir.path(), "command-dialog", "80x24", "cmd");
     fs::write(dir.path().join("home/80x24.png"), b"\x89PNG").unwrap();
 

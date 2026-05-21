@@ -12,18 +12,18 @@ Check: `which jankurai` — if not found, install before running audits.
 
 | Command | Description |
 |---|---|
-| `jankurai audit . --mode advisory --json agent/repo-score.json --md agent/repo-score.md` | Full audit (canonical form) |
+| `jankurai audit . --mode advisory --json .jankurai/repo-score.json --md .jankurai/repo-score.md` | Full audit (canonical form) |
 | `jankurai update` | Update binary to latest |
 | `jankurai check-dupes` | Check for duplicate code |
-| `jankurai status` | Show current score from `agent/repo-score.json` |
+| `jankurai status` | Show current score from `.jankurai/repo-score.json` |
 | `jankurai init` | Scaffold config in a new repo |
 
 ## Output Files
 
-- `agent/repo-score.json` — machine-readable score document (structured)
-- `agent/repo-score.md` — human-readable audit report
-- `agent/score-history.csv` — historical score trend
-- `agent/score-history.jsonl` — historical score events (structured)
+- `.jankurai/repo-score.json` — machine-readable score document (structured)
+- `.jankurai/repo-score.md` — human-readable audit report
+- `.jankurai/score-history.csv` — historical score trend
+- `.jankurai/score-history.jsonl` — historical score events (structured)
 
 ## Score Interpretation
 

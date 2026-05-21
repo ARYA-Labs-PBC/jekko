@@ -9,6 +9,7 @@
 
 pub use crate::json_parser::parse;
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// A minimal JSON value type. BTreeMap keeps object keys sorted by Ord.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,13 +26,6 @@ pub enum Json {
 impl Json {
     pub fn obj() -> BTreeMap<String, Json> {
         BTreeMap::new()
-    }
-
-    /// Encode to compact, deterministic JSON.
-    pub fn to_string(&self) -> String {
-        let mut buf = String::with_capacity(256);
-        self.write_to(&mut buf);
-        buf
     }
 
     pub fn write_to(&self, out: &mut String) {
@@ -77,6 +71,14 @@ impl Json {
                 out.push('}');
             }
         }
+    }
+}
+
+impl fmt::Display for Json {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut buf = String::with_capacity(256);
+        self.write_to(&mut buf);
+        f.write_str(&buf)
     }
 }
 

@@ -10,16 +10,16 @@
 //! cogcore stays zero-dep here.
 
 pub mod equation;
-mod paper_support;
-mod paper_json_parse;
-mod paper_json;
-mod paper_json_support;
 pub mod paper;
+mod paper_json;
+mod paper_json_parse;
+mod paper_json_support;
+mod paper_support;
 pub mod theorem;
 
 pub use equation::EqAtom;
-pub use paper_json::parse_jsonl_event;
 pub use paper::{IngestedPaper, PaperSection, RuleBackend, SourceSpec};
+pub use paper_json::parse_jsonl_event;
 pub use theorem::TheoremRef;
 
 use crate::core::StoredEvent;
@@ -39,6 +39,6 @@ mod mod_tests {
 
     #[test]
     fn rule_backend_constructs() {
-        let _ = RuleBackend::default();
+        let _ = RuleBackend;
     }
 }

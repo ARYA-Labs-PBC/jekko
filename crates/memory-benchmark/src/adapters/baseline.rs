@@ -12,18 +12,10 @@ use crate::{
     Warning,
 };
 
+#[derive(Default)]
 pub struct Adapter {
     events: Vec<Event>,
     receipt_seq: u64,
-}
-
-impl Default for Adapter {
-    fn default() -> Self {
-        Adapter {
-            events: Vec::new(),
-            receipt_seq: 0,
-        }
-    }
 }
 
 impl Adapter {

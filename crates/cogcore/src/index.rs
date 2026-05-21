@@ -33,6 +33,10 @@ impl Interner {
     pub fn len(&self) -> usize {
         self.by_id.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
 }
 
 /// Split body into lowercase ASCII-alphanumeric token runs.
@@ -133,7 +137,7 @@ impl InvertedIndex {
         for (tok, tf) in counts {
             self.postings.entry(tok).or_default().push((cell_idx, tf));
         }
-        let mut sorted_tokens: Vec<TokenId> = tokens.iter().copied().collect();
+        let mut sorted_tokens: Vec<TokenId> = tokens.to_vec();
         sorted_tokens.sort();
         sorted_tokens.dedup();
         self.doc_tokens.push(sorted_tokens);

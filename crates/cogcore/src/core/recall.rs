@@ -3,10 +3,7 @@
 //! support the recall pipeline (`render_event`, `has_supersession_partner`,
 //! `is_counterexample`, `detects_unit_mismatch`).
 
-use super::{
-    pack_hash, push_unique, Cell, CitedSource, ClaimModality, Core, Intent, PrivacyClass,
-    RecallData, RecallQuery, StoredEvent, Warning,
-};
+use super::{Core, Intent, RecallData, RecallQuery};
 use crate::config::{
     SCORE_EQUATION_BOOST, SCORE_EXACT_ID_BOOST, SCORE_SUBJECT_BOOST, SCORE_THEOREM_BOOST,
     SCORE_TOPIC_BOOST,

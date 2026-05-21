@@ -96,7 +96,7 @@ fn main() {
         "warnings".to_string(),
         json::arr_str(validation.warnings.iter().cloned()),
     );
-    println!("{}", Json::Object(top).to_string());
+    println!("{}", Json::Object(top));
     if failed {
         process::exit(1);
     }

@@ -58,8 +58,9 @@ pub fn run(lane: &str, status: &str, out: &Path) -> Result<()> {
 
 fn command_for_lane(lane: &str) -> String {
     match lane {
-        "security" => "cargo run -p xtask --locked -- security-lane --out target/jankurai/security"
-            .to_string(),
+        "security" => {
+            "cargo run -p xtask --locked -- security-lane --out .jankurai/security".to_string()
+        }
         other => format!("xtask proof-receipt --lane {other}"),
     }
 }
@@ -67,10 +68,10 @@ fn command_for_lane(lane: &str) -> String {
 fn artifacts_for_lane(lane: &str) -> Vec<String> {
     match lane {
         "security" => vec![
-            "target/jankurai/security/evidence.json".to_string(),
-            "target/jankurai/security/gitleaks.json".to_string(),
-            "target/jankurai/security/cargo-audit.json".to_string(),
-            "target/jankurai/security/lane-status.txt".to_string(),
+            ".jankurai/security/evidence.json".to_string(),
+            ".jankurai/security/gitleaks.json".to_string(),
+            ".jankurai/security/cargo-audit.json".to_string(),
+            ".jankurai/security/lane-status.txt".to_string(),
         ],
         _ => Vec::new(),
     }

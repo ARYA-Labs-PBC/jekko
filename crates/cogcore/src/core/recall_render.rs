@@ -39,8 +39,8 @@ pub(super) fn render_recall_data(
         let has_bm25_signal = bm > 0.0;
         let subj_lower = cell.event.subject.to_lowercase();
         let body_lower = cell.event.body.to_lowercase();
-        let q_anchored = !q_lower.is_empty()
-            && (subj_lower.contains(&q_lower) || body_lower.contains(&q_lower));
+        let q_anchored =
+            !q_lower.is_empty() && (subj_lower.contains(&q_lower) || body_lower.contains(&q_lower));
         let mention_anchored = mention_lowers
             .iter()
             .any(|m| !m.is_empty() && (subj_lower.contains(m) || body_lower.contains(m)));
@@ -83,11 +83,18 @@ pub(super) fn render_recall_data(
             push_unique(&mut warnings, Warning::UnitMismatch);
         }
         let is_unsafe_skill = matches!(cell.event.kind.as_str(), "Skill")
-            && (cell.event.tags.iter().any(|t| t == "unsafe" || t == "quarantined")
+            && (cell
+                .event
+                .tags
+                .iter()
+                .any(|t| t == "unsafe" || t == "quarantined")
                 || cell.event.body.contains("UNSAFE"));
         if matches!(q.intent, Intent::Procedure) && is_unsafe_skill {
             push_unique(&mut warnings, Warning::UnsafeToolRefused);
-            let line = format!("UNSAFE skill {} refused (Quarantined). ", cell.event.subject);
+            let line = format!(
+                "UNSAFE skill {} refused (Quarantined). ",
+                cell.event.subject
+            );
             let cost = line.len() as u32 / 4;
             if remaining_budget >= cost {
                 answer.push_str(&line);

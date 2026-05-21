@@ -33,6 +33,7 @@ fn bootstrap_repo(dir: &std::path::Path) {
         }
         fs::write(abs, "").unwrap();
     }
+    fs::create_dir_all(dir.join(".jankurai")).unwrap();
     fs::write(
         dir.join("agent/audit-policy.toml"),
         r#"[decision]
@@ -43,7 +44,7 @@ advisory_on = ["medium", "low"]
     )
     .unwrap();
     fs::write(
-        dir.join("agent/repo-score.json"),
+        dir.join(".jankurai/repo-score.json"),
         r#"{"score": 95.0, "findings": [], "caps_applied": []}"#,
     )
     .unwrap();
@@ -85,7 +86,7 @@ async fn dry_run_tick_schedules_findings_into_waves() {
     let dir = tempdir().unwrap();
     bootstrap_repo(dir.path());
     fs::write(
-        dir.path().join("agent/repo-score.json"),
+        dir.path().join(".jankurai/repo-score.json"),
         r#"{
             "score": 60.0,
             "findings": [

@@ -239,6 +239,10 @@ fn contains_issue_reference(section: &str) -> bool {
 }
 
 fn gh_api<const N: usize>(args: [&str; N]) -> Result<()> {
+    if std::env::var_os("JEKKO_PR_DRY_RUN").is_some() {
+        println!("pr-standards dry-run: gh api {:?}", args);
+        return Ok(());
+    }
     let output = ProcessCommand::new("gh")
         .args(["api"])
         .args(args)

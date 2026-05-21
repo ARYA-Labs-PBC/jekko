@@ -8,7 +8,7 @@ Assume jankurai is installed. If not found in PATH, install from:
   https://github.com/neverhuman/jankurai/
 
 Canonical audit command:
-  jankurai audit . --mode advisory --json agent/repo-score.json --md agent/repo-score.md
+  jankurai audit . --mode advisory --json .jankurai/repo-score.json --md .jankurai/repo-score.md
 
 Other useful commands:
   jankurai update          — update binary
@@ -16,5 +16,5 @@ Other useful commands:
   jankurai status          — show current score
   jankurai init            — scaffold config in new repo
 
-Score output lands in `agent/repo-score.json` and `agent/repo-score.md`.
+Score output lands in `.jankurai/repo-score.json` and `.jankurai/repo-score.md`.
 See `agent/jankurai-context.md` for full reference.

@@ -10,6 +10,15 @@ releases, see `UPCOMING_CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-05-21
+
+### Changed
+- Moved generated Jankurai score, proof, security, SARIF, and receipt artifacts to ignored `.jankurai/` paths.
+- Expanded local CI parity to cover encryption, typecheck, full workspace tests, TUIwright, parity gates, Jankurai proof/security evidence, optional scanner tools, sandbox backends, PR metadata dry-runs, and Nix eval when available.
+
+### Fixed
+- Removed tracked Jankurai score/history copybacks and kept `/jankurai-status` compatible with legacy `agent/repo-score.json` checkouts.
+
 ## [2.0.0] - 2026-05-20
 
 ### Changed

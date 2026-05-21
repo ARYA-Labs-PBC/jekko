@@ -9,6 +9,7 @@
 use crate::hash::fnv1a_seq_hex;
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum WalOp {
     Observe {
         event_id: String,
@@ -80,6 +81,10 @@ impl Wal {
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 

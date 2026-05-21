@@ -99,6 +99,10 @@ impl Hebb {
     pub fn len(&self) -> usize {
         self.coact.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.coact.is_empty()
+    }
 }
 
 #[inline]

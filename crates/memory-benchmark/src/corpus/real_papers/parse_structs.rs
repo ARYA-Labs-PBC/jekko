@@ -4,7 +4,7 @@ pub(super) fn paper_from_json(value: &Json) -> Result<PaperRecord, String> {
     let obj = as_object(value)?;
     let license_obj = obj.get("license").and_then(as_object_ok);
     let license_spdx = match license_obj.and_then(|license| license.get("spdx").and_then(as_str)) {
-        Some(value) => value.to_string(),
+        Some(spdx) => spdx.to_string(),
         None => "NOASSERTION".to_string(),
     };
     let redistributable = matches!(
@@ -19,7 +19,7 @@ pub(super) fn paper_from_json(value: &Json) -> Result<PaperRecord, String> {
     let review_receipts = review_receipts(obj);
     let title = match optional_string(obj, "title") {
         Some(title) if !title.trim().is_empty() => title,
-        _ => "untitled".to_string(),
+        Some(_) | None => "untitled".to_string(),
     };
     Ok(PaperRecord {
         publication_hash: required_string(obj, "publication_hash")?,
@@ -43,8 +43,9 @@ pub(super) fn section_from_json(value: &Json) -> Result<PaperSection, String> {
         Some(title) if !title.trim().is_empty() => title,
         _ => section_id.clone(),
     };
+    #[allow(clippy::manual_unwrap_or_default)]
     let section_hash = match optional_string(obj, "section_hash") {
-        Some(value) => value,
+        Some(hash) => hash,
         None => String::new(),
     };
     Ok(PaperSection {
@@ -94,49 +95,36 @@ pub(super) fn challenge_from_json(value: &Json) -> Result<PaperChallenge, String
         },
         other => answer_key_from_json(other)?,
     };
-    let support = if let Some(value) = obj.get("support") {
-        required_array_value(value, "support")?
+    let support = match obj.get("support") {
+        Some(value) => required_array_value(value, "support")?
             .iter()
             .map(support_from_json)
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        required_array(obj, "support_sections")?
+            .collect::<Result<Vec<_>, _>>()?,
+        None => required_array(obj, "support_sections")?
             .iter()
             .filter_map(as_str)
             .map(|section_id| SupportRef {
                 section_id: section_id.to_string(),
                 section_hash: String::new(),
             })
-            .collect()
+            .collect(),
     };
     let domain = match optional_string(obj, "domain") {
         Some(domain) if !domain.trim().is_empty() => domain,
-        _ => Domain::Science.name().to_string(),
+        Some(_) | None => Domain::Science.name().to_string(),
     };
     let topics = optional_string_array(obj, "topics");
-    let difficulty_score = match optional_f32(obj, "difficulty_score") {
-        Some(value) => value,
-        None => 0.0,
-    };
-    let answerability = match optional_f32(acceptance, "answerability") {
-        Some(value) => value,
-        None => 1.0,
-    };
-    let focused_correct_rate = match optional_f32(acceptance, "focused_correct_rate") {
-        Some(value) => value,
-        None => 1.0,
-    };
-    let blind_correct_rate = match optional_f32(acceptance, "blind_correct_rate") {
-        Some(value) => value,
-        None => 0.0,
-    };
+    let difficulty_score = optional_f32(obj, "difficulty_score").unwrap_or(0.0);
+    let answerability = optional_f32(acceptance, "answerability").unwrap_or(1.0);
+    let focused_correct_rate = optional_f32(acceptance, "focused_correct_rate").unwrap_or(1.0);
+    let blind_correct_rate = optional_f32(acceptance, "blind_correct_rate").unwrap_or(0.0);
     let context_pack = match obj
         .get("context_pack")
         .map(context_pack_from_json)
         .transpose()?
     {
-        Some(pack) => pack,
-        None => ContextPack::default(),
+        Some(context_pack) => context_pack,
+        None => empty_context_pack(),
     };
     Ok(PaperChallenge {
         schema_version,
@@ -212,7 +200,9 @@ pub(super) fn judge_trial_from_json(value: &Json) -> Result<JudgeTrial, String> 
     })
 }
 
-pub(super) fn context_pack_provenance_from_json(value: &Json) -> Result<ContextPackProvenance, String> {
+pub(super) fn context_pack_provenance_from_json(
+    value: &Json,
+) -> Result<ContextPackProvenance, String> {
     let obj = as_object(value)?;
     Ok(ContextPackProvenance {
         kind: required_string(obj, "kind")?,
@@ -228,14 +218,16 @@ pub(super) fn route_metadata_from_json(value: &Json) -> Result<RouteMetadata, St
     let token_usage = obj
         .get("token_usage")
         .and_then(as_object_ok)
-        .map(|usage| token_usage_from_object(usage))
+        .map(token_usage_from_object)
         .transpose()?;
+    #[allow(clippy::manual_unwrap_or_default)]
     let provider = match optional_string(obj, "provider") {
-        Some(value) => value,
+        Some(provider) => provider,
         None => String::new(),
     };
+    #[allow(clippy::manual_unwrap_or_default)]
     let model = match optional_string(obj, "model") {
-        Some(value) => value,
+        Some(model) => model,
         None => String::new(),
     };
     let route_confidence = match optional_f32(obj, "route_confidence") {
@@ -263,8 +255,9 @@ pub(super) fn route_metadata_from_json(value: &Json) -> Result<RouteMetadata, St
 
 pub(super) fn model_decision_from_json(value: &Json) -> Result<ModelDecision, String> {
     let obj = as_object(value)?;
+    #[allow(clippy::manual_unwrap_or_default)]
     let status = match optional_string(obj, "status") {
-        Some(value) => value,
+        Some(status) => status,
         None => String::new(),
     };
     Ok(ModelDecision {
@@ -277,4 +270,15 @@ pub(super) fn model_decision_from_json(value: &Json) -> Result<ModelDecision, St
         selected: optional_bool(obj, "selected").unwrap_or(false),
         token_usage: token_usage_from_json(required(obj, "token_usage")?)?,
     })
+}
+
+fn empty_context_pack() -> ContextPack {
+    ContextPack {
+        safe_window_tokens: 0,
+        target_fill_ratio: 0.0,
+        output_reserve_tokens: 0,
+        estimated_tokens: 0,
+        target_section_ids: Vec::new(),
+        distractor_section_ids: Vec::new(),
+    }
 }

@@ -23,8 +23,8 @@ mod consolidate;
 mod observe;
 mod recall;
 mod recall_render;
-mod support;
 mod state;
+mod support;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyClass {

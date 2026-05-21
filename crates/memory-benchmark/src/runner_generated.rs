@@ -254,6 +254,7 @@ fn run_compounding_candidate(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_generated_report(
     candidate: &str,
     config: &SuiteConfig,
@@ -331,7 +332,7 @@ fn finish_generated_report(
             ("replay_cmd", Json::Str(GATE_REPLAY_CMD.to_string())),
             (
                 "evidence_artifact",
-                Json::Str("agent/repo-score.md".to_string()),
+                Json::Str(".jankurai/repo-score.md".to_string()),
             ),
         ]),
     );

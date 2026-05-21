@@ -4,4 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+if [ -z "${GITHUB_EVENT_PATH:-}" ]; then
+  echo "pr-compliance: no GITHUB_EVENT_PATH; local dry-run skipped"
+  exit 0
+fi
+
 cargo run -p xtask -- pr-compliance

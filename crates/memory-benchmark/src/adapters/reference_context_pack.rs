@@ -106,7 +106,7 @@ impl Adapter {
             .collect()
     }
 
-    fn detect_canary_in<'a>(&self, text: &'a str) -> Option<String> {
+    fn detect_canary_in(&self, text: &str) -> Option<String> {
         // Canary patterns are built from byte fragments at runtime so this
         // source file contains zero literal canary strings — the jankurai
         // secret-sprawl detector treats verbatim canary substrings as a

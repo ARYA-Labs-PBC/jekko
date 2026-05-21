@@ -16,7 +16,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Profile {
-    /// Sentinel-wrapped runbook YAML; emitted as-is (the original
+    /// Sentinel-wrapped runbook YAML; validated in place (the original
     /// `.zyal.yml` extension was retired in ZYAL contract 2.5.0).
     Runbook,
     /// Declarative → TOML.

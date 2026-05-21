@@ -128,6 +128,10 @@ fn matches_title_prefix(title: &str, allowed: &[&str]) -> bool {
 }
 
 fn gh_api<const N: usize>(args: [&str; N]) -> Result<()> {
+    if std::env::var_os("JEKKO_PR_DRY_RUN").is_some() {
+        println!("pr-compliance dry-run: gh api {:?}", args);
+        return Ok(());
+    }
     let output = ProcessCommand::new("gh")
         .args(["api"])
         .args(args)
