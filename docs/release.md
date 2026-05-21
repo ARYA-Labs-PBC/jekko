@@ -6,7 +6,7 @@ Rust; there is no JS publish step.
 
 ## Version source
 
-The release version comes from the Git tag (for example `v1.2.3`). The tag
+The release version comes from the Git tag (for example `v2.0.0`). The tag
 is the source of record for published artifacts. CI and release workflows
 consume this tag as the canonical version input. The workspace
 `Cargo.toml` `[workspace.package].version` must match the tag.
@@ -83,6 +83,6 @@ consume this tag as the canonical version input. The workspace
 ## TBD
 
 - Cross-compile path (`cross` vs Nix flake) is not yet finalized.
-- `cargo install --git ... --tag <release>` becomes the canonical user
-  install path once the first Rust release ships; until then, see
-  `docs/install.md` for the build-from-source path.
+- `cargo install --git ... --tag v2.0.0` becomes the canonical user
+  install path for Rust releases. See `docs/install.md` for the current
+  source and `cargo install --git` paths.

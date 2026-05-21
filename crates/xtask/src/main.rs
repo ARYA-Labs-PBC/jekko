@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 mod baseline_diff;
 mod beta;
-mod cleanup_cutover;
 mod close_issues;
 mod close_stale_prs;
 mod commands;
@@ -19,16 +18,9 @@ mod pr_compliance;
 mod pr_info;
 mod pr_management;
 mod pr_standards;
-mod publish_build_plan;
-mod publish_build_script;
 mod publish_docker_image;
-mod publish_npm_package;
 mod publish_release;
 mod publish_release_artifacts;
-mod publish_release_package;
-mod publish_release_registry;
-mod publish_stage_cli_assets;
-mod publish_sync_release_files;
 mod publish_version;
 mod runtime_checks;
 mod shared;
@@ -36,9 +28,7 @@ mod triage;
 
 pub(crate) use baseline_diff::{baseline_diff, BaselineDiffFormat};
 pub(crate) use live_prod::{live_prod, live_prod_init};
-pub(crate) use runtime_checks::{
-    guard_forbidden_runtime, run_cleanup_cutover, run_preflight, GuardMode,
-};
+pub(crate) use runtime_checks::{guard_forbidden_runtime, run_preflight, GuardMode};
 pub(crate) use shared::{
     current_github_event_context, github_event, host_binary_path, json_field, json_lookup,
     migrations_json, package_manager_version, repo_root, schema_check,
@@ -79,10 +69,6 @@ enum Command {
     PrCompliance,
     NotifyDiscord,
     PublishVersion,
-    PublishSyncReleaseFiles {
-        #[arg(long, env = "JEKKO_VERSION")]
-        version: String,
-    },
     PublishReleaseInit,
     PublishReleaseFinalize {
         #[arg(long, env = "JEKKO_VERSION")]
@@ -90,49 +76,17 @@ enum Command {
         #[arg(long, env = "GH_REPO")]
         repo: Option<String>,
     },
-    PublishNpmPackage {
-        #[arg(long, default_value = ".")]
-        dir: PathBuf,
-        #[arg(long, default_value = "latest")]
-        tag: String,
-    },
-    PublishReleasePackage {
-        #[arg(long, default_value = ".")]
-        dir: PathBuf,
-        #[arg(long, default_value = "latest")]
-        tag: String,
-    },
-    PublishReleaseRegistry {
-        #[arg(long, env = "JEKKO_VERSION")]
-        version: String,
-    },
     PublishDockerImage {
         #[arg(long, env = "JEKKO_VERSION")]
         version: String,
         #[arg(long, env = "JEKKO_CHANNEL")]
         channel: String,
     },
-    PublishReleasePackages {
-        #[arg(long, default_value = "dist")]
-        dist_root: PathBuf,
-        #[arg(long, default_value = "latest")]
-        tag: String,
-    },
     PublishReleaseArtifacts {
         #[arg(long, env = "JEKKO_VERSION")]
         version: String,
         #[arg(long, env = "JEKKO_CHANNEL")]
         channel: String,
-    },
-    PublishStageCliAssets {
-        #[arg(long, default_value = "dist")]
-        dist_root: PathBuf,
-        #[arg(long, env = "JEKKO_VERSION")]
-        version: String,
-        #[arg(long)]
-        release: bool,
-        #[arg(long, env = "GH_REPO")]
-        repo: Option<String>,
     },
     MigrationsJson {
         #[arg(long, default_value = "db/migrations")]
@@ -141,6 +95,31 @@ enum Command {
     GithubRun,
     Triage,
     PackageManagerVersion,
+    JankuraiGate {
+        #[arg(long)]
+        score: PathBuf,
+    },
+    ProofReceipt {
+        #[arg(long)]
+        lane: String,
+        #[arg(long)]
+        status: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    SecurityLane {
+        #[arg(long, default_value = "target/security")]
+        out: PathBuf,
+        #[arg(long, value_enum, default_value_t = commands::security_lane::SecurityProfile::Local)]
+        profile: commands::security_lane::SecurityProfile,
+    },
+    GitHook {
+        hook: String,
+    },
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommand,
+    },
     JsonField {
         path: PathBuf,
         field: String,
@@ -176,6 +155,10 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    BackendContract {
+        #[arg(long)]
+        strict: bool,
+    },
     HttpapiParity {
         #[arg(long)]
         strict: bool,
@@ -183,10 +166,6 @@ enum Command {
     OpenapiCheck {
         #[arg(long)]
         strict: bool,
-    },
-    CleanupCutover {
-        #[arg(long)]
-        execute: bool,
     },
     Preflight,
     Package {
@@ -209,19 +188,23 @@ enum Command {
         #[arg(long, default_value = "packages/jekko/dist")]
         dist_root: PathBuf,
     },
-    PublishBuildPlan {
-        #[arg(long, default_value = "jekko")]
-        package_name: String,
-        #[arg(long)]
-        single: bool,
-        #[arg(long)]
-        baseline: bool,
-    },
-    PublishBuildScript {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
-        args: Vec<String>,
-    },
     Beta,
+}
+
+#[derive(Subcommand, Debug)]
+enum ReleaseCommand {
+    Package {
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Attach {
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -240,46 +223,34 @@ fn main() -> Result<()> {
         Command::PrCompliance => pr_compliance::run(),
         Command::NotifyDiscord => notify_discord::run(),
         Command::PublishVersion => publish_version::run(),
-        Command::PublishSyncReleaseFiles { version } => {
-            publish_sync_release_files::run(&repo_root()?, &version)
-        }
         Command::PublishReleaseInit => publish_release::init(),
         Command::PublishReleaseFinalize { version, repo } => {
             publish_release::finalize(&repo_root()?, &version, repo.as_deref())
         }
-        Command::PublishNpmPackage { dir, tag } => {
-            publish_npm_package::run(&repo_root()?.join(dir), &tag)
-        }
-        Command::PublishReleasePackage { dir, tag } => {
-            publish_release_package::run(&repo_root()?.join(dir), &tag)
-        }
-        Command::PublishReleaseRegistry { version } => {
-            publish_release_registry::run(&repo_root()?, &version)
-        }
         Command::PublishDockerImage { version, channel } => {
             publish_docker_image::run(&version, &channel)
-        }
-        Command::PublishReleasePackages { dist_root, tag } => {
-            publish_release_package::run_all(&repo_root()?, &dist_root, &tag)
         }
         Command::PublishReleaseArtifacts { version, channel } => {
             publish_release_artifacts::run(&repo_root()?, &version, &channel)
         }
-        Command::PublishStageCliAssets {
-            dist_root,
-            version,
-            release,
-            repo,
-        } => publish_stage_cli_assets::run(
-            &repo_root()?.join(dist_root),
-            &version,
-            release,
-            repo.as_deref(),
-        ),
         Command::MigrationsJson { root } => migrations_json(&root),
         Command::GithubRun => github_run::run(),
         Command::Triage => triage::run(),
         Command::PackageManagerVersion => package_manager_version(),
+        Command::JankuraiGate { score } => commands::jankurai_gate::run(&score),
+        Command::ProofReceipt { lane, status, out } => {
+            commands::proof_receipt::run(&lane, &status, &out)
+        }
+        Command::SecurityLane { out, profile } => commands::security_lane::run(&out, profile),
+        Command::GitHook { hook } => commands::git_hook::run(&hook),
+        Command::Release { command } => match command {
+            ReleaseCommand::Package { target, dry_run } => {
+                commands::release::package(&repo_root()?, &target, dry_run)
+            }
+            ReleaseCommand::Attach { version, dry_run } => {
+                commands::release::attach(&version, dry_run)
+            }
+        },
         Command::JsonField { path, field } => json_field(path, field),
         Command::HostBinaryPath => {
             println!("{}", host_binary_path()?);
@@ -322,9 +293,11 @@ fn main() -> Result<()> {
         Command::SessionFixtureParity { strict } => {
             commands::session_fixture_parity::run(&repo_root()?, strict)
         }
+        Command::BackendContract { strict } => {
+            commands::backend_contract::run(&repo_root()?, strict)
+        }
         Command::HttpapiParity { strict } => commands::httpapi_parity::run(&repo_root()?, strict),
         Command::OpenapiCheck { strict } => commands::openapi_check::run(&repo_root()?, strict),
-        Command::CleanupCutover { execute } => run_cleanup_cutover(execute),
         Command::Preflight => run_preflight(),
         Command::Package {
             skip_build,
@@ -362,12 +335,6 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::PublishBuildPlan {
-            package_name,
-            single,
-            baseline,
-        } => publish_build_plan::run(&package_name, single, baseline),
-        Command::PublishBuildScript { args } => publish_build_script::run(&repo_root()?, &args),
         Command::Beta => beta::run(),
     }
 }

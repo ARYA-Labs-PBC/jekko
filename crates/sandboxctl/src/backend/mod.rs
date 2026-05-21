@@ -91,7 +91,8 @@ impl Resolver {
         stdout_path: &std::path::Path,
         stderr_path: &std::path::Path,
     ) -> Result<ExecOutcome> {
-        self.inner.run_argv(lane, workspace, args, stdout_path, stderr_path)
+        self.inner
+            .run_argv(lane, workspace, args, stdout_path, stderr_path)
     }
 
     pub fn destroy(&self, workspace: &Workspace, keep_logs: bool) -> Result<()> {

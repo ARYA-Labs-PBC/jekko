@@ -1,11 +1,9 @@
 //! Bracketed-paste accumulator with inline summary chips.
 //!
 //! When the user pastes a block of text larger than a threshold (lines or
-//! characters), the visible prompt collapses to a `[paste: N lines, Sz]` chip
-//! and the actual content is stashed in a side buffer. On submit, the host
-//! re-expands every chip back into the outgoing payload.
-
-use std::fmt;
+//! bytes), the visible prompt collapses to a `[paste #N: M lines, S bytes]`
+//! chip and the actual content is stashed in a side buffer. On submit, the
+//! host re-expands every chip back into the outgoing payload.
 
 /// Minimum line count for a paste to be replaced with a summary chip.
 pub const PASTE_LINE_THRESHOLD: usize = 8;
@@ -30,10 +28,10 @@ impl PasteRecord {
     /// Render the summary string used as the inline chip.
     pub fn summary(&self) -> String {
         format!(
-            "[paste #{id}: {lines} lines, {bytes}]",
+            "[paste #{id}: {lines} lines, {bytes} bytes]",
             id = self.id,
             lines = self.line_count,
-            bytes = HumanBytes(self.byte_len)
+            bytes = self.byte_len
         )
     }
 }
@@ -54,11 +52,7 @@ impl PasteBuffer {
     /// Stash `content` and return the new record. Counts lines and bytes once.
     pub fn stash(&mut self, content: impl Into<String>) -> PasteRecord {
         let content = content.into();
-        let line_count = if content.is_empty() {
-            0
-        } else {
-            content.matches('\n').count() + 1
-        };
+        let line_count = count_lines(&content);
         let byte_len = content.len();
         self.next_id += 1;
         let record = PasteRecord {
@@ -84,12 +78,13 @@ impl PasteBuffer {
     /// Drop every record.
     pub fn clear(&mut self) {
         self.records.clear();
+        self.next_id = 0;
     }
 
     /// True if the paste content meets the threshold for chip collapsing.
     pub fn should_collapse(content: &str) -> bool {
-        let lines = content.matches('\n').count() + 1;
-        lines >= PASTE_LINE_THRESHOLD || content.len() >= PASTE_BYTE_THRESHOLD
+        let lines = count_lines(content);
+        lines > PASTE_LINE_THRESHOLD || content.len() > PASTE_BYTE_THRESHOLD
     }
 
     /// Expand every chip summary in `visible` back to its content.
@@ -108,20 +103,10 @@ impl PasteBuffer {
     }
 }
 
-/// Tiny humanized byte display (B / KB / MB) shared with the chip renderer.
-struct HumanBytes(usize);
-
-impl fmt::Display for HumanBytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let n = self.0;
-        if n < 1024 {
-            return write!(f, "{n}B");
-        }
-        if n < 1024 * 1024 {
-            let kb = n as f64 / 1024.0;
-            return write!(f, "{kb:.1}KB");
-        }
-        let mb = n as f64 / (1024.0 * 1024.0);
-        write!(f, "{mb:.1}MB")
+fn count_lines(content: &str) -> usize {
+    if content.is_empty() {
+        0
+    } else {
+        content.matches('\n').count() + 1
     }
 }

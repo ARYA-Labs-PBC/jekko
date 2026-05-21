@@ -10,6 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::permission::PermissionInput;
 
+/// UI-specific TOML configuration schema (pure overlay types, no I/O).
+///
+/// The filesystem + environment loader for this schema lives in `jekko-cli`
+/// (`jekko_cli::config_loader::UiConfigLoader`) so this crate stays free of
+/// filesystem, environment, network, and clock access per the crate-root
+/// invariant.
+pub mod ui;
+
 /// Log verbosity, mirroring the `LogLevel` literal union.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LogLevel {

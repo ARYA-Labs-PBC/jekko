@@ -13,6 +13,7 @@
 
 pub mod cli;
 pub mod cmd;
+pub mod config_loader;
 pub mod migration_ui;
 pub mod runtime;
 

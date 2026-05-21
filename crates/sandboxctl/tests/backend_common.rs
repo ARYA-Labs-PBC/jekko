@@ -22,4 +22,3 @@ fn captures_streams_and_exit_code() {
     assert_eq!(fs::read_to_string(stdout_path).expect("stdout"), "out");
     assert_eq!(fs::read_to_string(stderr_path).expect("stderr"), "err");
 }
-

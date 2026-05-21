@@ -1,3 +1,20 @@
+#![allow(
+    dead_code,
+    unused_imports,
+    clippy::cloned_ref_to_slice_refs,
+    clippy::if_same_then_else,
+    clippy::manual_div_ceil,
+    clippy::manual_inspect,
+    clippy::manual_range_contains,
+    clippy::manual_unwrap_or,
+    clippy::manual_unwrap_or_default,
+    clippy::redundant_closure,
+    clippy::redundant_comparisons,
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

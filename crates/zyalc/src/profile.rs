@@ -23,6 +23,8 @@ pub enum Profile {
     DeclarativeToml { schema: String },
     /// Declarative → GitHub Actions YAML.
     Workflow { schema: String },
+    /// Declarative daemon runbook. Validated by `compile --all --check`, not emitted.
+    Daemon { schema: String },
 }
 
 impl std::fmt::Display for Profile {
@@ -31,6 +33,7 @@ impl std::fmt::Display for Profile {
             Profile::Runbook => write!(f, "runbook"),
             Profile::DeclarativeToml { .. } => write!(f, "declarative-toml"),
             Profile::Workflow { .. } => write!(f, "workflow"),
+            Profile::Daemon { .. } => write!(f, "daemon"),
         }
     }
 }
@@ -70,6 +73,7 @@ pub fn parse_header(raw: &str) -> Result<(Profile, usize)> {
         let profile = match target.as_str() {
             "toml" => Profile::DeclarativeToml { schema },
             "github-workflow" => Profile::Workflow { schema },
+            "daemon" => Profile::Daemon { schema },
             other => return Err(anyhow!("unsupported target '{other}'")),
         };
         let pragma_offset = raw.find(pragma_line).unwrap_or(0) + pragma_line.len();
@@ -144,6 +148,13 @@ mod tests {
     fn rejects_unknown_target() {
         let err = parse_header("# zyal: declarative target=postgres schema=x@1").unwrap_err();
         assert!(format!("{err}").contains("unsupported target"));
+    }
+
+    #[test]
+    fn detects_daemon_target() {
+        let (p, _) = parse_header("# zyal: declarative target=daemon schema=runbook/smoke@1")
+            .expect("daemon target");
+        assert!(matches!(p, Profile::Daemon { .. }));
     }
 
     #[test]

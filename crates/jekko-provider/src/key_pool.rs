@@ -267,9 +267,11 @@ impl KeyPool {
 }
 
 fn read_env(path: &Path) -> BTreeMap<String, String> {
-    fs::read_to_string(path)
-        .map(|text| parse_env_lines(&text).into_iter().collect())
-        .unwrap_or_default()
+    #[allow(clippy::manual_unwrap_or_default)]
+    match fs::read_to_string(path) {
+        Ok(text) => parse_env_lines(&text).into_iter().collect(),
+        Err(_) => BTreeMap::new(),
+    }
 }
 
 #[cfg(test)]
@@ -289,6 +291,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_env(tmp.path(), "user", "OPENAI_API_KEY=k0\n");
         write_env(tmp.path(), "user_1", "OPENAI_API_KEY=k1\n");
+        write_env(tmp.path(), "user_2", "OPENAI_API_KEY=k2\n");
         let dirs = discover_in(tmp.path(), false);
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].user_id, "user");
