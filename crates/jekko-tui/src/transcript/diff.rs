@@ -1,7 +1,7 @@
 //! Unified-diff parser used by [`super::cards::ToolCard`].
 //!
 //! Ports `packages/jekko/src/cli/cmd/tui/util/revert-diff.ts`. The TS layer
-//! uses the `diff` npm package's `parsePatch`; here we implement a small
+//! uses a small parser for unified-diff hunks;
 //! hand-rolled parser that handles the unified-diff syntax we actually see
 //! from `jekko-runtime`: `--- a/file` / `+++ b/file` file headers followed by
 //! `@@ -l1,c1 +l2,c2 @@` hunk headers and `+` / `-` / ` ` body lines.

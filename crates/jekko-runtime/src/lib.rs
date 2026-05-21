@@ -31,6 +31,7 @@ pub mod auth;
 pub mod bus;
 pub mod compaction;
 pub mod daemon;
+pub mod daemon_transport;
 pub mod error;
 pub mod file;
 pub mod key_balancer;
@@ -79,6 +80,8 @@ pub struct Runtime {
     pub permissions: Arc<PermissionService>,
     /// Session service.
     pub sessions: Arc<SessionService>,
+    /// Daemon registry.
+    pub daemons: Arc<daemon::DaemonRegistry>,
     /// Session status tracker.
     pub status: Arc<StatusService>,
     /// Agent executor used for one-shot runs.
@@ -91,7 +94,8 @@ impl Runtime {
         let bus = Arc::new(Bus::new());
         let permissions = Arc::new(PermissionService::new(bus.clone()));
         let status = Arc::new(StatusService::new(bus.clone()));
-        let sessions = Arc::new(SessionService::new());
+        let sessions = Arc::new(SessionService::with_bus(bus.clone()));
+        let daemons = daemon::DaemonRegistry::with_bus(bus.clone());
         let agent_executor = Arc::new(crate::agent::ProviderAgentExecutor::new(
             permissions.clone(),
             sessions.clone(),
@@ -100,6 +104,7 @@ impl Runtime {
             bus,
             permissions,
             sessions,
+            daemons,
             status,
             agent_executor,
         }
@@ -110,11 +115,13 @@ impl Runtime {
         let bus = Arc::new(Bus::new());
         let permissions = Arc::new(PermissionService::new(bus.clone()));
         let status = Arc::new(StatusService::new(bus.clone()));
-        let sessions = Arc::new(SessionService::new());
+        let sessions = Arc::new(SessionService::with_bus(bus.clone()));
+        let daemons = daemon::DaemonRegistry::with_bus(bus.clone());
         Self {
             bus,
             permissions,
             sessions,
+            daemons,
             status,
             agent_executor,
         }
@@ -133,6 +140,7 @@ impl std::fmt::Debug for Runtime {
             .field("bus", &self.bus)
             .field("permissions", &self.permissions)
             .field("sessions", &self.sessions)
+            .field("daemons", &self.daemons)
             .field("status", &self.status)
             .field("agent_executor", &"<dyn AgentExecutor>")
             .finish()

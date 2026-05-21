@@ -597,7 +597,7 @@ pub fn recipe_session_empty(page: &Page, _ws: &tempfile::TempDir, _c: u16, _r: u
 /// `Route::Shell`, so the engagement flow is now (1) wait for idle empty-state
 /// ("Press Enter to engage"), (2) press Enter to fire `Action::EngageSession`,
 /// (3) wait until the slide animation completes and the logo / hint copy
-/// disappear. The Shell footer "Tab switch pane" stays visible across both
+/// disappear. The Shell banner "bypass permissions" stays visible across both
 /// idle and engaged states (it's route-specific), so we sentinel on the
 /// *disappearance* of "Press Enter to engage" to confirm the slide finished.
 ///
@@ -616,8 +616,8 @@ pub fn recipe_shell(page: &Page, _ws: &tempfile::TempDir, _c: u16, _r: u16) -> R
     while Instant::now() < deadline {
         let plain = page.screen().plain_text();
         // Phase A: once engaged, the empty-state body is suppressed, so the
-        // hint text is gone. Footer "switch pane" still renders.
-        if !plain.contains("Press Enter to engage") && plain.contains("switch pane") {
+        // hint text is gone. The shell banner still renders.
+        if !plain.contains("Press Enter to engage") && plain.contains("bypass permissions") {
             engaged = true;
             break;
         }

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::bus::Bus;
 use crate::error::{RuntimeError, RuntimeResult};
 
 /// Lifecycle status of a daemon.
@@ -57,12 +58,21 @@ pub struct DaemonRecord {
 #[derive(Debug, Default)]
 pub struct DaemonRegistry {
     inner: RwLock<HashMap<String, DaemonRecord>>,
+    bus: Option<Arc<Bus>>,
 }
 
 impl DaemonRegistry {
     /// Construct an empty registry.
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// Construct an empty registry that publishes daemon lifecycle events.
+    pub fn with_bus(bus: Arc<Bus>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: RwLock::new(HashMap::new()),
+            bus: Some(bus),
+        })
     }
 
     /// Register a new daemon.
@@ -85,6 +95,7 @@ impl DaemonRegistry {
             .write()
             .await
             .insert(record.id.clone(), record.clone());
+        self.publish_status(&record).await;
         record
     }
 
@@ -97,6 +108,7 @@ impl DaemonRegistry {
         };
         rec.status = status;
         rec.time_updated = Utc::now().timestamp_millis();
+        self.publish_status(rec).await;
         Ok(())
     }
 
@@ -114,6 +126,17 @@ impl DaemonRegistry {
             .filter(|d| d.session_id == session_id)
             .cloned()
             .collect()
+    }
+
+    async fn publish_status(&self, record: &DaemonRecord) {
+        if let Some(bus) = &self.bus {
+            let _ = bus
+                .publish(
+                    "daemon.status",
+                    serde_json::to_value(record).unwrap_or_else(|_| serde_json::json!({})),
+                )
+                .await;
+        }
     }
 }
 
@@ -143,5 +166,20 @@ mod tests {
         let _ = reg.register("session_2", "c").await;
         assert_eq!(reg.list_for_session("session_1").await.len(), 2);
         assert_eq!(reg.list_for_session("session_2").await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_events_publish_when_bus_is_present() {
+        let bus = Arc::new(Bus::new());
+        let reg = DaemonRegistry::with_bus(bus.clone());
+        let mut sub = bus.subscribe("daemon.status").await;
+
+        let rec = reg.register("session_1", "checker").await;
+        assert_eq!(sub.recv().await.unwrap().kind, "daemon.status");
+
+        reg.set_status(&rec.id, DaemonStatus::Running)
+            .await
+            .unwrap();
+        assert_eq!(sub.recv().await.unwrap().kind, "daemon.status");
     }
 }

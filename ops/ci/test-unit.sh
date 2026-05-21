@@ -6,4 +6,4 @@ cd "$ROOT"
 
 git config --global user.email "bot@jekko.ai"
 git config --global user.name "jekko"
-rtk cargo test --workspace --locked --no-fail-fast
+cargo test --workspace --locked --no-fail-fast

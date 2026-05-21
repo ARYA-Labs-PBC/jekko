@@ -43,7 +43,11 @@ pub fn run(args: &Args, json: bool) -> Result<i32> {
         for r in runs {
             println!(
                 "  {} exit={} duration_ms={} changed={} argv={}",
-                r.cmd_id, r.exit_code, r.duration_ms, r.changed_files, r.argv.join(" ")
+                r.cmd_id,
+                r.exit_code,
+                r.duration_ms,
+                r.changed_files,
+                r.argv.join(" ")
             );
         }
     }

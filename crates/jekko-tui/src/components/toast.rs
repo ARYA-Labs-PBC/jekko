@@ -6,6 +6,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
+use crate::glyph_set;
+
 /// Toast severity. Ports `ui/toast.tsx`'s tone-based color palette.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToastKind {
@@ -16,6 +18,15 @@ pub enum ToastKind {
 }
 
 impl ToastKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ToastKind::Info => "info",
+            ToastKind::Success => "success",
+            ToastKind::Warning => "warning",
+            ToastKind::Error => "error",
+        }
+    }
+
     fn accent(self) -> Color {
         match self {
             ToastKind::Info => Color::Rgb(0x55, 0xa3, 0xff),
@@ -26,11 +37,15 @@ impl ToastKind {
     }
 
     fn sigil(self) -> &'static str {
+        // T-A11Y-MIGRATION / T-GLYPH-WAVE2: honor the active GlyphMode for
+        // every toast sigil (Unicode `ⓘ`/`✓`/`▲`/`✕` vs ASCII
+        // `(i)`/`[v]`/`!`/`x`).
+        let g = glyph_set::current();
         match self {
-            ToastKind::Info => "ⓘ",
-            ToastKind::Success => "✓",
-            ToastKind::Warning => "▲",
-            ToastKind::Error => "✕",
+            ToastKind::Info => g.info_marker,
+            ToastKind::Success => g.agent_done,
+            ToastKind::Warning => g.warning_marker,
+            ToastKind::Error => g.error_marker,
         }
     }
 }
@@ -110,6 +125,11 @@ impl ToastStack {
         while self.toasts.len() > MAX_VISIBLE * 2 {
             self.toasts.remove(0);
         }
+    }
+
+    /// Most recent toasts, newest first.
+    pub fn recent(&self, limit: usize) -> Vec<&Toast> {
+        self.toasts.iter().rev().take(limit).collect()
     }
 }
 

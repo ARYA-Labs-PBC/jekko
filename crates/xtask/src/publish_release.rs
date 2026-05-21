@@ -1,4 +1,3 @@
-use crate::publish_sync_release_files;
 use anyhow::{bail, Context, Result};
 use std::env;
 use std::process::Command;
@@ -67,20 +66,7 @@ pub fn finalize(repo_root: &std::path::Path, version: &str, repo: Option<&str>) 
         "git checkout -B dev origin/dev",
     )?;
 
-    publish_sync_release_files::run(repo_root, version)?;
-
-    run_checked(
-        Command::new("git")
-            .args(["commit", "-am", &format!("sync release versions for {tag}")])
-            .current_dir(repo_root),
-        "git commit sync release versions",
-    )?;
-    run_checked(
-        Command::new("git")
-            .args(["push", "origin", "HEAD:dev", "--no-verify"])
-            .current_dir(repo_root),
-        "git push dev",
-    )?;
+    println!("publish-release-finalize: binary-only version sync is handled by xtask release");
 
     let repo = match repo.map(ToOwned::to_owned) {
         Some(value) => value,

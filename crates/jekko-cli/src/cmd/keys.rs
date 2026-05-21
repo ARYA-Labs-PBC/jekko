@@ -2,7 +2,7 @@
 //!
 //! Keys live in `~/.jekko/users/<user_id>/llm.env`. The default user dir is
 //! `user`, used by every install. Additional dirs (`user_1`, `user_2`, ...)
-//! only unlock when jnoccio is unlocked
+//! only unlock when the Jnoccio developer unlock is present
 //! ([`jekko_jnoccio_boot::unlock::is_unlocked`]). When more than one user
 //! dir is present, the runtime load-balances across the cross-product of
 //! `(provider, user, model)` via [`jekko_provider::key_pool::KeyPool`] +
@@ -32,7 +32,7 @@ use crate::cli::GlobalOpts;
 #[derive(Args, Debug)]
 pub struct KeysArgs {
     /// User dir under `~/.jekko/users/<user>/`. Defaults to `user`. Extra
-    /// user dirs require jnoccio unlock.
+    /// user dirs require the Jnoccio developer unlock.
     #[arg(long, global = true, default_value = DEFAULT_USER_ID)]
     pub user: String,
 
@@ -87,7 +87,7 @@ pub struct KeysUsersArgs {
 }
 
 pub fn run(_global: &GlobalOpts, args: &KeysArgs) -> Result<()> {
-    migrate_legacy_jekko_env()?;
+    migrate_existing_jekko_env()?;
     enforce_user_gate(&args.user, jekko_jnoccio_boot::unlock::is_unlocked())?;
     match &args.command {
         KeysCommand::Set(opts) => set(&args.user, opts),
@@ -109,51 +109,51 @@ fn keys_path(user_id: &str) -> Result<PathBuf> {
     Ok(user_dir(&root, user_id).llm_env_path)
 }
 
-/// Reject non-default user ids unless jnoccio is unlocked. `unlocked` is
+/// Reject non-default user ids unless Jnoccio developer unlock is present. `unlocked` is
 /// injected by callers so tests can drive both paths deterministically.
 fn enforce_user_gate(user_id: &str, unlocked: bool) -> Result<()> {
     if user_id == DEFAULT_USER_ID || unlocked {
         return Ok(());
     }
     Err(anyhow!(
-        "creating extra users requires jnoccio unlock; got user `{user_id}`"
+        "creating extra users requires JNOCCIO_DEVELOPER_KEY developer unlock; got user `{user_id}`"
     ))
 }
 
-/// Move legacy `~/.jekko/jekko.env` to `~/.jekko/users/user/llm.env` on the
-/// first invocation after upgrade. Leaves `~/.jekko/jekko.env.bak` behind so
-/// the original is recoverable. Idempotent — does nothing once `users/` exists
-/// or the legacy file is already gone.
-fn migrate_legacy_jekko_env() -> Result<()> {
+/// Move an existing single-user `~/.jekko/jekko.env` into
+/// `~/.jekko/users/user/llm.env` on the first invocation after upgrade. Leaves
+/// `~/.jekko/jekko.env.bak` behind so the original is recoverable. Idempotent:
+/// does nothing once `users/` exists or the source file is already gone.
+fn migrate_existing_jekko_env() -> Result<()> {
     let Some(users) = users_root() else {
         return Ok(());
     };
     if users.exists() {
         return Ok(());
     }
-    let legacy = users
-        .parent()
-        .map(|jekko| jekko.join("jekko.env"))
-        .unwrap_or_default();
-    if !legacy.is_file() {
+    let source = match users.parent() {
+        Some(jekko) => jekko.join("jekko.env"),
+        None => PathBuf::new(),
+    };
+    if !source.is_file() {
         return Ok(());
     }
     let default = user_dir(&users, DEFAULT_USER_ID);
     fs::create_dir_all(&default.dir)
         .with_context(|| format!("create default user dir at {}", default.dir.display()))?;
-    fs::rename(&legacy, &default.llm_env_path).with_context(|| {
+    fs::rename(&source, &default.llm_env_path).with_context(|| {
         format!(
             "move {} to {}",
-            legacy.display(),
+            source.display(),
             default.llm_env_path.display()
         )
     })?;
-    let backup = legacy.with_extension("env.bak");
+    let backup = source.with_extension("env.bak");
     fs::copy(&default.llm_env_path, &backup)
-        .with_context(|| format!("write legacy backup at {}", backup.display()))?;
+        .with_context(|| format!("write previous-key backup at {}", backup.display()))?;
     eprintln!(
         "migrated {} → {} (backup at {})",
-        legacy.display(),
+        source.display(),
         default.llm_env_path.display(),
         backup.display()
     );
@@ -326,7 +326,7 @@ fn users(args: &KeysUsersArgs) -> Result<()> {
         );
     }
     if !unlocked {
-        println!("(unlock jnoccio to enable multi-user balancing)");
+        println!("(set JNOCCIO_DEVELOPER_KEY to enable multi-user balancing)");
     }
     Ok(())
 }
@@ -378,14 +378,14 @@ mod tests {
     }
 
     #[test]
-    fn migrates_legacy_jekko_env_into_default_user_dir() {
+    fn migrates_existing_jekko_env_into_default_user_dir() {
         let tmp = TempDir::new().unwrap();
         let jekko = tmp.path().join(".jekko");
         fs::create_dir_all(&jekko).unwrap();
         fs::write(jekko.join("jekko.env"), "OPENAI_API_KEY=k\n").unwrap();
         let _guard = EnvGuard::install(&jekko, None);
 
-        migrate_legacy_jekko_env().unwrap();
+        migrate_existing_jekko_env().unwrap();
 
         let new_path = jekko.join("users").join("user").join("llm.env");
         assert!(new_path.is_file(), "new keys file missing");
@@ -394,11 +394,11 @@ mod tests {
         assert!(backup.is_file(), "backup missing");
         assert!(
             !jekko.join("jekko.env").exists(),
-            "legacy file should be moved"
+            "source file should be moved"
         );
 
         // Idempotent: second run is a no-op.
-        migrate_legacy_jekko_env().unwrap();
+        migrate_existing_jekko_env().unwrap();
         assert!(new_path.is_file());
     }
 
@@ -406,7 +406,7 @@ mod tests {
     fn enforce_user_gate_blocks_non_default_when_locked() {
         assert!(enforce_user_gate("user", false).is_ok());
         let err = enforce_user_gate("user_1", false).unwrap_err().to_string();
-        assert!(err.contains("requires jnoccio unlock"));
+        assert!(err.contains("requires JNOCCIO_DEVELOPER_KEY developer unlock"));
     }
 
     #[test]

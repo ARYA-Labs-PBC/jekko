@@ -136,6 +136,43 @@ That lane routes through `cargo run -p xtask -- live-prod` and reuses the
 The live lane refuses to run when `CI=true`, redacts key values in output,
 and writes screenshots under `target/tuiwright-jekko/`.
 
+## Local live balancer lane
+
+This lane is also local-only and refuses to run in CI. It proves the real
+`jekko run` path selects every provider-specific candidate under the active
+`~/.jekko/users/<user>/llm.env` tree for the chosen provider.
+
+The smoke reads the current candidate set, stages those exact `llm.env`
+files into a disposable temp `HOME` / `JEKKO_HOME`, then loops until every
+candidate user has been observed once or the ceiling expires.
+
+The source of truth for per-user credentials is:
+
+```sh
+~/.jekko/users/<user>/llm.env
+```
+
+Supported overrides:
+
+- `JEKKO_LIVE_BALANCER_PROVIDER`
+- `JEKKO_LIVE_BALANCER_MODEL`
+- `JEKKO_LIVE_BALANCER_COUNT`
+- `JEKKO_BIN`
+
+Unlike the live-prod lane, this smoke is not pinned to a sample pair such as
+`user_1` / `user_2`. It proves whatever provider-specific candidates are
+currently eligible on the machine.
+
+Run it through the wrapper script:
+
+```sh
+JEKKO_LIVE_BALANCER=1 scripts/live-balancer-smoke.sh
+```
+
+The wrapper builds and installs the host binary, then runs the ignored
+tuiwright smoke with an exact test filter so helper tests in the same file do
+not accidentally run.
+
 ## Background
 
 The baseline matrix was captured from the pre-Rust product build to freeze a

@@ -1,18 +1,17 @@
-//! Ratatui widgets ported from `packages/jekko/src/cli/cmd/tui/component/`
-//! and `packages/jekko/src/cli/cmd/tui/ui/`. Phase 8 of the migration plan.
+//! Ratatui widgets used by the Claude/Codex-style chat surface.
+//!
+//! The legacy `Logo`/`NavBar`/`FooterBand`/etc. widgets were removed in the
+//! R3 legacy purge. What survives is the inline boot block (rendered once at
+//! session start), the streaming spinner glyph, and the toast stack.
 
-pub mod activity_pulse;
-pub mod footer;
-pub mod logo;
-pub mod nav_header;
+pub mod boot_inline;
+pub mod footer_status;
+pub mod output_pager;
+pub mod permission_banner;
 pub mod spinner;
 pub mod splash;
 pub mod toast;
+pub mod working_strip;
 
-pub use activity_pulse::{sample as sample_activity_pulse, PulseSample};
-pub use footer::{FooterBand, FooterBandLegacy};
-pub use logo::{Logo, LogoBuilder};
-pub use nav_header::{AppHeader, AuditStatus, NavBar, NavigationHeader, NavigationTab, StatusBar};
 pub use spinner::Spinner;
-pub use splash::{Splash, SplashState};
 pub use toast::{Toast, ToastKind, ToastStack};

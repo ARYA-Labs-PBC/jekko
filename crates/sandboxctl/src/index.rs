@@ -61,8 +61,7 @@ fn read(sandbox_root: &Path) -> Result<IndexDoc> {
     let mut buf = String::new();
     f.read_to_string(&mut buf)
         .with_context(|| format!("read {}", path.display()))?;
-    let doc = serde_json::from_str(&buf)
-        .with_context(|| format!("parse {}", path.display()))?;
+    let doc = serde_json::from_str(&buf).with_context(|| format!("parse {}", path.display()))?;
     Ok(doc)
 }
 
@@ -98,7 +97,10 @@ fn acquire_lock(path: &Path) -> Result<LockGuard> {
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                 attempts += 1;
                 if attempts > 50 {
-                    anyhow::bail!("could not acquire index lock {} after 50 tries", path.display());
+                    anyhow::bail!(
+                        "could not acquire index lock {} after 50 tries",
+                        path.display()
+                    );
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }

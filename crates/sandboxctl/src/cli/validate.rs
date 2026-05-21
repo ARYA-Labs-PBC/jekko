@@ -69,7 +69,9 @@ fn pick_path(arg: Option<&Path>, default_lanes: Option<&Path>) -> Result<PathBuf
     if default_path.exists() {
         Ok(default_path)
     } else {
-        Err(anyhow::anyhow!("no lanes file specified and agent/sandbox-lanes.toml not found"))
-            .context("validate")
+        Err(anyhow::anyhow!(
+            "no lanes file specified and agent/sandbox-lanes.toml not found"
+        ))
+        .context("validate")
     }
 }

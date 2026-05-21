@@ -14,6 +14,33 @@ fast: workspace-fast
 setup:
 	cargo fetch
 
+hooks-install:
+	@echo "Committed hook sources:"
+	@echo "  tools/jankurai-hooks/pre-commit"
+	@echo "  ops/git-hooks/pre-push"
+	@echo "This target is informational; clone-local hook installation is manual."
+
+# Build release jekko, install to ~/.local/bin/jekko, and re-sign with adhoc
+# codesign. The re-sign is critical on macOS Sequoia — `cp` over an existing
+# Mach-O caches the previous signature hash and amfid kills the new binary on
+# launch (SIGKILL = exit 137). `codesign --force --sign -` refreshes the
+# cached hash so the new binary actually runs.
+install:
+	rtk cargo build -p jekko-cli --release
+	mkdir -p ~/.local/bin
+	cp target/release/jekko ~/.local/bin/jekko
+	codesign --force --sign - ~/.local/bin/jekko
+	# Also overwrite /opt/homebrew/bin/jekko if it exists + is writable. Brew
+	# prepends /opt/homebrew/bin to PATH, so an earlier binary there shadows
+	# ~/.local/bin/jekko and silently serves the previous build to the user.
+	if [ -w /opt/homebrew/bin ]; then \
+		cp target/release/jekko /opt/homebrew/bin/jekko && \
+		codesign --force --sign - /opt/homebrew/bin/jekko ; \
+	fi
+	# Print which binary PATH actually resolves so we can spot shadowing fast.
+	jekko --version
+	@printf 'resolved: ' && command -v jekko
+
 # one-command validation lane for agent iteration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 validate:
@@ -33,14 +60,23 @@ workspace-typecheck-fast:
 
 # Narrow lane for workspace test-only feedback.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
-# Narrow lane for workspace build-only feedback. (Cache enabled)
-# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 workspace-test-fast: core-test-fast jekko-test-fast
+
+# Optional nextest lane for fast local fanout when `cargo-nextest` is installed.
+# Kept separate from `fast` so default validation does not require an optional tool.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+workspace-nextest-fast:
+	rtk cargo nextest run --workspace --locked --no-fail-fast
 
 # Narrow lane for workspace build-only feedback. (Cache enabled)
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 workspace-build-fast:
 	rtk cargo build --workspace --locked
+
+# Build timing report for release confidence investigations.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
+workspace-build-timings:
+	rtk cargo build --workspace --locked --timings
 
 # Narrow lane for the core workspace package's fast feedback targets.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -219,17 +255,22 @@ cost-budget: audit-ci
 
 # Deterministic command-surface markers used by advisory scoring heuristics.
 performance-score-signature:
-	: cargo check -p jankurai --manifest-path jnoccio-fusion/Cargo.toml --locked
+	: jankurai rust witness build .
 	: jankurai audit . --mode advisory --changed-fast --json target/jankurai/fast-score.json --md target/jankurai/fast-audit.md --score-history target/jankurai/audit-fast.json
+	: cargo build --timings
+	: cargo nextest run -p jekko-tui
+	: sccache
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 doctor:
-	jankurai doctor --fail-on critical
+	cargo run -p xtask --locked -- preflight
+	cargo run -p xtask --locked -- guard-forbidden-runtime --mode final
 
 # Broader doctor lane for release-gate checks.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 doctor-full:
-	jankurai doctor --fail-on high
+	cargo run -p xtask --locked -- preflight
+	cargo run -p xtask --locked -- guard-forbidden-runtime --mode final
 
 # Narrow lane for a stricter, faster doctor check.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -239,9 +280,14 @@ doctor-fast: doctor
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 check-fast: fast doctor-fast score-fast
 
+# PR-ready local confidence gate: fast validation, security evidence,
+# proof binding/marking, rendered TUI CI, and score-only audit.
+# jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
+release-confidence-local: fast security proofbind proofmark-rust tui-ci score-fast
+
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 security:
-	bash tools/security-lane.sh
+	cargo run -p xtask --locked -- security-lane --out target/jankurai/security
 
 # Narrow lane wrappers for the proof and bad-behavior adoption entries.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
@@ -251,8 +297,13 @@ proof-routing:
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 proofbind:
+	#!/usr/bin/env bash
+	set -e
 	mkdir -p target/jankurai/proofbind
-	jankurai proofbind verify . --changed-from origin/main --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json
+	cargo run -p xtask --locked -- proof-receipt --lane security --status ok --out target/jankurai/proof-receipts/agent-tool-supply.json
+	if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md 2>/dev/null; then
+		jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md
+	fi
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 proofmark-rust: proofbind
@@ -267,55 +318,65 @@ rust-witness:
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 ci-bad-behavior:
 	mkdir -p target/jankurai
-	cargo test --manifest-path crates/jankurai/Cargo.toml --test language_bad_behavior --no-fail-fast > target/jankurai/language-bad-behavior.log 2>&1
+	jankurai audit . --mode advisory --changed-fast --changed-from origin/main --json target/jankurai/language-bad-behavior.json --md target/jankurai/language-bad-behavior.md
 
 git-bad-behavior: ci-bad-behavior
 release-bad-behavior: ci-bad-behavior
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
-# Uses `doctor-full` now that the root package-lock sentinel satisfies the
-# lockfile heuristic without relying on the older false-positive gap.
+# Uses `doctor-full` for local Rust-only preflight and forbidden-runtime guards.
 check: fast doctor-full score security
 
 # Rendered TUI component proof lane for HLT-013-RENDERED-UX-GAP evidence.
 ux-qa:
 	rtk jankurai ux audit --config agent/ux-qa.toml --out target/jankurai/ux-qa.json
 
-# Host binary smoke for the TUI-only product surface.
-tui-binary-smoke: jekko-build-host-fast
-	rtk cargo run -p jekko-cli -- --version
+# Launch the fullscreen Codex/Claude-style chat surface against the live
+# bridge. Requires a configured provider (see `jekko auth status`) or a
+# running jekko-server. Use `chat-echo` for an offline smoke.
+chat:
+	rtk cargo run -p jekko-cli -- chat
 
-# CI-safe TUI lane: no production keys, no browser lane.
-tui-ci: tui-binary-smoke
-	rtk cargo test -p jekko-tui --locked --no-fail-fast
-	JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
-	JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
+# Launch chat with the in-process EchoBackend. No gateway required.
+# Demonstrates the full streaming + tool-card pipeline against a fake
+# `Bash(echo "<prompt>")` tool flow.
+chat-echo:
+	rtk cargo run -p jekko-cli -- chat --echo
 
-# Local host-binary tuiwright startup proof. This is the fastest gate for
-# catching plugin-loading hangs on the built Mac/host binary.
-tui-startup-smoke: jekko-build-host-fast
-	JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
+# Performance bench harness for the inline TUI renderers (COWBOY.md K1+).
+# Runs all 5 criterion benches. Hard targets: scroll p95 < 8ms, append no
+# frame > 16ms, cold start < 80ms, idle CPU ~0%, resize relayout < 50ms.
+chat-bench:
+	rtk cargo bench -p jekko-tui --bench scroll_100k
+	rtk cargo bench -p jekko-tui --bench append_10k
+	rtk cargo bench -p jekko-tui --bench cold_start
+	rtk cargo bench -p jekko-tui --bench idle_cpu
+	rtk cargo bench -p jekko-tui --bench resize_relayout
 
-# Copy approved local Jekko/Jnoccio keys from home-level env files into the
-# canonical outside-repo live TUI test env file, redacting all output.
-tui-live-prod-init:
-	rtk cargo run -p xtask -- live-prod-init
+# Run every TUI bench against the saved `jekko-v1` baseline, failing the
+# lane on > 10% regression. Used by the CI proof-lane.
+chat-bench-compare:
+	rtk cargo bench -p jekko-tui --bench scroll_100k -- --baseline jekko-v1
+	rtk cargo bench -p jekko-tui --bench append_10k -- --baseline jekko-v1
+	rtk cargo bench -p jekko-tui --bench cold_start -- --baseline jekko-v1
+	rtk cargo bench -p jekko-tui --bench idle_cpu -- --baseline jekko-v1
+	rtk cargo bench -p jekko-tui --bench resize_relayout -- --baseline jekko-v1
 
-# Local-only live production TUI lane. This refuses to run in CI.
-tui-live-prod: jekko-build-host-fast
-	rtk cargo run -p xtask -- live-prod
+# Save a new `jekko-v1` baseline. Run this after intentional perf changes.
+chat-bench-baseline:
+	rtk cargo bench -p jekko-tui --bench scroll_100k -- --save-baseline jekko-v1
+	rtk cargo bench -p jekko-tui --bench append_10k -- --save-baseline jekko-v1
+	rtk cargo bench -p jekko-tui --bench cold_start -- --save-baseline jekko-v1
+	rtk cargo bench -p jekko-tui --bench idle_cpu -- --save-baseline jekko-v1
+	rtk cargo bench -p jekko-tui --bench resize_relayout -- --save-baseline jekko-v1
 
-# LOCAL ONLY: full live TUI connectivity + chat test. Uses real API keys.
-# Requires: JEKKO_TUI_LIVE_PROD=1 and JEKKO_API_KEY to be set.
-# Refuses to run in CI.
-live-tui-test:
-	JEKKO_TUI_LIVE_PROD=1 bash ops/ci/live-tui-test.sh
-
-# LOCAL ONLY: Jnoccio PTY tests with mock server.
-# Requires JNOCCIO_TUI_TEST=1 and JEKKO_BIN.
-tui-jnoccio-test: jekko-build-host-fast
-	JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" JNOCCIO_TUI_TEST=1 \
-		cargo test -p tuiwright-jekko-unlock --test jnoccio_tui_dashboard -- --ignored --nocapture
+# Quick local smoke (no baseline) — for development iteration.
+chat-bench-quick:
+	rtk cargo bench -p jekko-tui --bench scroll_100k -- --quick
+	rtk cargo bench -p jekko-tui --bench append_10k -- --quick
+	rtk cargo bench -p jekko-tui --bench cold_start -- --quick
+	rtk cargo bench -p jekko-tui --bench idle_cpu -- --quick
+	rtk cargo bench -p jekko-tui --bench resize_relayout -- --quick
 
 # Narrow lane for the sandboxctl Rust crate compile path.
 # jankurai:proof HLT-012-OVERBROAD-AGENCY parallel=1 cache=cargo-build narrow-targets=true
@@ -471,7 +532,7 @@ memory-benchmark-score-mix:
 # LOCAL ONLY: live QBank/Jnoccio smoke. Requires local Jnoccio credentials and
 # must never be wired into CI or proof lanes.
 qbank-live-local:
-	cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover --query "open access hard answerable scientific paper" --run-root .jekko/daemon/paper-qbank-live-local/discovery
+	cargo run --manifest-path crates/qbank-builder/Cargo.toml --locked --bin qbank -- discover --query "open access hard answerable scientific paper" --run-root .jankurai/daemon/paper-qbank-live-local/discovery
 
 # AutoResearch orchestrator: seed the chase state directory.
 # DEV ONLY. Production path: ZYAL daemon armed via Jekko host.
@@ -502,21 +563,21 @@ chase-daemon workers="4" candidate="cogcore":
 
 # Strict reducer lane for the current chase state.
 chase-reduce:
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin chase_reduce -- --lanes .jekko/daemon/memory-benchmark-chase/reports/lanes --current-best-state .jekko/daemon/memory-benchmark-chase/best-state.json --current-candidates .jekko/daemon/memory-benchmark-chase/reports/lanes --scoreboard .jekko/daemon/memory-benchmark-chase/scoreboard.tsv --best-state .jekko/daemon/memory-benchmark-chase/best-state.json --promotion-decision .jekko/daemon/memory-benchmark-chase/promotion-decision.json --negative-memory .jekko/daemon/memory-benchmark-chase/negative-memory.jsonl --curriculum .jekko/daemon/memory-benchmark-chase/curriculum-proposals.json --best-patch .jekko/daemon/memory-benchmark-chase/best.patch --out .jekko/daemon/memory-benchmark-chase/reports/final-score.json --markdown .jekko/daemon/memory-benchmark-chase/reports/final-score.md
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin chase_reduce -- --lanes .jankurai/daemon/memory-benchmark-chase/reports/lanes --current-best-state .jankurai/daemon/memory-benchmark-chase/best-state.json --current-candidates .jankurai/daemon/memory-benchmark-chase/reports/lanes --scoreboard .jankurai/daemon/memory-benchmark-chase/scoreboard.tsv --best-state .jankurai/daemon/memory-benchmark-chase/best-state.json --promotion-decision .jankurai/daemon/memory-benchmark-chase/promotion-decision.json --negative-memory .jankurai/daemon/memory-benchmark-chase/negative-memory.jsonl --curriculum .jankurai/daemon/memory-benchmark-chase/curriculum-proposals.json --best-patch .jankurai/daemon/memory-benchmark-chase/best.patch --out .jankurai/daemon/memory-benchmark-chase/reports/final-score.json --markdown .jankurai/daemon/memory-benchmark-chase/reports/final-score.md
 
 # Chase preflight lane for the sandboxed AutoResearch memory benchmark.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 memory-benchmark-chase-preflight:
-	mkdir -p .jekko/daemon/memory-benchmark-chase/preflight-candidates
+	mkdir -p .jankurai/daemon/memory-benchmark-chase/preflight-candidates
 	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin generate_suite -- --split public-dev --seed {{memory_benchmark_seed}} --fixtures 500 --out target/memory-benchmark/generated-public-dev.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate ledger_first --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate ledger_first --suite real-papers --paper-bank crates/memory-benchmark/data/fixture-paper-bank --qbank-top-n 100 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first-qbank.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin score_mix -- --name ledger_first --input generated:0.60:.jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json --input qbank:0.40:.jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first-qbank.json --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate hybrid_index --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/hybrid_index.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate temporal_graph --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/temporal_graph.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate compression_first --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/compression_first.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate skeptic_dataset --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jekko/daemon/memory-benchmark-chase/preflight-candidates/skeptic_dataset.json
-	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin chase_reduce -- --lanes .jekko/daemon/memory-benchmark-chase/preflight-candidates --current-best-state .jekko/daemon/memory-benchmark-chase/best-state.json --current-candidates .jekko/daemon/memory-benchmark-chase/preflight-candidates --scoreboard .jekko/daemon/memory-benchmark-chase/scoreboard.tsv --best-state .jekko/daemon/memory-benchmark-chase/best-state.json --promotion-decision .jekko/daemon/memory-benchmark-chase/promotion-decision.json --negative-memory .jekko/daemon/memory-benchmark-chase/negative-memory.jsonl --curriculum .jekko/daemon/memory-benchmark-chase/curriculum-proposals.json --best-patch .jekko/daemon/memory-benchmark-chase/best.patch --out .jekko/daemon/memory-benchmark-chase/reports/final-score.json --markdown .jekko/daemon/memory-benchmark-chase/reports/final-score.md
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate ledger_first --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jankurai/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate ledger_first --suite real-papers --paper-bank crates/memory-benchmark/data/fixture-paper-bank --qbank-top-n 100 --out .jankurai/daemon/memory-benchmark-chase/preflight-candidates/ledger_first-qbank.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin score_mix -- --name ledger_first --input generated:0.60:.jankurai/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json --input qbank:0.40:.jankurai/daemon/memory-benchmark-chase/preflight-candidates/ledger_first-qbank.json --out .jankurai/daemon/memory-benchmark-chase/preflight-candidates/ledger_first.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate hybrid_index --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jankurai/daemon/memory-benchmark-chase/preflight-candidates/hybrid_index.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate temporal_graph --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jankurai/daemon/memory-benchmark-chase/preflight-candidates/temporal_graph.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate compression_first --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jankurai/daemon/memory-benchmark-chase/preflight-candidates/compression_first.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin bench -- --candidate skeptic_dataset --suite generated --seed {{memory_benchmark_seed}} --fixtures 500 --out .jankurai/daemon/memory-benchmark-chase/preflight-candidates/skeptic_dataset.json
+	cargo run --manifest-path crates/memory-benchmark/Cargo.toml --locked --bin chase_reduce -- --lanes .jankurai/daemon/memory-benchmark-chase/preflight-candidates --current-best-state .jankurai/daemon/memory-benchmark-chase/best-state.json --current-candidates .jankurai/daemon/memory-benchmark-chase/preflight-candidates --scoreboard .jankurai/daemon/memory-benchmark-chase/scoreboard.tsv --best-state .jankurai/daemon/memory-benchmark-chase/best-state.json --promotion-decision .jankurai/daemon/memory-benchmark-chase/promotion-decision.json --negative-memory .jankurai/daemon/memory-benchmark-chase/negative-memory.jsonl --curriculum .jankurai/daemon/memory-benchmark-chase/curriculum-proposals.json --best-patch .jankurai/daemon/memory-benchmark-chase/best.patch --out .jankurai/daemon/memory-benchmark-chase/reports/final-score.json --markdown .jankurai/daemon/memory-benchmark-chase/reports/final-score.md
 
 # Composed memory-benchmark fast lane.
 memory-benchmark-fast: memory-benchmark-check memory-benchmark-test memory-benchmark-determinism
@@ -543,8 +604,9 @@ ci-local-proofbind:
 	#!/usr/bin/env bash
 	set -e
 	mkdir -p target/jankurai/proofbind
-	if ! jankurai proofbind verify . --changed-from origin/main 2>/dev/null; then
-		jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json
+	cargo run -p xtask --locked -- proof-receipt --lane security --status ok --out target/jankurai/proof-receipts/agent-tool-supply.json
+	if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md 2>/dev/null; then
+		jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md
 	fi
 
 # CI step 4: proofmark rust binding.
@@ -560,13 +622,13 @@ ci-local-zyalc:
 # CI step 6: language bad-behavior tests.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 ci-local-bad-behavior:
-	cargo test --manifest-path crates/jankurai/Cargo.toml --test language_bad_behavior --no-fail-fast
+	jankurai audit . --mode advisory --changed-fast --changed-from origin/main --json target/jankurai/language-bad-behavior.json --md target/jankurai/language-bad-behavior.md
 
 # CI step 7: security scan in CI profile (strict).
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-security:
 	mkdir -p target/jankurai/security
-	jankurai security run . --strict --profile ci --out target/jankurai/security/evidence.json
+	cargo run -p xtask --locked -- security-lane --profile ci --out target/jankurai/security
 
 # CI step 8: cargo audit on tuiwright-jekko-unlock (CI runs it there).
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
@@ -594,8 +656,33 @@ ci-doctor: doctor
 ci-quick:
 	bash scripts/ci-local.sh quick
 
+# CI-safe TUI lane: host binary smoke, rendered TUI tests, and tuiwright compile checks.
+tui-startup-smoke:
+	CARGO_TARGET_DIR=target/codex-plan JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
+
+tui-ci:
+	CARGO_TARGET_DIR=target/codex-plan rtk cargo build -p jekko-cli --locked
+	CARGO_TARGET_DIR=target/codex-plan rtk cargo run -p jekko-cli -- --version
+	CARGO_TARGET_DIR=target/codex-plan rtk cargo run -p jekko-cli -- --help
+	CARGO_TARGET_DIR=target/codex-plan rtk cargo test -p jekko-tui --locked --no-fail-fast
+	CARGO_TARGET_DIR=target/codex-plan JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
+	CARGO_TARGET_DIR=target/codex-plan JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
+
 ci-audit:
 	bash scripts/ci-local.sh audit
 
 ci:
 	just check-fast
+
+# Local-only live production lane. Requires operator opt-in and a local env file.
+tui-live-prod-init:
+	rtk cargo run -p xtask --locked -- live-prod-init
+
+# Local-only live production lane. Requires operator opt-in and a local env file.
+tui-live-prod:
+	rtk cargo run -p xtask --locked -- live-prod
+
+rust-map:
+	jankurai rust map .
+rust-diagnose:
+	jankurai rust diagnose .

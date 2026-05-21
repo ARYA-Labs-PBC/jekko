@@ -26,6 +26,10 @@ pub struct CompileReport {
 
 pub fn compile_one(source: &Path, out_override: Option<&Path>, check: bool) -> Result<Outcome> {
     let info = profile::detect(source)?;
+    if let Profile::Daemon { .. } = &info.profile {
+        validate_daemon_profile(source, &info.raw)?;
+        return Ok(Outcome::Unchanged(source.to_path_buf()));
+    }
     let target = match out_override {
         Some(p) => p.to_path_buf(),
         None => default_target(source, &info.profile),
@@ -103,7 +107,9 @@ pub fn inspect(source: &Path) -> Result<InspectInfo> {
     let info = profile::detect(source)?;
     let target = Some(default_target(source, &info.profile));
     let schema = match &info.profile {
-        Profile::DeclarativeToml { schema } | Profile::Workflow { schema } => Some(schema.clone()),
+        Profile::DeclarativeToml { schema }
+        | Profile::Workflow { schema }
+        | Profile::Daemon { schema } => Some(schema.clone()),
         Profile::Runbook => None,
     };
     Ok(InspectInfo {
@@ -135,6 +141,7 @@ fn default_target(source: &Path, profile: &Profile) -> PathBuf {
             PathBuf::from(format!(".github/workflows/{stem}.yml"))
         }
         Profile::Runbook => source.with_extension("yml"),
+        Profile::Daemon { .. } => source.to_path_buf(),
     }
 }
 
@@ -153,7 +160,24 @@ fn emit(profile: &Profile, raw: &str) -> Result<(String, String)> {
         Profile::Runbook => Ok((raw.to_string(), String::new())),
         Profile::DeclarativeToml { .. } => Ok((emit_toml(raw)?, "# ".into())),
         Profile::Workflow { .. } => Ok((emit_workflow(raw)?, "# ".into())),
+        Profile::Daemon { .. } => Err(anyhow!("daemon profiles are validation-only")),
     }
+}
+
+fn validate_daemon_profile(source: &Path, raw: &str) -> Result<()> {
+    if !raw.contains("<<<ZYAL v1:daemon") {
+        return Err(anyhow!(
+            "daemon profile missing daemon sentinel in {}",
+            source.display()
+        ));
+    }
+    if !raw.contains("<<<END_ZYAL") {
+        return Err(anyhow!(
+            "daemon profile missing END_ZYAL sentinel in {}",
+            source.display()
+        ));
+    }
+    Ok(())
 }
 
 fn emit_toml(raw: &str) -> Result<String> {
