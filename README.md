@@ -5,12 +5,16 @@ multi-provider coding agent: a Ratatui TUI, an Axum HTTP/OpenAPI server, an
 embedded SQLite store, and a streaming provider runtime, all shipped as a
 single static binary.
 
+<p align="center">
+  <img src="docs/assets/jekko-tui-zyal-demo.gif" alt="Animated Jekko TUIwright demo" width="960">
+</p>
+
 ## Install
 
-First Rust release tag is TBD. Once tagged, install via Cargo:
+Current Rust release target: `v0.1.1`. Once tagged, install via Cargo:
 
 ```bash
-cargo install --git https://github.com/jeppsontaylor/jekko --tag <vX.Y.Z> jekko-cli
+cargo install --git https://github.com/jeppsontaylor/jekko --tag v0.1.1 jekko-cli
 ```
 
 Or via the Nix flake (provides `jekko` on `$PATH` and a dev shell):
@@ -92,6 +96,10 @@ cargo run -p xtask -- ci-fast
 cargo run -p xtask -- package
 cargo run -p xtask -- guard-forbidden-runtime
 ```
+
+GitHub Actions is the merge gate. PRs run the remote CI suite on the
+pull request itself, and protected branches require those checks to pass
+before merge.
 
 ## Releasing
 
