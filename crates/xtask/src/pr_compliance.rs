@@ -1,6 +1,5 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 use std::process::Command as ProcessCommand;
 
 use crate::current_github_event_context;
@@ -62,32 +61,6 @@ pub fn run() -> Result<()> {
             &format!("/repos/{repo}/issues/{number}/labels/needs:issue"),
         ]);
         return Ok(());
-    }
-
-    let issue_count = closing_issue_count(&repo, number)?;
-    if issue_count == 0 {
-        gh_api([
-            "--method",
-            "POST",
-            &format!("/repos/{repo}/issues/{number}/labels"),
-            "-f",
-            "labels=[\"needs:issue\"]",
-        ])?;
-        gh_api([
-            "--method",
-            "POST",
-            &format!("/repos/{repo}/issues/{number}/comments"),
-            "-f",
-            &format!(
-                "body=Thanks for your contribution!\n\nThis PR doesn't have a linked issue. All PRs must reference an existing issue.\n\nPlease:\n1. Open an issue describing the bug/feature (if one doesn't exist)\n2. Add `Fixes #<number>` or `Closes #<number>` to this PR description\n\nSee [CONTRIBUTING.md](../blob/{default_branch}/CONTRIBUTING.md#issue-first-policy) for details."
-            ),
-        ])?;
-    } else {
-        let _ = gh_api([
-            "--method",
-            "DELETE",
-            &format!("/repos/{repo}/issues/{number}/labels/needs:issue"),
-        ]);
     }
 
     Ok(())
@@ -152,45 +125,6 @@ fn matches_title_prefix(title: &str, allowed: &[&str]) -> bool {
         }
         false
     })
-}
-
-fn closing_issue_count(repo: &str, number: u64) -> Result<u64> {
-    let (owner, name) = repo
-        .split_once('/')
-        .context("GITHUB_REPOSITORY must be in owner/repo form")?;
-    let output = ProcessCommand::new("gh")
-        .args([
-            "api",
-            "graphql",
-            "-f",
-            &format!("owner={owner}"),
-            "-f",
-            &format!("repo={name}"),
-            "-F",
-            &format!("number={number}"),
-            "-f",
-            &format!("query={}", graphql_query()),
-        ])
-        .output()
-        .context("running gh api graphql")?;
-    if !output.status.success() {
-        bail!("gh api graphql failed with status {}", output.status);
-    }
-    let json: Value =
-        serde_json::from_slice(&output.stdout).context("parse GraphQL response JSON")?;
-    json.get("data")
-        .and_then(|data| data.get("repository"))
-        .and_then(|repo| repo.get("pullRequest"))
-        .and_then(|pr| pr.get("closingIssuesReferences"))
-        .and_then(|refs| refs.get("totalCount"))
-        .and_then(Value::as_u64)
-        .context("missing closingIssuesReferences.totalCount")
-}
-
-fn graphql_query() -> &'static str {
-    r#"
-query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner, name:$repo) { pullRequest(number:$number) { closingIssuesReferences(first: 1) { totalCount } } } }
-"#
 }
 
 fn gh_api<const N: usize>(args: [&str; N]) -> Result<()> {
