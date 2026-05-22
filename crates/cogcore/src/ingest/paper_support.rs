@@ -1,6 +1,8 @@
 use crate::core::{ClaimModality, PrivacyClass, SourceRef, StoredEvent};
 use crate::ingest::equation::EqAtom;
-use crate::ingest::paper::{IngestedPaper, PaperSection, SourceSpec};
+use crate::ingest::paper::PaperSection;
+#[cfg(test)]
+use crate::ingest::paper::{IngestedPaper, SourceSpec};
 use crate::ingest::theorem::TheoremRef;
 
 #[derive(Debug)]
@@ -13,6 +15,7 @@ pub(crate) struct PaperEventCtx {
     pub(crate) tags: Vec<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_stored_event(
     id: String,
     kind: &str,
@@ -43,6 +46,7 @@ pub(crate) fn build_stored_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_event(ctx: &PaperEventCtx, kind: &str, body: String) -> StoredEvent {
     build_stored_event(
         String::new(),
@@ -77,6 +81,7 @@ pub(crate) fn map_theorem_body(thm: &TheoremRef) -> String {
     format!("{} {}: {}", thm.kind, thm.name, thm.statement)
 }
 
+#[cfg(test)]
 fn paper_source(uri: &str, citation: &str, quality: f32) -> SourceSpec {
     SourceSpec {
         uri: uri.to_string(),
@@ -85,6 +90,7 @@ fn paper_source(uri: &str, citation: &str, quality: f32) -> SourceSpec {
     }
 }
 
+#[cfg(test)]
 fn section(id: &str, title: &str, text: &str, section_hash: &str) -> PaperSection {
     PaperSection {
         section_id: id.to_string(),
@@ -94,6 +100,8 @@ fn section(id: &str, title: &str, text: &str, section_hash: &str) -> PaperSectio
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn paper_fixture(
     publication_hash: &str,
     title: &str,
@@ -125,8 +133,8 @@ mod tests {
     use super::*;
     use crate::core::ClaimModality;
     use crate::ingest::paper::RuleBackend;
-    use crate::ingest::IngestBackend;
     use crate::ingest::paper_json::parse_jsonl_event;
+    use crate::ingest::IngestBackend;
 
     #[test]
     fn rule_backend_emits_section_eq_theorem_claim_events() {

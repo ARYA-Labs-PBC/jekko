@@ -12,7 +12,7 @@ pub(crate) fn parse_object(s: &str) -> Option<BTreeMap<String, String>> {
     let bytes = inner.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        skip_ignored(bytes, &mut i, &[b',']);
+        skip_ignored(bytes, &mut i, b",");
         if i >= bytes.len() {
             break;
         }
@@ -21,7 +21,7 @@ pub(crate) fn parse_object(s: &str) -> Option<BTreeMap<String, String>> {
         }
         let (key, after_key) = read_string(inner, i)?;
         i = after_key;
-        skip_ignored(bytes, &mut i, &[b':']);
+        skip_ignored(bytes, &mut i, b":");
         if i >= bytes.len() {
             return None;
         }
@@ -163,7 +163,10 @@ pub(crate) fn get_string_array(map: &BTreeMap<String, String>, key: &str) -> Opt
     })
 }
 
-pub(crate) fn get_source_array(map: &BTreeMap<String, String>, key: &str) -> Option<Vec<SourceRef>> {
+pub(crate) fn get_source_array(
+    map: &BTreeMap<String, String>,
+    key: &str,
+) -> Option<Vec<SourceRef>> {
     let raw = map.get(key)?;
     if raw == "null" {
         return None;
@@ -208,7 +211,7 @@ where
     let mut i = 0;
     let mut out = Vec::new();
     while i < bytes.len() {
-        skip_ignored(bytes, &mut i, &[b',']);
+        skip_ignored(bytes, &mut i, b",");
         if i >= bytes.len() {
             break;
         }
@@ -222,7 +225,7 @@ where
 fn skip_ignored(bytes: &[u8], index: &mut usize, tokens: &[u8]) {
     while *index < bytes.len() {
         let current = bytes[*index];
-        if current.is_ascii_whitespace() || tokens.iter().any(|token| current == *token) {
+        if current.is_ascii_whitespace() || tokens.contains(&current) {
             *index += 1;
         } else {
             break;

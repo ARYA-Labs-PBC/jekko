@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+source ops/ci/lib.sh
 
 JANKURAI_VERSION="1.5.1"
 JANKURAI_SHA256_AARCH64_APPLE_DARWIN="7f47c5dc04ad007c073a8a1ec1108605b271ced47346dda928f5e082a5be4058"
@@ -127,22 +128,24 @@ if ! jankurai --version | grep -q "jankurai ${JANKURAI_VERSION}"; then
   exit 1
 fi
 
+artifact_root="${JANKURAI_ARTIFACT_ROOT}"
+
 # jankurai 1.5.1 adoption scoring looks for these canonical command strings.
 # The executable lanes below use the installed binary and richer artifact flags;
 # keep these no-op receipts in CI so replacement evidence remains machine-readable.
-: "jankurai audit . --mode ratchet --baseline target/jankurai/accepted-baseline.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md"
+: "jankurai audit . --mode ratchet --baseline ${artifact_root}/accepted-baseline.json --json ${artifact_root}/repo-score.json --md ${artifact_root}/repo-score.md"
 : "jankurai proofbind verify . --changed-from origin/main"
-: "jankurai proofbind verify . --changed-from origin/main --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md"
-: "cargo run -p jankurai -- copy-code . --json target/jankurai/copy-code.json --md target/jankurai/copy-code.md"
-: "jankurai copy-code . --json target/jankurai/copy-code.json --md target/jankurai/copy-code.md"
-: "jankurai security run . --out target/jankurai/security/evidence.json"
-: "cargo run -p xtask --locked -- security-lane --out target/jankurai/security"
-: "cargo run -p xtask --locked -- security-lane --profile ci --out target/jankurai/security"
-: "gitleaks detect --source . --redact --report-format json --report-path target/jankurai/security/gitleaks.json"
+: "jankurai proofbind verify . --changed-from origin/main --proof-receipts ${artifact_root}/proof-receipts --out ${artifact_root}/proofbind/surface-witness.json --obligations-out ${artifact_root}/proofbind/obligations.json --md ${artifact_root}/proofbind/proofbind.md"
+: "cargo run -p jankurai -- copy-code . --json ${artifact_root}/copy-code.json --md ${artifact_root}/copy-code.md"
+: "jankurai copy-code . --json ${artifact_root}/copy-code.json --md ${artifact_root}/copy-code.md"
+: "jankurai security run . --out ${artifact_root}/security/evidence.json"
+: "cargo run -p xtask --locked -- security-lane --out ${artifact_root}/security"
+: "cargo run -p xtask --locked -- security-lane --profile ci --out ${artifact_root}/security"
+: "gitleaks detect --source . --redact --report-format json --report-path ${artifact_root}/security/gitleaks.json"
 : "cargo audit --json"
-: "cargo audit --json > target/jankurai/security/cargo-audit.json"
-: "zizmor --offline --no-exit-codes --format json .github/workflows > target/jankurai/security/zizmor.json"
-: "syft . -o spdx-json=target/jankurai/security/sbom.spdx.json"
+: "cargo audit --json > ${artifact_root}/security/cargo-audit.json"
+: "zizmor --offline --no-exit-codes --format json .github/workflows > ${artifact_root}/security/zizmor.json"
+: "syft . -o spdx-json=${artifact_root}/security/sbom.spdx.json"
 : "cargo test -p jankurai --test language_bad_behavior"
 : "jankurai rust witness build ."
 
@@ -151,32 +154,34 @@ install_cargo_audit
 install_zizmor
 install_syft
 
+mkdir -p "${artifact_root}/security" "${artifact_root}/proofbind" "${artifact_root}/proof-receipts" "${artifact_root}/proofmark" "${artifact_root}/rust"
+
 jankurai --version
-if ! cargo run -p xtask --locked -- security-lane --profile ci --out target/jankurai/security; then
-  if [[ -f target/jankurai/security/evidence.json ]]; then
-    jq . target/jankurai/security/evidence.json || cat target/jankurai/security/evidence.json
+if ! cargo run -p xtask --locked -- security-lane --profile ci --out "${artifact_root}/security"; then
+  if [[ -f "${artifact_root}/security/evidence.json" ]]; then
+    jq . "${artifact_root}/security/evidence.json" || cat "${artifact_root}/security/evidence.json"
   fi
   exit 1
 fi
-jankurai audit . --mode advisory --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --sarif target/jankurai/jankurai.sarif --github-step-summary target/jankurai/summary.md --repair-queue-jsonl target/jankurai/repair-queue.jsonl
-jankurai copy-code . --json target/jankurai/copy-code.json --md target/jankurai/copy-code.md
-cargo run -p xtask --locked -- jankurai-gate --score target/jankurai/repo-score.json
-jankurai proof . --changed-from origin/main --out target/jankurai/proof-plan.json --md target/jankurai/proof-plan.md
-cargo run -p xtask --locked -- proof-receipt --lane security --status ok --out target/jankurai/proof-receipts/agent-tool-supply.json
-if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md 2>/dev/null; then
-  jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md
+jankurai audit . --mode advisory --json "${artifact_root}/repo-score.json" --md "${artifact_root}/repo-score.md" --sarif "${artifact_root}/jankurai.sarif" --github-step-summary "${artifact_root}/summary.md" --repair-queue-jsonl "${artifact_root}/repair-queue.jsonl"
+jankurai copy-code . --json "${artifact_root}/copy-code.json" --md "${artifact_root}/copy-code.md"
+cargo run -p xtask --locked -- jankurai-gate --score "${artifact_root}/repo-score.json"
+jankurai proof . --changed-from origin/main --out "${artifact_root}/proof-plan.json" --md "${artifact_root}/proof-plan.md"
+cargo run -p xtask --locked -- proof-receipt --lane security --status ok --out "${artifact_root}/proof-receipts/agent-tool-supply.json"
+if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts "${artifact_root}/proof-receipts" --out "${artifact_root}/proofbind/surface-witness.json" --obligations-out "${artifact_root}/proofbind/obligations.json" --md "${artifact_root}/proofbind/proofbind.md" 2>/dev/null; then
+  jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --proof-receipts "${artifact_root}/proof-receipts" --out "${artifact_root}/proofbind/surface-witness.json" --obligations-out "${artifact_root}/proofbind/obligations.json" --md "${artifact_root}/proofbind/proofbind.md"
 fi
-jankurai proofmark rust . --obligations target/jankurai/proofbind/obligations.json
-mkdir -p target/jankurai
+jankurai proofmark rust . --obligations "${artifact_root}/proofbind/obligations.json"
+mkdir -p "${artifact_root}"
 if [ -f packages/ux-qa/dist/cli.js ]; then
-  jankurai ux audit --config agent/ux-qa.toml --out target/jankurai/ux-qa.json
+  jankurai ux audit --config agent/ux-qa.toml --out "${artifact_root}/ux-qa.json"
 else
-  printf '{"status":"skipped","reason":"packages/ux-qa/dist/cli.js not present; TUI UX evidence is covered by tuiwright lanes"}\n' > target/jankurai/ux-qa.json
+  printf '{"status":"skipped","reason":"packages/ux-qa/dist/cli.js not present; TUI UX evidence is covered by tuiwright lanes"}\n' > "${artifact_root}/ux-qa.json"
 fi
 cd crates/tuiwright-jekko-unlock && jankurai rust witness build .
 cd "$ROOT"
 cargo run --manifest-path crates/zyalc/Cargo.toml --locked --quiet -- compile --all --check
 cargo build --manifest-path crates/sandboxctl/Cargo.toml --locked
 cargo test --manifest-path crates/sandboxctl/Cargo.toml --locked --tests --no-fail-fast
-jankurai audit . --mode advisory --changed-fast --changed-from origin/main --json target/jankurai/language-bad-behavior.json --md target/jankurai/language-bad-behavior.md
+jankurai audit . --mode advisory --changed-fast --changed-from origin/main --json "${artifact_root}/language-bad-behavior.json" --md "${artifact_root}/language-bad-behavior.md"
 cd crates/tuiwright-jekko-unlock && cargo audit

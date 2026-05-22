@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+source ops/ci/lib.sh
 
 install_gitleaks() {
   if command -v gitleaks >/dev/null 2>&1; then
@@ -27,9 +28,10 @@ install_cargo_audit() {
 install_gitleaks
 install_cargo_audit
 
-if ! cargo run -p xtask --locked -- security-lane --out target/jankurai/security; then
-  if [[ -f target/jankurai/security/evidence.json ]]; then
-    jq . target/jankurai/security/evidence.json || cat target/jankurai/security/evidence.json
+mkdir -p "${JANKURAI_ARTIFACT_ROOT}/security"
+if ! cargo run -p xtask --locked -- security-lane --out "${JANKURAI_ARTIFACT_ROOT}/security"; then
+  if [[ -f "${JANKURAI_ARTIFACT_ROOT}/security/evidence.json" ]]; then
+    jq . "${JANKURAI_ARTIFACT_ROOT}/security/evidence.json" || cat "${JANKURAI_ARTIFACT_ROOT}/security/evidence.json"
   fi
   exit 1
 fi

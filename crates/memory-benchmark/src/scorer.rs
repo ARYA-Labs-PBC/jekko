@@ -79,10 +79,7 @@ pub fn provenance(out: &RecallResult, exp: &Expected) -> Option<f32> {
 }
 
 pub fn bitemporal_recall(out: &RecallResult, exp: &Expected) -> Option<f32> {
-    let causal = exp
-        .required_warnings
-        .iter()
-        .any(|w| *w == "causal_mask_applied");
+    let causal = exp.required_warnings.contains(&"causal_mask_applied");
     let has_temporal = causal
         || !exp.must_exclude.is_empty()
         || (!exp.must_include.is_empty() && !exp.required_warnings.is_empty());
@@ -138,7 +135,7 @@ pub fn contradiction(out: &RecallResult, exp: &Expected) -> Option<f32> {
 }
 
 pub fn math_science(out: &RecallResult, exp: &Expected) -> Option<f32> {
-    let has_unit = exp.required_warnings.iter().any(|w| *w == "unit_mismatch");
+    let has_unit = exp.required_warnings.contains(&"unit_mismatch");
     let science_terms: Vec<&str> = exp
         .must_contain
         .iter()
@@ -215,7 +212,7 @@ pub fn privacy_redaction(out: &RecallResult, exp: &Expected) -> Option<f32> {
                 || s.contains("94110")
         })
         .collect();
-    let needs_redacted_warning = exp.required_warnings.iter().any(|w| *w == "redacted");
+    let needs_redacted_warning = exp.required_warnings.contains(&"redacted");
     if canaries.is_empty() && !needs_redacted_warning {
         return None;
     }
@@ -273,10 +270,7 @@ pub fn procedural_skill(out: &RecallResult, exp: &Expected) -> Option<f32> {
 }
 
 pub fn feedback_adaptation(out: &RecallResult, exp: &Expected) -> Option<f32> {
-    if exp.confidence_range.is_none() {
-        return None;
-    }
-    let (lo, hi) = exp.confidence_range.unwrap();
+    let (lo, hi) = exp.confidence_range?;
     if out.confidence >= lo && out.confidence <= hi {
         Some(1.0)
     } else {
@@ -389,11 +383,9 @@ pub fn topic_hardening(out: &RecallResult, exp: &Expected) -> Option<f32> {
             hits += 1;
         }
     }
-    if exp.confidence_range.is_some() {
+    if let Some((lo, hi)) = exp.confidence_range {
         total += 1;
-        if out.confidence >= exp.confidence_range.unwrap().0
-            && out.confidence <= exp.confidence_range.unwrap().1
-        {
+        if out.confidence >= lo && out.confidence <= hi {
             hits += 1;
         }
     }
@@ -436,20 +428,20 @@ pub fn topic_hardening(out: &RecallResult, exp: &Expected) -> Option<f32> {
 // unexercised axes are encoded as f32::NAN. bench.rs's averaging strips NAN.
 
 pub fn grade_all_axes(out: &RecallResult, exp: &Expected) -> AxisScores {
-    let mut a = AxisScores::default();
-    a.correctness = correctness(out, exp).unwrap_or(f32::NAN);
-    a.provenance = provenance(out, exp).unwrap_or(f32::NAN);
-    a.bitemporal_recall = bitemporal_recall(out, exp).unwrap_or(f32::NAN);
-    a.contradiction = contradiction(out, exp).unwrap_or(f32::NAN);
-    a.math_science = math_science(out, exp).unwrap_or(f32::NAN);
-    a.english_discourse_coreference = english_discourse(out, exp).unwrap_or(f32::NAN);
-    a.privacy_redaction = privacy_redaction(out, exp).unwrap_or(f32::NAN);
-    a.procedural_skill = procedural_skill(out, exp).unwrap_or(f32::NAN);
-    a.feedback_adaptation = feedback_adaptation(out, exp).unwrap_or(f32::NAN);
-    a.determinism_rebuild = determinism_rebuild(out, exp).unwrap_or(f32::NAN);
-    a.compounding = compounding(out, exp).unwrap_or(f32::NAN);
-    a.topic_hardening = topic_hardening(out, exp).unwrap_or(f32::NAN);
-    a
+    AxisScores {
+        correctness: correctness(out, exp).unwrap_or(f32::NAN),
+        provenance: provenance(out, exp).unwrap_or(f32::NAN),
+        bitemporal_recall: bitemporal_recall(out, exp).unwrap_or(f32::NAN),
+        contradiction: contradiction(out, exp).unwrap_or(f32::NAN),
+        math_science: math_science(out, exp).unwrap_or(f32::NAN),
+        english_discourse_coreference: english_discourse(out, exp).unwrap_or(f32::NAN),
+        privacy_redaction: privacy_redaction(out, exp).unwrap_or(f32::NAN),
+        procedural_skill: procedural_skill(out, exp).unwrap_or(f32::NAN),
+        feedback_adaptation: feedback_adaptation(out, exp).unwrap_or(f32::NAN),
+        determinism_rebuild: determinism_rebuild(out, exp).unwrap_or(f32::NAN),
+        compounding: compounding(out, exp).unwrap_or(f32::NAN),
+        topic_hardening: topic_hardening(out, exp).unwrap_or(f32::NAN),
+    }
 }
 
 #[cfg(test)]
@@ -458,9 +450,10 @@ mod tests {
     use crate::RecallResult;
 
     fn empty_recall() -> RecallResult {
-        let mut r = RecallResult::default();
-        r.context_pack_hash = "deadbeefdeadbeef".to_string();
-        r
+        RecallResult {
+            context_pack_hash: "deadbeefdeadbeef".to_string(),
+            ..RecallResult::default()
+        }
     }
 
     fn empty_expected() -> Expected {

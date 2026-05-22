@@ -129,22 +129,24 @@ fn query_to_cog(q: &Query) -> cog::RecallQuery {
 }
 
 fn recall_to_bench(r: cog::RecallData, query: &Query, core: &cog::Core) -> RecallResult {
-    let mut out = RecallResult::default();
-    out.answer = r.answer;
-    out.citations = r
-        .citations
-        .into_iter()
-        .map(|c| crate::Citation {
-            source_uri: c.uri,
-            citation: c.citation,
-            quote: None,
-        })
-        .collect();
-    out.warnings = r.warnings.into_iter().map(warning_to_bench).collect();
-    out.used_ids = r.used_ids;
-    out.confidence = r.confidence;
-    out.claim_modality = r.claim_modality.map(modality_to_bench);
-    out.state_bytes = core.state_bytes();
+    let mut out = RecallResult {
+        answer: r.answer,
+        citations: r
+            .citations
+            .into_iter()
+            .map(|c| crate::Citation {
+                source_uri: c.uri,
+                citation: c.citation,
+                quote: None,
+            })
+            .collect(),
+        warnings: r.warnings.into_iter().map(warning_to_bench).collect(),
+        used_ids: r.used_ids,
+        confidence: r.confidence,
+        claim_modality: r.claim_modality.map(modality_to_bench),
+        state_bytes: core.state_bytes(),
+        ..RecallResult::default()
+    };
     let body_len = out.answer.len() as u32;
     out.context_token_count = body_len / 4;
     out.retrieved_token_count = (body_len + r.omitted_bytes) / 4;

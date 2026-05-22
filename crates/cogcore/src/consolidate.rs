@@ -3,8 +3,8 @@
 //! Pluggable backends produce deterministic state mutations:
 //! - `RuleBackend` (default): rule-based passes, zero LLM, byte-stable
 //! - `JnoccioBackend` (Phase 7+): periodic LLM summarization through
-//!    ZYAL-mediated Jnoccio. Deferred until a Rust Jnoccio client exists
-//!    OR the benchmark wires a ZYAL-driven consolidation receipt path.
+//!   ZYAL-mediated Jnoccio. Deferred until a Rust Jnoccio client exists
+//!   OR the benchmark wires a ZYAL-driven consolidation receipt path.
 //!
 //! All passes must be deterministic given `(state, budget, BENCH_NOW)`.
 

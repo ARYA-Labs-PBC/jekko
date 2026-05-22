@@ -790,9 +790,9 @@ mod layout_and_runtime_tests {
                 "--mode",
                 "advisory",
                 "--json",
-                "agent/repo-score.json",
+                ".jankurai/repo-score.json",
                 "--md",
-                "agent/repo-score.md",
+                ".jankurai/repo-score.md",
             ],
         );
     }

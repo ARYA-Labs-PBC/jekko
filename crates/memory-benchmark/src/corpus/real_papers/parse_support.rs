@@ -96,10 +96,7 @@ pub(super) fn numeric_tolerance_from_json(value: &Json) -> Result<NumericToleran
 
 pub(super) fn support_from_json(value: &Json) -> Result<SupportRef, String> {
     let obj = as_object(value)?;
-    let section_hash = match optional_string(obj, "section_hash") {
-        Some(value) => value,
-        None => String::new(),
-    };
+    let section_hash = optional_string(obj, "section_hash").unwrap_or_default();
     Ok(SupportRef {
         section_id: required_string(obj, "section_id")?,
         section_hash,
@@ -112,18 +109,9 @@ pub(super) fn context_pack_from_json(value: &Json) -> Result<ContextPack, String
         Some(value) => value as u32,
         None => 128000,
     };
-    let target_fill_ratio = match optional_f32(obj, "target_fill_ratio") {
-        Some(value) => value,
-        None => 0.82,
-    };
-    let output_reserve_tokens = match optional_i64(obj, "output_reserve_tokens") {
-        Some(value) => value as u32,
-        None => 4096,
-    };
-    let estimated_tokens = match optional_i64(obj, "estimated_tokens") {
-        Some(value) => value as u32,
-        None => 0,
-    };
+    let target_fill_ratio = optional_f32(obj, "target_fill_ratio").unwrap_or(0.82);
+    let output_reserve_tokens = optional_i64(obj, "output_reserve_tokens").unwrap_or(4096) as u32;
+    let estimated_tokens = optional_i64(obj, "estimated_tokens").unwrap_or(0) as u32;
     Ok(ContextPack {
         safe_window_tokens,
         target_fill_ratio,

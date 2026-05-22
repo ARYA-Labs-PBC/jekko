@@ -228,7 +228,7 @@ fn top_n_sort_uses_hardness_then_rates_then_hashes() {
     let b = fixture_challenge("b", 0.8, 0.0);
     let c = fixture_challenge("c", 0.9, 0.4);
     a.publication_hash = "paper-a".to_string();
-    let mut loaded = vec![
+    let mut loaded = [
         LoadedChallenge {
             challenge: b,
             paper: None,

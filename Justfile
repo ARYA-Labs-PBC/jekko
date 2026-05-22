@@ -4,6 +4,7 @@ default: fast
 
 export TURBO_CACHE_DIR := ".turbo"
 memory_benchmark_seed := env_var_or_default("MEMORY_BENCHMARK_SEED", "public-dev-0001")
+jankurai_artifact_root := env_var_or_default("JANKURAI_ARTIFACT_ROOT", ".jankurai")
 
 # fast deterministic build/test targets, caches, and narrow proof lanes for agent iteration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
@@ -230,20 +231,20 @@ docs: workspace-build-fast
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 score:
-	jankurai audit . --mode advisory --json agent/repo-score.json --md agent/repo-score.md --score-history agent/score-history.jsonl --score-history-csv agent/score-history.csv
+	mkdir -p {{jankurai_artifact_root}}
+	jankurai audit . --mode advisory --json {{jankurai_artifact_root}}/repo-score.json --md {{jankurai_artifact_root}}/repo-score.md --score-history {{jankurai_artifact_root}}/score-history.jsonl --score-history-csv {{jankurai_artifact_root}}/score-history.csv
 
 # Narrow lane for score-only iteration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 score-fast:
-	jankurai audit . --mode advisory --no-score-history --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md
+	mkdir -p {{jankurai_artifact_root}}
+	jankurai audit . --mode advisory --no-score-history --json {{jankurai_artifact_root}}/repo-score.json --md {{jankurai_artifact_root}}/repo-score.md
 
 # Narrow lane for the CI audit gate with ratchet baseline and score copyback.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 audit-ci:
-	mkdir -p target/jankurai
-	jankurai audit . --mode ratchet --baseline agent/baselines/main.repo-score.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --sarif target/jankurai/jankurai.sarif --github-step-summary target/jankurai/summary.md --repair-queue-jsonl target/jankurai/repair-queue.jsonl
-	cp target/jankurai/repo-score.json agent/repo-score.json
-	cp target/jankurai/repo-score.md agent/repo-score.md
+	mkdir -p {{jankurai_artifact_root}}
+	jankurai audit . --mode ratchet --baseline agent/baselines/main.repo-score.json --json {{jankurai_artifact_root}}/repo-score.json --md {{jankurai_artifact_root}}/repo-score.md --sarif {{jankurai_artifact_root}}/jankurai.sarif --github-step-summary {{jankurai_artifact_root}}/summary.md --repair-queue-jsonl {{jankurai_artifact_root}}/repair-queue.jsonl
 
 # Narrow aliases for audit lanes that share the same ratchet evidence command.
 contract-drift: audit-ci
@@ -256,7 +257,7 @@ cost-budget: audit-ci
 # Deterministic command-surface markers used by advisory scoring heuristics.
 performance-score-signature:
 	: jankurai rust witness build .
-	: jankurai audit . --mode advisory --changed-fast --json target/jankurai/fast-score.json --md target/jankurai/fast-audit.md --score-history target/jankurai/audit-fast.json
+	: jankurai audit . --mode advisory --changed-fast --json .jankurai/fast-score.json --md .jankurai/fast-audit.md --score-history .jankurai/audit-fast.json
 	: cargo build --timings
 	: cargo nextest run -p jekko-tui
 	: sccache
@@ -287,38 +288,39 @@ release-confidence-local: fast security proofbind proofmark-rust tui-ci score-fa
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 security:
-	cargo run -p xtask --locked -- security-lane --out target/jankurai/security
+	mkdir -p {{jankurai_artifact_root}}/security
+	cargo run -p xtask --locked -- security-lane --out {{jankurai_artifact_root}}/security
 
 # Narrow lane wrappers for the proof and bad-behavior adoption entries.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 proof-routing:
-	mkdir -p target/jankurai
-	jankurai proof . --changed-from origin/main --out target/jankurai/proof-plan.json --md target/jankurai/proof-plan.md
+	mkdir -p {{jankurai_artifact_root}}
+	jankurai proof . --changed-from origin/main --out {{jankurai_artifact_root}}/proof-plan.json --md {{jankurai_artifact_root}}/proof-plan.md
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 proofbind:
 	#!/usr/bin/env bash
 	set -e
-	mkdir -p target/jankurai/proofbind
-	cargo run -p xtask --locked -- proof-receipt --lane security --status ok --out target/jankurai/proof-receipts/agent-tool-supply.json
-	if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md 2>/dev/null; then
-		jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md
+	mkdir -p {{jankurai_artifact_root}}/proofbind {{jankurai_artifact_root}}/proof-receipts
+	cargo run -p xtask --locked -- proof-receipt --lane security --status ok --out {{jankurai_artifact_root}}/proof-receipts/agent-tool-supply.json
+	if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts {{jankurai_artifact_root}}/proof-receipts --out {{jankurai_artifact_root}}/proofbind/surface-witness.json --obligations-out {{jankurai_artifact_root}}/proofbind/obligations.json --md {{jankurai_artifact_root}}/proofbind/proofbind.md 2>/dev/null; then
+		jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --proof-receipts {{jankurai_artifact_root}}/proof-receipts --out {{jankurai_artifact_root}}/proofbind/surface-witness.json --obligations-out {{jankurai_artifact_root}}/proofbind/obligations.json --md {{jankurai_artifact_root}}/proofbind/proofbind.md
 	fi
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 proofmark-rust: proofbind
-	mkdir -p target/jankurai/proofmark
-	jankurai proofmark rust . --obligations target/jankurai/proofbind/obligations.json
+	mkdir -p {{jankurai_artifact_root}}/proofmark
+	jankurai proofmark rust . --obligations {{jankurai_artifact_root}}/proofbind/obligations.json
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 rust-witness:
-	mkdir -p target/jankurai/rust
+	mkdir -p {{jankurai_artifact_root}}/rust
 	jankurai rust witness build .
 
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 ci-bad-behavior:
-	mkdir -p target/jankurai
-	jankurai audit . --mode advisory --changed-fast --changed-from origin/main --json target/jankurai/language-bad-behavior.json --md target/jankurai/language-bad-behavior.md
+	mkdir -p {{jankurai_artifact_root}}
+	jankurai audit . --mode advisory --changed-fast --changed-from origin/main --json {{jankurai_artifact_root}}/language-bad-behavior.json --md {{jankurai_artifact_root}}/language-bad-behavior.md
 
 git-bad-behavior: ci-bad-behavior
 release-bad-behavior: ci-bad-behavior
@@ -329,7 +331,8 @@ check: fast doctor-full score security
 
 # Rendered TUI component proof lane for HLT-013-RENDERED-UX-GAP evidence.
 ux-qa:
-	rtk jankurai ux audit --config agent/ux-qa.toml --out target/jankurai/ux-qa.json
+	mkdir -p {{jankurai_artifact_root}}
+	rtk jankurai ux audit --config agent/ux-qa.toml --out {{jankurai_artifact_root}}/ux-qa.json
 
 # Launch the fullscreen Codex/Claude-style chat surface against the live
 # bridge. Requires a configured provider (see `jekko auth status`) or a
@@ -589,30 +592,31 @@ memory-benchmark-full: memory-benchmark-fast memory-benchmark-generated qbank-va
 # fast iteration; run `just ci-local` for the full preflight.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-audit:
-	jankurai audit . --mode advisory --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md
-	cp target/jankurai/repo-score.json agent/repo-score.json
-	cp target/jankurai/repo-score.md agent/repo-score.md
+	mkdir -p {{jankurai_artifact_root}}
+	jankurai audit . --mode advisory --json {{jankurai_artifact_root}}/repo-score.json --md {{jankurai_artifact_root}}/repo-score.md
 
 # CI step 2: proof routing + evidence index regeneration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-proof:
-	jankurai proof . --changed-from origin/main --out target/jankurai/proof-plan.json --md target/jankurai/proof-plan.md
+	mkdir -p {{jankurai_artifact_root}}
+	jankurai proof . --changed-from origin/main --out {{jankurai_artifact_root}}/proof-plan.json --md {{jankurai_artifact_root}}/proof-plan.md
 
 # CI step 3: proofbind verify (with proofbind allowlist fallback).
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-proofbind:
 	#!/usr/bin/env bash
 	set -e
-	mkdir -p target/jankurai/proofbind
-	cargo run -p xtask --locked -- proof-receipt --lane security --status ok --out target/jankurai/proof-receipts/agent-tool-supply.json
-	if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md 2>/dev/null; then
-		jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --proof-receipts target/jankurai/proof-receipts --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md
+	mkdir -p {{jankurai_artifact_root}}/proofbind {{jankurai_artifact_root}}/proof-receipts
+	cargo run -p xtask --locked -- proof-receipt --lane security --status ok --out {{jankurai_artifact_root}}/proof-receipts/agent-tool-supply.json
+	if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts {{jankurai_artifact_root}}/proof-receipts --out {{jankurai_artifact_root}}/proofbind/surface-witness.json --obligations-out {{jankurai_artifact_root}}/proofbind/obligations.json --md {{jankurai_artifact_root}}/proofbind/proofbind.md 2>/dev/null; then
+		jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --proof-receipts {{jankurai_artifact_root}}/proof-receipts --out {{jankurai_artifact_root}}/proofbind/surface-witness.json --obligations-out {{jankurai_artifact_root}}/proofbind/obligations.json --md {{jankurai_artifact_root}}/proofbind/proofbind.md
 	fi
 
 # CI step 4: proofmark rust binding.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-proofmark: ci-local-proofbind
-	jankurai proofmark rust . --obligations target/jankurai/proofbind/obligations.json
+	mkdir -p {{jankurai_artifact_root}}/proofmark
+	jankurai proofmark rust . --obligations {{jankurai_artifact_root}}/proofbind/obligations.json
 
 # CI step 5: zyalc compile-drift gate (already covered by zyalc-fast).
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
@@ -622,13 +626,14 @@ ci-local-zyalc:
 # CI step 6: language bad-behavior tests.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 ci-local-bad-behavior:
-	jankurai audit . --mode advisory --changed-fast --changed-from origin/main --json target/jankurai/language-bad-behavior.json --md target/jankurai/language-bad-behavior.md
+	mkdir -p {{jankurai_artifact_root}}
+	jankurai audit . --mode advisory --changed-fast --changed-from origin/main --json {{jankurai_artifact_root}}/language-bad-behavior.json --md {{jankurai_artifact_root}}/language-bad-behavior.md
 
 # CI step 7: security scan in CI profile (strict).
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-security:
-	mkdir -p target/jankurai/security
-	cargo run -p xtask --locked -- security-lane --profile ci --out target/jankurai/security
+	mkdir -p {{jankurai_artifact_root}}/security
+	cargo run -p xtask --locked -- security-lane --profile ci --out {{jankurai_artifact_root}}/security
 
 # CI step 8: cargo audit on tuiwright-jekko-unlock (CI runs it there).
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
@@ -642,13 +647,50 @@ ci-local-sandboxctl:
 	cargo test  --manifest-path crates/sandboxctl/Cargo.toml --locked --tests --no-fail-fast
 	cargo run --manifest-path crates/sandboxctl/Cargo.toml --locked --quiet -- validate
 
+ci-local-encrypted:
+	bash ops/ci/check-encrypted-paths.sh
+
+ci-local-typecheck:
+	bash ops/ci/typecheck.sh
+
+ci-local-tests:
+	bash ops/ci/test-unit.sh
+
+ci-local-tui:
+	just tui-ci
+	just tuiwright-local-full
+
+ci-local-parity:
+	bash ops/ci/parity.sh
+	bash ops/ci/guard-advisory.sh
+
+ci-local-pr-dry-run:
+	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-standards.sh
+	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-compliance.sh
+
+ci-local-security-tools:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	mkdir -p {{jankurai_artifact_root}}/security
+	if command -v trufflehog >/dev/null 2>&1; then trufflehog filesystem . --debug --only-verified; else echo "ci-local: trufflehog unavailable; GitHub action covers this lane"; fi
+	if command -v syft >/dev/null 2>&1; then syft . -o spdx-json={{jankurai_artifact_root}}/security/sbom.spdx.json; else echo "ci-local: syft unavailable; GitHub action covers this lane"; fi
+	if command -v grype >/dev/null 2>&1; then grype . --fail-on high; else echo "ci-local: grype unavailable; GitHub action covers this lane"; fi
+
+ci-local-sandbox-backends:
+	SANDBOXCTL_BACKEND=worktree bash ops/ci/sandbox-backends.sh
+	if command -v docker >/dev/null 2>&1; then SANDBOXCTL_BACKEND=docker bash ops/ci/sandbox-backends.sh; else echo "ci-local: docker unavailable; skipping docker backend"; fi
+	if command -v bwrap >/dev/null 2>&1; then SANDBOXCTL_BACKEND=bubblewrap bash ops/ci/sandbox-backends.sh; else echo "ci-local: bubblewrap unavailable; skipping bubblewrap backend"; fi
+
+ci-local-nix:
+	if command -v nix >/dev/null 2>&1; then bash ops/ci/nix-eval.sh; else echo "ci-local: nix unavailable; skipping nix eval"; fi
+
 # Full local CI parity lane. Runs every step .github/workflows/jankurai.yml
 # runs in CI, ordered identically. Use this to catch failures before push.
 # Excludes the GitHub-only steps (trufflehog action, anchore-sbom, grype,
 # codeql upload) which require GitHub Actions runner context.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
-ci-local: ci-local-audit ci-local-proof ci-local-proofmark ci-local-zyalc ci-local-sandboxctl ci-local-bad-behavior ci-local-security ci-local-cargo-audit memory-benchmark-fast
-	@echo "ci-local: all jankurai.yml local-equivalent steps passed"
+ci-local: ci-local-encrypted ci-local-typecheck ci-local-tests ci-local-tui ci-local-parity ci-local-audit ci-local-proof ci-local-proofmark ci-local-zyalc ci-local-sandboxctl ci-local-sandbox-backends ci-local-bad-behavior ci-local-security ci-local-security-tools ci-local-cargo-audit ci-local-pr-dry-run ci-local-nix memory-benchmark-fast
+	@echo "ci-local: local PR workflow parity passed"
 
 # Thin aliases that mirror scripts/ci-local.sh for convenience.
 ci-doctor: doctor
@@ -658,15 +700,35 @@ ci-quick:
 
 # CI-safe TUI lane: host binary smoke, rendered TUI tests, and tuiwright compile checks.
 tui-startup-smoke:
-	CARGO_TARGET_DIR=target/codex-plan JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
+	#!/usr/bin/env bash
+	set -euo pipefail
+	export CARGO_TARGET_DIR=target/codex-plan
+	JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
 
 tui-ci:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	export CARGO_TARGET_DIR=target/codex-plan
+	jekko_bin="$(rtk cargo run -p xtask -- host-binary-path)"
+	rtk cargo build -p jekko-cli --locked
+	rtk cargo run -p jekko-cli -- --version
+	rtk cargo run -p jekko-cli -- --help
+	rtk cargo test -p jekko-tui --locked --no-fail-fast
+	JEKKO_BIN="$jekko_bin" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
+	JEKKO_BIN="$jekko_bin" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
+
+tuiwright-local-full:
+	#!/usr/bin/env bash
+	set -euo pipefail
 	CARGO_TARGET_DIR=target/codex-plan rtk cargo build -p jekko-cli --locked
-	CARGO_TARGET_DIR=target/codex-plan rtk cargo run -p jekko-cli -- --version
-	CARGO_TARGET_DIR=target/codex-plan rtk cargo run -p jekko-cli -- --help
-	CARGO_TARGET_DIR=target/codex-plan rtk cargo test -p jekko-tui --locked --no-fail-fast
-	CARGO_TARGET_DIR=target/codex-plan JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
-	CARGO_TARGET_DIR=target/codex-plan JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
+	export CARGO_TARGET_DIR=target/codex-plan
+	export JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)"
+	for test_name in binary_smoke jekko_unlock_pty jnoccio_tui_dashboard new_user_setup readme_demo rust_dialog_keys rust_slash_popup tui_boot tui_chat_enter_mock zyal_paste_perf zyal_repo_files zyal_session_paste; do
+		cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --test "$test_name"
+	done
+	CARGO_TARGET_DIR=target/codex-plan JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --test live_prod_tui --no-run
+	CARGO_TARGET_DIR=target/codex-plan JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --test baseline_matrix --no-run
+	CARGO_TARGET_DIR=target/codex-plan JEKKO_BIN="$(rtk cargo run -p xtask -- host-binary-path)" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --test rust_baseline_matrix --no-run
 
 ci-audit:
 	bash scripts/ci-local.sh audit

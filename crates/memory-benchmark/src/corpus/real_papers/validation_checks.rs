@@ -1,9 +1,7 @@
+use super::validation_support::{validate_route, validate_token_usage};
 use crate::corpus::real_papers::model::{
-    stable_challenge_hash, stable_section_hash, ModelDecision, ModelTrial, PaperChallenge,
-    PaperRecord, RouteMetadata, PRODUCTION_CHALLENGE_SCHEMA_VERSION,
-};
-use super::validation_support::{
-    looks_synthetic_request_id, validate_route, validate_token_usage,
+    stable_challenge_hash, stable_section_hash, ModelTrial, PaperChallenge, PaperRecord,
+    PRODUCTION_CHALLENGE_SCHEMA_VERSION,
 };
 use std::collections::BTreeMap;
 pub(super) fn validate_paper_presence(

@@ -58,6 +58,9 @@ pub(crate) fn collect_capture_keys(root: &Path) -> Result<BTreeMap<String, PathB
             let Some(stem) = file_name.strip_suffix(".txt") else {
                 continue;
             };
+            if stem.ends_with("-boot-timeout") {
+                continue;
+            }
             let key = format!("{screen_name}/{stem}");
             out.insert(key, file_entry.path());
         }

@@ -15,30 +15,6 @@ pub fn parse(src: &str) -> Result<Json, String> {
     Ok(v)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::parse;
-    use crate::json::Json;
-
-    #[test]
-    fn parses_raw_utf8_and_unicode_escapes() {
-        assert_eq!(
-            parse(r#"{"text":"CPPD deposition (Figure 2 ). β"}"#).expect("json"),
-            Json::Object(std::collections::BTreeMap::from([(
-                "text".to_string(),
-                Json::Str("CPPD deposition (Figure 2 ). β".to_string())
-            )]))
-        );
-        assert_eq!(
-            parse(r#"{"text":"snowman \u2603 smile \uD83D\uDE00"}"#).expect("json"),
-            Json::Object(std::collections::BTreeMap::from([(
-                "text".to_string(),
-                Json::Str("snowman ☃ smile 😀".to_string())
-            )]))
-        );
-    }
-}
-
 struct Parser<'a> {
     src: &'a str,
     pos: usize,
@@ -261,5 +237,29 @@ impl<'a> Parser<'a> {
                 None => return Err("unterminated object".to_string()),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+    use crate::json::Json;
+
+    #[test]
+    fn parses_raw_utf8_and_unicode_escapes() {
+        assert_eq!(
+            parse(r#"{"text":"CPPD deposition (Figure 2 ). β"}"#).expect("json"),
+            Json::Object(std::collections::BTreeMap::from([(
+                "text".to_string(),
+                Json::Str("CPPD deposition (Figure 2 ). β".to_string())
+            )]))
+        );
+        assert_eq!(
+            parse(r#"{"text":"snowman \u2603 smile \uD83D\uDE00"}"#).expect("json"),
+            Json::Object(std::collections::BTreeMap::from([(
+                "text".to_string(),
+                Json::Str("snowman ☃ smile 😀".to_string())
+            )]))
+        );
     }
 }

@@ -25,8 +25,10 @@ pub fn validate_bank(
     top_n: usize,
     min_required_accepted: usize,
 ) -> Result<BankValidation, String> {
-    let mut result = BankValidation::default();
-    result.min_required_accepted = min_required_accepted;
+    let mut result = BankValidation {
+        min_required_accepted,
+        ..BankValidation::default()
+    };
     let mut paper_paths = Vec::new();
     collect_json_files(&root.join("papers"), &mut paper_paths)?;
     let mut challenge_paths = Vec::new();

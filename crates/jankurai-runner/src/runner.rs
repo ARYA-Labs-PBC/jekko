@@ -196,6 +196,8 @@ fn assert_clean_tree(repo: &std::path::Path) -> Result<()> {
 }
 
 fn run_jankurai_audit(repo: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(repo.join(".jankurai"))
+        .with_context(|| format!("create {}", repo.join(".jankurai").display()))?;
     let status = Command::new("jankurai")
         .args([
             "audit",
@@ -203,7 +205,9 @@ fn run_jankurai_audit(repo: &std::path::Path) -> Result<()> {
             "--mode",
             "advisory",
             "--json",
-            "target/jankurai/repo-score.json",
+            ".jankurai/repo-score.json",
+            "--md",
+            ".jankurai/repo-score.md",
             "--no-score-history",
         ])
         .current_dir(repo)

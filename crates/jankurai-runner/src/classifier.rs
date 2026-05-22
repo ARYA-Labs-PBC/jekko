@@ -1,4 +1,4 @@
-//! Parses `agent/repo-score.json` into a flat `Vec<Finding>`. The runner uses
+//! Parses `.jankurai/repo-score.json` into a flat `Vec<Finding>`. The runner uses
 //! the classification to:
 //!   1. Build the path-overlap DAG (`dag::build`).
 //!   2. Route caps + high/critical findings to the incubator lane.
@@ -70,9 +70,17 @@ pub struct ClassifyResult {
 }
 
 pub fn classify(repo_root: &Path) -> Result<ClassifyResult> {
-    let path = repo_root.join("agent/repo-score.json");
+    let path = repo_score_path(repo_root);
     let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     classify_text(&text)
+}
+
+fn repo_score_path(repo_root: &Path) -> std::path::PathBuf {
+    let current = repo_root.join(".jankurai/repo-score.json");
+    if current.exists() {
+        return current;
+    }
+    repo_root.join("agent/repo-score.json")
 }
 
 /// Score reported when the audit JSON omits the `score` field. Treated as the
@@ -86,7 +94,7 @@ const DEFAULT_SCORE_WHEN_ABSENT: f64 = 0.0;
 const UNKNOWN_CAP_LABEL: &str = "unknown";
 
 pub fn classify_text(text: &str) -> Result<ClassifyResult> {
-    let parsed: RepoScore = serde_json::from_str(text).context("parse agent/repo-score.json")?;
+    let parsed: RepoScore = serde_json::from_str(text).context("parse jankurai repo-score.json")?;
 
     // Typed match arms keep the jankurai vibe-detector happy (no `unwrap_or_default`).
     #[allow(clippy::manual_unwrap_or_default)]

@@ -67,12 +67,12 @@ const JANKURAI_AUDIT_ARGS: &[&str] = &[
     "--mode",
     "advisory",
     "--json",
-    "agent/repo-score.json",
+    ".jankurai/repo-score.json",
     "--md",
-    "agent/repo-score.md",
+    ".jankurai/repo-score.md",
 ];
 
-/// Render the latest `/jankurai-status` summary from `<cwd>/agent/repo-score.json`.
+/// Render the latest `/jankurai-status` summary from `<cwd>/.jankurai/repo-score.json`.
 /// Returns `(NoticeKind, body)` so the caller can pick a Warn vs Info colour.
 fn render_jankurai_status() -> (NoticeKind, String) {
     match render_jankurai_status_lines() {
@@ -83,7 +83,7 @@ fn render_jankurai_status() -> (NoticeKind, String) {
 
 fn render_jankurai_status_lines() -> std::result::Result<Vec<String>, (NoticeKind, String)> {
     let cwd = current_dir_or_dot();
-    let path = cwd.join("agent").join("repo-score.json");
+    let path = latest_repo_score_path(&cwd);
     let text = match std::fs::read_to_string(&path) {
         Ok(b) => b,
         Err(_) => {
@@ -128,4 +128,12 @@ fn render_jankurai_status_lines() -> std::result::Result<Vec<String>, (NoticeKin
         lines.push(format!("decision: {decision}"));
     }
     Ok(lines)
+}
+
+fn latest_repo_score_path(cwd: &std::path::Path) -> std::path::PathBuf {
+    let current = cwd.join(".jankurai").join("repo-score.json");
+    if current.exists() {
+        return current;
+    }
+    cwd.join("agent").join("repo-score.json")
 }

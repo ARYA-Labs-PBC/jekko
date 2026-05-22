@@ -26,6 +26,10 @@ pub struct CompileReport {
 
 pub fn compile_one(source: &Path, out_override: Option<&Path>, check: bool) -> Result<Outcome> {
     let info = profile::detect(source)?;
+    if let Profile::Runbook = &info.profile {
+        validate_runbook_profile(source, &info.raw)?;
+        return Ok(Outcome::Unchanged(source.to_path_buf()));
+    }
     if let Profile::Daemon { .. } = &info.profile {
         validate_daemon_profile(source, &info.raw)?;
         return Ok(Outcome::Unchanged(source.to_path_buf()));
@@ -105,7 +109,10 @@ pub struct InspectInfo {
 
 pub fn inspect(source: &Path) -> Result<InspectInfo> {
     let info = profile::detect(source)?;
-    let target = Some(default_target(source, &info.profile));
+    let target = match &info.profile {
+        Profile::Runbook | Profile::Daemon { .. } => None,
+        _ => Some(default_target(source, &info.profile)),
+    };
     let schema = match &info.profile {
         Profile::DeclarativeToml { schema }
         | Profile::Workflow { schema }
@@ -174,6 +181,22 @@ fn validate_daemon_profile(source: &Path, raw: &str) -> Result<()> {
     if !raw.contains("<<<END_ZYAL") {
         return Err(anyhow!(
             "daemon profile missing END_ZYAL sentinel in {}",
+            source.display()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_runbook_profile(source: &Path, raw: &str) -> Result<()> {
+    if !raw.contains("<<<ZYAL v1:") {
+        return Err(anyhow!(
+            "runbook profile missing ZYAL sentinel in {}",
+            source.display()
+        ));
+    }
+    if !raw.contains("<<<END_ZYAL") {
+        return Err(anyhow!(
+            "runbook profile missing END_ZYAL sentinel in {}",
             source.display()
         ));
     }
@@ -329,6 +352,24 @@ mod tests {
         let a = emit_toml(raw).unwrap();
         let b = emit_toml(raw).unwrap();
         assert_eq!(a, b, "compile must be idempotent");
+    }
+
+    #[test]
+    fn runbook_profiles_validate_without_emitting_legacy_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("smoke.zyal");
+        fs::write(
+            &source,
+            "<<<ZYAL v1:daemon id=smoke>>>\njob:\n  name: smoke\n<<<END_ZYAL id=smoke>>>\n",
+        )
+        .unwrap();
+
+        let outcome = compile_one(&source, None, true).unwrap();
+        assert!(matches!(outcome, Outcome::Unchanged(path) if path == source));
+        assert!(
+            !source.with_extension("yml").exists(),
+            "runbook validation must not emit retired .zyal.yml artifacts"
+        );
     }
 
     #[test]

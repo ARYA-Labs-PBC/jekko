@@ -1,11 +1,10 @@
-use crate::core::StoredEvent;
 use super::paper_json_parse::parse_object;
 use super::paper_json_support::{
-    parse_json_classifiers, parse_source_array_with_default,
+    parse_json_classifiers, parse_source_array_with_default, parse_string_array_with_default,
     parse_string_or_default, parse_string_or_empty, parse_string_or_none,
-    parse_string_array_with_default,
 };
 use super::paper_support::build_stored_event;
+use crate::core::StoredEvent;
 
 /// Minimal JSON-line parser for StoredEvent shape. Handles the limited
 /// surface produced by qbank-builder's `emit-cogcore` command. Cogcore is

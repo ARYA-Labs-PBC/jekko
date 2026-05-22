@@ -25,7 +25,7 @@ fn ev(id: &str, q: f32, contradicts: Vec<String>) -> StoredEvent {
 
 #[test]
 fn rule_backend_summarize_picks_highest_quality_member() {
-    let mut backend = RuleBackend::default();
+    let mut backend = RuleBackend;
     let mut budget = Budget::ZERO;
     let a = ev("a", 0.7, vec![]);
     let b = ev("b", 0.95, vec![]); // highest
@@ -50,7 +50,7 @@ fn rule_backend_summarize_picks_highest_quality_member() {
 
 #[test]
 fn rule_backend_verifies_known_si_units() {
-    let mut backend = RuleBackend::default();
+    let mut backend = RuleBackend;
     let mut budget = Budget::ZERO;
     let eq = EqAtom {
         lhs: "E".to_string(),
@@ -66,7 +66,7 @@ fn rule_backend_verifies_known_si_units() {
 
 #[test]
 fn rule_backend_unverifiable_on_unknown_unit() {
-    let mut backend = RuleBackend::default();
+    let mut backend = RuleBackend;
     let mut budget = Budget::ZERO;
     let eq = EqAtom {
         lhs: "X".to_string(),
@@ -82,7 +82,7 @@ fn rule_backend_unverifiable_on_unknown_unit() {
 
 #[test]
 fn rule_backend_unverifiable_when_no_units() {
-    let mut backend = RuleBackend::default();
+    let mut backend = RuleBackend;
     let mut budget = Budget::ZERO;
     let eq = EqAtom {
         lhs: "X".to_string(),
@@ -98,7 +98,7 @@ fn rule_backend_unverifiable_when_no_units() {
 
 #[test]
 fn rule_backend_flags_low_quality_contradiction() {
-    let mut backend = RuleBackend::default();
+    let mut backend = RuleBackend;
     let mut budget = Budget::ZERO;
     let bad = ev("bad", 0.2, vec!["good".to_string()]);
     let good = ev("good", 0.95, vec![]);
@@ -112,7 +112,7 @@ fn rule_backend_flags_low_quality_contradiction() {
 
 #[test]
 fn rule_backend_skips_high_quality_cell() {
-    let mut backend = RuleBackend::default();
+    let mut backend = RuleBackend;
     let mut budget = Budget::ZERO;
     let good = ev("good", 0.95, vec!["other".to_string()]);
     let other = ev("other", 0.95, vec![]);

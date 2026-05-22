@@ -5,17 +5,17 @@ use super::model::{
 };
 #[path = "json_helpers.rs"]
 mod helpers;
-#[path = "parse_support.rs"]
-mod support;
 #[path = "parse_structs.rs"]
 mod structs;
+#[path = "parse_support.rs"]
+mod support;
 use crate::json::{self, Json};
 use crate::types::Domain;
 use helpers::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use support::*;
 use structs::*;
+use support::*;
 
 pub(crate) fn load_all_challenges(root: &Path) -> Result<Vec<PaperChallenge>, String> {
     let challenge_root = if root.ends_with("challenges") {

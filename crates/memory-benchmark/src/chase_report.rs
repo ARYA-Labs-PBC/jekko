@@ -323,10 +323,10 @@ pub fn run(mut options: CliOptions) -> Result<(), String> {
     if let Some(p) = options.markdown.as_deref() {
         let mut md = String::from("# Memory Benchmark Final Report\n\n");
         if let Some(b) = &baseline {
-            md.push_str(&format!("## Baseline\n\n```\n{}\n```\n\n", b.to_string()));
+            md.push_str(&format!("## Baseline\n\n```\n{}\n```\n\n", b));
         }
         if let Some(e) = &exec {
-            md.push_str(&format!("## Exec\n\n```\n{}\n```\n\n", e.to_string()));
+            md.push_str(&format!("## Exec\n\n```\n{}\n```\n\n", e));
         }
         md.push_str(&format!(
             "## Population\n\nLedger entries: {}\n",
@@ -1005,7 +1005,7 @@ fn json_number_in(obj: &BTreeMap<String, Json>, path: &[&str]) -> Option<f64> {
     for key in &path[..path.len().saturating_sub(1)] {
         current = json_object(current.get(*key)?)?;
     }
-    json_number(current, *path.last()?)
+    json_number(current, path.last()?)
 }
 
 fn extract_observed_at_run(json: &Json) -> Option<String> {
