@@ -15,6 +15,10 @@ CARGO_AUDIT_VERSION="${CARGO_AUDIT_VERSION:-0.22.1}"
 ZIZMOR_VERSION="${ZIZMOR_VERSION:-1.12.0}"
 CARGO_LLVM_COV_VERSION="${CARGO_LLVM_COV_VERSION:-0.6.16}"
 
+if [ -z "${GH_TOKEN:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+  export GH_TOKEN="$GITHUB_TOKEN"
+fi
+
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 note() { printf '\033[0;90m... %s\033[0m\n' "$1"; }
 fail() { printf '\n\033[1;31m!! %s\033[0m\n' "$1" >&2; exit 1; }
@@ -80,7 +84,9 @@ resolve_github_repository() {
   if [ -n "${GITHUB_REPOSITORY:-}" ]; then
     repo_json="$GITHUB_REPOSITORY"
   elif ! repo_json="$(git_remote_repository)"; then
-    fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote"
+    if ! repo_json="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)"; then
+      fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote"
+    fi
   fi
 
   GITHUB_REPOSITORY="$repo_json"
