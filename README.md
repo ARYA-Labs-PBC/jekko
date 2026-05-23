@@ -1,5 +1,9 @@
 # Jekko
 
+<!-- jankurai-badge:start -->
+[![Jankurai score: 88/100](agent/jankurai-badge.svg)](.jankurai/repo-score.md)
+<!-- jankurai-badge:end -->
+
 The open source AI coding agent, rebuilt in Rust. Jekko is a terminal-first
 multi-provider coding agent: a Ratatui TUI, an Axum HTTP/OpenAPI server, an
 embedded SQLite store, and a streaming provider runtime, all shipped as a
