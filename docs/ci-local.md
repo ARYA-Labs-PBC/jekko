@@ -14,6 +14,7 @@ GitHub. In this repo, `scripts/ci-local.sh` is the local entrypoint and
 | `just fast`              | typecheck + narrow tests           | quick         | smallest feedback loop |
 | `just tui-startup-smoke` | local host-binary TUI smoke        | quick         | first-frame PTY regression on the built binary |
 | `just tui-ci`            | CI-safe TUI lane                   | comprehensive | host binary smoke, TUI crate tests, tuiwright compile + first-frame |
+| `just ci-local-pr-dry-run` | PR policy parity                   | comprehensive | requires an authenticated `gh` CLI and an open PR branch |
 | `cargo test --workspace --locked --no-fail-fast` | full unit + integration suite | comprehensive | run before any release lane |
 | `cargo run -p xtask -- ci-fast` | xtask-driven quick gate     | quick         | scaffold for the consolidated quick lane |
 | `just ci-audit`          | Jankurai audit lane                | comprehensive | runs the audit and zero-caps gate |
@@ -34,6 +35,7 @@ Typical tools the doctor expects:
 - `gitleaks`, `cargo-audit`, `zizmor`, `syft`
 - `latexmk`
 - `jankurai`
+- authenticated `gh` CLI access so `gh auth token` succeeds for PR-policy parity
 
 ## Lane selection
 
@@ -46,6 +48,9 @@ Typical tools the doctor expects:
 - **Editing schemas, fixtures, OpenAPI, tools:** run the matching xtask
   parity gate (`baseline-diff`, `openapi-check`, `tool-schema-parity`,
   `session-fixture-parity`, `httpapi-parity`, `db-migration-smoke`).
+- **Editing PR policy / pull_request_target workflows:** run
+  `just ci-local-pr-dry-run` after `gh auth token` succeeds, then `just ci`
+  before pushing.
 - **Pre-release:** `cargo test --workspace --locked --no-fail-fast` plus
   every applicable xtask parity gate. See `docs/release.md`.
 

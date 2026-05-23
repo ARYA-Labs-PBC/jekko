@@ -101,6 +101,12 @@ pull_request_target_json() {
   resolve_github_repository
 
   if [ -z "${pr_reference}" ]; then
+    if [ -n "${GITHUB_HEAD_REF:-}" ]; then
+      pr_reference="$GITHUB_HEAD_REF"
+    fi
+  fi
+
+  if [ -z "${pr_reference}" ]; then
     if ! current_branch="$(git rev-parse --abbrev-ref HEAD)"; then
       fail "could not resolve current branch; pass an explicit PR reference: pull_request_target_json <pr_ref>"
     fi

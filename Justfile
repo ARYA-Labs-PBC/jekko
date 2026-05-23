@@ -685,6 +685,18 @@ ci-local-parity:
 	bash ops/ci/guard-advisory.sh
 
 ci-local-pr-dry-run:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	source ops/ci/lib.sh
+	resolve_github_repository
+	export GH_TOKEN="$(rtk gh auth token)"
+	export GITHUB_TOKEN="$GH_TOKEN"
+	export GITHUB_EVENT_NAME="pull_request_target"
+	export GITHUB_EVENT_PATH="$(pull_request_target_json)"
+	trap 'rm -f "$GITHUB_EVENT_PATH"' EXIT
+	export GITHUB_BASE_REF="$(rtk jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")"
+	export GITHUB_HEAD_REF="$(rtk jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")"
+	rtk cargo run -p xtask --locked -- pr-workflow-contract
 	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-standards.sh
 	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-compliance.sh
 
