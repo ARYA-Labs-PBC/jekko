@@ -187,6 +187,10 @@ fn assert_job(
         &[
             ("GH_TOKEN", "${{ secrets.GITHUB_TOKEN }}"),
             ("GITHUB_TOKEN", "${{ secrets.GITHUB_TOKEN }}"),
+            ("GITHUB_REPOSITORY", "${{ github.repository }}"),
+            ("GITHUB_BASE_REF", "${{ github.base_ref }}"),
+            ("GITHUB_HEAD_REF", "${{ github.head_ref }}"),
+            ("GITHUB_EVENT_PATH", "${{ github.event_path }}"),
         ],
         &format!("job {name} step env"),
     )?;
