@@ -185,8 +185,8 @@ fn assert_job(
             &format!("job {name} step env"),
         )?,
         &[
-            ("GH_TOKEN", "${{ github.token }}"),
-            ("GITHUB_TOKEN", "${{ github.token }}"),
+            ("GH_TOKEN", "${{ secrets.GITHUB_TOKEN }}"),
+            ("GITHUB_TOKEN", "${{ secrets.GITHUB_TOKEN }}"),
         ],
         &format!("job {name} step env"),
     )?;
