@@ -90,7 +90,7 @@ pub struct PortProofs {
 }
 
 /// Runtime proof options shared by generic and advanced port runners.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PortRuntimeOptions {
     /// Evidence inputs for proof generation.
     #[serde(default)]
@@ -104,17 +104,6 @@ pub struct PortRuntimeOptions {
     /// Model routing policy.
     #[serde(default)]
     pub model_policy: ModelPolicy,
-}
-
-impl Default for PortRuntimeOptions {
-    fn default() -> Self {
-        Self {
-            evidence_inputs: Vec::new(),
-            live_call_budget: LiveCallBudget::default(),
-            proofs: PortProofs::default(),
-            model_policy: ModelPolicy::default(),
-        }
-    }
 }
 
 impl PortTargetRequest {

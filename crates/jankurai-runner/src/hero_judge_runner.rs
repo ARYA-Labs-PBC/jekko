@@ -61,6 +61,7 @@ pub async fn run_hero_judge_run(
 }
 
 /// Run one Hero/Judge evolution workflow with a caller-supplied DB.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_hero_judge_run_with_db(
     repo: &Path,
     run_id: &str,
@@ -538,6 +539,7 @@ pub async fn run_hero_judge_run_with_db(
     Ok(summary)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_lane_group(
     repo: &Path,
     run_id: &str,
@@ -584,6 +586,7 @@ async fn run_lane_group(
     Ok(artifacts)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn complete_hero_json(
     repo: &Path,
     run_id: &str,
@@ -630,10 +633,7 @@ async fn complete_hero_json(
             daemon_store::mark_daemon_run(db, run_id, "blocked", &receipt.kind, Some(&error))?;
             return Err(anyhow!("model call failed: {error}"));
         }
-        let text = match receipt.response.as_deref() {
-            Some(text) => text,
-            None => "",
-        };
+        let text = receipt.response.as_deref().unwrap_or_default();
         match parse_model_json(text) {
             Ok(value) => return Ok((receipt, value)),
             Err(_err) if receipt.provider == "fake" => {

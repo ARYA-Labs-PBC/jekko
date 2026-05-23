@@ -43,7 +43,7 @@ pub fn open_db_at(path: &Path) -> Result<Db> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
     }
-    Db::open(&path).with_context(|| format!("open Jekko DB at {}", path.display()))
+    Db::open(path).with_context(|| format!("open Jekko DB at {}", path.display()))
 }
 
 /// Ensure daemon FK parents exist for a run.

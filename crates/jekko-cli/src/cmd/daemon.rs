@@ -545,7 +545,7 @@ fn print_durable_run_status(run_id: &str) -> Result<()> {
             println!("benchmark_winner: {winner}");
         }
     }
-    if let Some(meta) = read_metadata().ok() {
+    if let Ok(meta) = read_metadata() {
         if meta.run_id.as_deref() == Some(run_id) {
             if let Some(path) = meta.event_log_path() {
                 if let Some(line) = last_line(&path)? {

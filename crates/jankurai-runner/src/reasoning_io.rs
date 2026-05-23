@@ -81,6 +81,7 @@ pub(crate) async fn complete_structured(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn artifact(
     id: impl Into<String>,
     run_id: &str,

@@ -176,19 +176,14 @@ impl Default for HeroJudgeResearchConfig {
 }
 
 /// Missing search provider policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeroJudgeMissingProviderPolicy {
     /// Write a skipped receipt and continue.
+    #[default]
     SkipWithReceipt,
     /// Fail the run.
     Fail,
-}
-
-impl Default for HeroJudgeMissingProviderPolicy {
-    fn default() -> Self {
-        Self::SkipWithReceipt
-    }
 }
 
 /// Local evidence input.

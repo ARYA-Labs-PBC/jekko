@@ -83,6 +83,7 @@ pub struct AdvancedReasoningTickReport {
 }
 
 /// Run the advanced reasoning state machine once.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_advanced_reasoning_tick_with_db(
     repo: &Path,
     run_id: &str,

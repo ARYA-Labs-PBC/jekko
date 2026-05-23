@@ -178,6 +178,7 @@ pub struct ReasoningArtifact {
 
 impl ReasoningArtifact {
     /// Construct a storage-safe artifact and apply confidence/redaction rules.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: impl Into<String>,
         run_id: impl Into<String>,
