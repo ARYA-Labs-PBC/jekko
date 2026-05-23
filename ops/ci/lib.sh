@@ -39,19 +39,48 @@ assert_nonempty() {
   [[ -s "$p" ]] || fail "expected artifact is empty: $p"
 }
 
+git_remote_repository() {
+  local origin_url
+  origin_url="$(git remote get-url origin 2>/dev/null)" || return 1
+
+  if [[ "$origin_url" =~ github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    printf '%s/%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  return 1
+}
+
+git_remote_default_branch() {
+  local default_branch
+
+  if default_branch="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"; then
+    default_branch="${default_branch#origin/}"
+    if [ -n "$default_branch" ]; then
+      printf '%s\n' "$default_branch"
+      return 0
+    fi
+  fi
+
+  if default_branch="$(git remote show origin 2>/dev/null | awk -F': ' '/HEAD branch/ { print $2; exit }')"; then
+    if [ -n "$default_branch" ]; then
+      printf '%s\n' "$default_branch"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 resolve_github_repository() {
   local repo_json
 
   require_cmd gh "https://cli.github.com/manual/gh"
 
-  if [ -z "${GITHUB_REPOSITORY:-}" ]; then
-    if ! repo_json="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"; then
-      fail "gh repo view failed; run in a repo checkout or set GITHUB_REPOSITORY"
-    fi
-  else
-    if ! repo_json="$(gh repo view "$GITHUB_REPOSITORY" --json nameWithOwner --jq '.nameWithOwner')"; then
-      fail "gh repo view failed; run in a repo checkout or set GITHUB_REPOSITORY"
-    fi
+  if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+    repo_json="$GITHUB_REPOSITORY"
+  elif ! repo_json="$(git_remote_repository)"; then
+    fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote"
   fi
 
   GITHUB_REPOSITORY="$repo_json"
@@ -98,10 +127,10 @@ pull_request_target_json() {
     fail "pull request #${pr_number} is missing author_association"
   fi
 
-  if ! repo_json="$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef --jq '.')"; then
-    fail "gh repo view failed while reading default branch for '${GITHUB_REPOSITORY}'"
+  default_branch="${GITHUB_BASE_REF:-}"
+  if [ -z "$default_branch" ]; then
+    default_branch="$(git_remote_default_branch || true)"
   fi
-  default_branch="$(printf '%s' "$repo_json" | jq -r '.defaultBranchRef.name // empty')"
   if [ -z "$default_branch" ]; then
     fail "could not determine repository default branch for '${GITHUB_REPOSITORY}'"
   fi

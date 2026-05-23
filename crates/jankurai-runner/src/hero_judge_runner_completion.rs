@@ -10,30 +10,35 @@ use crate::hero_judge_eval::{parse_substitute_lane_value, synthetic_lane_value};
 use crate::model_client::{kind_label, ModelCallReceipt, ModelClient};
 use crate::model_policy::ModelTaskKind;
 
+#[derive(Clone, Copy)]
+pub(crate) struct HeroJudgeCompletionContext<'a> {
+    pub repo: &'a Path,
+    pub run_id: &'a str,
+    pub db: &'a Db,
+    pub sink: &'a EventSink,
+    pub model_client: &'a dyn ModelClient,
+}
+
 pub(crate) async fn complete_hero_json(
-    repo: &Path,
-    run_id: &str,
-    db: &Db,
-    sink: &EventSink,
-    model_client: &dyn ModelClient,
+    ctx: HeroJudgeCompletionContext<'_>,
     kind: ModelTaskKind,
     generation: usize,
     prompt: &str,
 ) -> Result<(ModelCallReceipt, serde_json::Value)> {
     for attempt in 1..=3 {
-        sink.emit(
+        ctx.sink.emit(
             EventKind::ModelAttempt,
             json!({"kind": kind_label(kind), "attempt": attempt}),
         )?;
-        let receipt = model_client.complete(kind, prompt, repo).await?;
-        daemon_store::persist_model_receipt(db, run_id, &receipt)?;
+        let receipt = ctx.model_client.complete(kind, prompt, ctx.repo).await?;
+        daemon_store::persist_model_receipt(ctx.db, ctx.run_id, &receipt)?;
         let outcome = classify_hero_completion(kind, generation, attempt, &receipt);
-        sink.emit(
+        ctx.sink.emit(
             EventKind::ModelOutcome,
             model_outcome_payload(&receipt, attempt, outcome.state_label()),
         )?;
         if receipt.budget_used.is_some() || receipt.budget_remaining.is_some() {
-            sink.emit(
+            ctx.sink.emit(
                 EventKind::LiveBudget,
                 json!({
                     "used": receipt.budget_used.unwrap_or(0),
@@ -53,18 +58,30 @@ pub(crate) async fn complete_hero_json(
                 if attempt < 3 {
                     continue;
                 }
-                daemon_store::mark_daemon_run(db, run_id, "blocked", &receipt.kind, Some(&error))?;
+                daemon_store::mark_daemon_run(
+                    ctx.db,
+                    ctx.run_id,
+                    "blocked",
+                    &receipt.kind,
+                    Some(&error),
+                )?;
                 return Err(anyhow!("model call failed: {error}"));
             }
             HeroCompletionDecision::FinalBlock(error) => {
-                daemon_store::mark_daemon_run(db, run_id, "blocked", &receipt.kind, Some(&error))?;
+                daemon_store::mark_daemon_run(
+                    ctx.db,
+                    ctx.run_id,
+                    "blocked",
+                    &receipt.kind,
+                    Some(&error),
+                )?;
                 return Err(anyhow!("model call failed: {error}"));
             }
         }
     }
     daemon_store::mark_daemon_run(
-        db,
-        run_id,
+        ctx.db,
+        ctx.run_id,
         "blocked",
         "hero_judge_model_json",
         Some("invalid model JSON"),

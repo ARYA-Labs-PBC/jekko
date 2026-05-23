@@ -19,7 +19,7 @@ use crate::hero_judge_eval::{
     scoreboard_for_generation, seed_prompt_lineage, summary_from_value, write_json_pretty,
     write_jsonl, write_lane_metrics_csv, write_quality_csv, GenerationMetricInputs,
 };
-use crate::hero_judge_runner_completion::complete_hero_json;
+use crate::hero_judge_runner_completion::{complete_hero_json, HeroJudgeCompletionContext};
 use crate::hero_judge_search::{load_hero_judge_evidence, run_research};
 use crate::model_client::{kind_label, ModelClient};
 use crate::model_policy::ModelTaskKind;
@@ -519,17 +519,14 @@ async fn run_lane_group(
         let prompt = format!(
             "{base_prompt}\nLane: {lane}\nReturn exactly one compact JSON object under 700 tokens with summary, claims, questions, rubric, evidence_refs, and score. No markdown, no commentary, and no raw reasoning."
         );
-        let (receipt, value) = complete_hero_json(
+        let completion = HeroJudgeCompletionContext {
             repo,
             run_id,
             db,
             sink,
             model_client,
-            kind,
-            generation,
-            &prompt,
-        )
-        .await?;
+        };
+        let (receipt, value) = complete_hero_json(completion, kind, generation, &prompt).await?;
         let summary = summary_from_value(kind, generation, lane, &value);
         let score = score_from_value(kind, generation, &value);
         let metrics = lane_quality_metrics(kind, &value, &summary, score);
