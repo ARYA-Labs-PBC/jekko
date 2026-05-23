@@ -562,10 +562,7 @@ fn port_workflow_tables_round_trip() {
             .write_scope,
         vec!["src/protocol.rs"]
     );
-    assert_eq!(
-        daemon::list_parity_cases_for_target(conn, "target-1").unwrap()[0].approved,
-        true
-    );
+    assert!(daemon::list_parity_cases_for_target(conn, "target-1").unwrap()[0].approved);
     assert_eq!(
         daemon::list_parity_results_for_run(conn, "parity-run-1")
             .unwrap()

@@ -354,6 +354,7 @@ pub fn upsert_model_reliability(conn: &Connection, row: &ModelReliabilityRow) ->
 }
 
 /// Add one model outcome to reliability counters.
+#[allow(clippy::too_many_arguments)]
 pub fn record_model_reliability_outcome(
     conn: &Connection,
     model_id: &str,
