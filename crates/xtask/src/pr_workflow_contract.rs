@@ -36,7 +36,6 @@ fn validate_workflow(workflow: &Value) -> Result<()> {
         EXPECTED_TRIGGER_TYPES,
         "pull_request_target.types",
     )?;
-    assert_workflow_env(workflow_map)?;
     assert_permissions(
         mapping(
             value_for_key(workflow_map, "permissions", "workflow permissions")?,
@@ -165,7 +164,7 @@ fn assert_job(
     let script = mapping(&steps[2], &format!("job {name} step 2"))?;
     assert_exact_keys(
         steps[2].as_mapping().expect("step 2 mapping"),
-        &["name", "run"],
+        &["name", "env", "run"],
         &format!("job {name} step 2"),
     )?;
     assert_string(
@@ -180,26 +179,18 @@ fn assert_job(
         expected_run,
         &format!("job {name} run command"),
     )?;
-    Ok(())
-}
-
-fn assert_workflow_env(workflow: &Mapping) -> Result<()> {
-    let env = mapping(
-        value_for_key(workflow, "env", "workflow env")?,
-        "workflow env",
-    )?;
     assert_exact_pairs(
-        env,
+        mapping(
+            value_for_key(script, "env", &format!("job {name} step env"))?,
+            &format!("job {name} step env"),
+        )?,
         &[
             ("GH_TOKEN", "${{ github.token }}"),
             ("GITHUB_TOKEN", "${{ github.token }}"),
-            ("GITHUB_REPOSITORY", "${{ github.repository }}"),
-            ("GITHUB_BASE_REF", "${{ github.base_ref }}"),
-            ("GITHUB_HEAD_REF", "${{ github.head_ref }}"),
-            ("GITHUB_EVENT_PATH", "${{ github.event_path }}"),
         ],
-        "workflow env",
-    )
+        &format!("job {name} step env"),
+    )?;
+    Ok(())
 }
 
 fn assert_permissions(map: &Mapping, expected: &[(&str, &str)], label: &str) -> Result<()> {
@@ -248,10 +239,10 @@ fn assert_exact_keys(map: &Mapping, expected: &[&str], label: &str) -> Result<()
 }
 
 fn assert_workflow_root_keys(workflow: &Mapping) -> Result<()> {
-    if workflow.len() != 5 {
-        bail!("workflow root expected 5 entries, found {}", workflow.len());
+    if workflow.len() != 4 {
+        bail!("workflow root expected 4 entries, found {}", workflow.len());
     }
-    for key in ["name", "env", "permissions", "jobs"] {
+    for key in ["name", "permissions", "jobs"] {
         if !workflow
             .keys()
             .any(|candidate| candidate.as_str() == Some(key))
@@ -388,14 +379,27 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_workflow_env() {
+    fn rejects_missing_step_env() {
         let mut workflow = load_workflow();
         let map = workflow.as_mapping_mut().expect("workflow mapping");
-        let env = map
+        let jobs = map
+            .get_mut(&Value::String("jobs".into()))
+            .and_then(Value::as_mapping_mut)
+            .expect("jobs mapping");
+        let job = jobs
+            .get_mut(&Value::String("check-standards".into()))
+            .and_then(Value::as_mapping_mut)
+            .expect("check-standards job mapping");
+        let steps = job
+            .get_mut(&Value::String("steps".into()))
+            .and_then(Value::as_sequence_mut)
+            .expect("steps sequence");
+        let script = steps[2].as_mapping_mut().expect("script step mapping");
+        let env = script
             .get_mut(&Value::String("env".into()))
             .and_then(Value::as_mapping_mut)
-            .expect("workflow env mapping");
-        env.remove(&Value::String("GITHUB_HEAD_REF".into()));
+            .expect("script step env mapping");
+        env.remove(&Value::String("GH_TOKEN".into()));
 
         validate_workflow(&workflow).expect_err("expected failure");
     }
