@@ -99,6 +99,10 @@ resolve_github_repository() {
       repo_json="$(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null)"
     fi
     if [ -z "${repo_json:-}" ]; then
+      note "origin url: $(sanitize_git_remote_url "$(git remote get-url origin 2>/dev/null || printf '')")"
+      if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
+        note "event repository: $(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || printf '')"
+      fi
       if ! repo_json="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)"; then
         fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote"
       fi
@@ -107,6 +111,15 @@ resolve_github_repository() {
 
   GITHUB_REPOSITORY="$repo_json"
   export GITHUB_REPOSITORY
+}
+
+sanitize_git_remote_url() {
+  local url="${1:-}"
+  if [[ "$url" =~ ^(https?://)([^@/]+@)?(.+)$ ]]; then
+    printf '%s%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
+    return 0
+  fi
+  printf '%s\n' "$url"
 }
 
 pull_request_target_json() {
