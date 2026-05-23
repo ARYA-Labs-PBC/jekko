@@ -52,7 +52,7 @@ fn validate_workflow(workflow: &Value) -> Result<()> {
         "Check PR standards",
         r#"export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
 export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-export GITHUB_REPOSITORY="${{ github.repository }}"
+export GITHUB_REPOSITORY="neverhuman/jekko"
 export GITHUB_BASE_REF="${{ github.base_ref }}"
 export GITHUB_HEAD_REF="${{ github.head_ref }}"
 export GITHUB_EVENT_PATH="${{ github.event_path }}"
@@ -66,7 +66,7 @@ bash ops/ci/pr-standards.sh
         "Check PR template compliance",
         r#"export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
 export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-export GITHUB_REPOSITORY="${{ github.repository }}"
+export GITHUB_REPOSITORY="neverhuman/jekko"
 export GITHUB_BASE_REF="${{ github.base_ref }}"
 export GITHUB_HEAD_REF="${{ github.head_ref }}"
 export GITHUB_EVENT_PATH="${{ github.event_path }}"
