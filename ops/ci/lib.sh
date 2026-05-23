@@ -47,6 +47,16 @@ git_remote_repository() {
   local origin_url
   origin_url="$(git remote get-url origin 2>/dev/null)" || return 1
 
+  if [[ "$origin_url" =~ ^(ssh://)?([^@/]+@)?github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    printf '%s/%s\n' "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+    return 0
+  fi
+
+  if [[ "$origin_url" =~ ^https?://([^@/]+@)?github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    printf '%s/%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    return 0
+  fi
+
   if [[ "$origin_url" =~ github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
     printf '%s/%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
     return 0
