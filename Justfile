@@ -427,6 +427,26 @@ zyalc-compile-check:
 # Composed zyalc fast lane.
 zyalc-fast: zyalc-check zyalc-test zyalc-compile-check
 
+# ZYAL generic port workflow lane: runner, durable store, daemon surfaces, and ZYAL compile checks.
+# jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+zyal-port-fast:
+	rtk cargo test --manifest-path crates/jankurai-runner/Cargo.toml --locked --no-fail-fast
+	rtk cargo test -p jekko-store --locked --test daemon_port_roundtrip -- --test-threads=1
+	rtk cargo check -p jekko-cli --locked
+	rtk cargo check -p jekko-server --locked
+	rtk cargo test -p tuiwright-jekko-unlock --locked all_tracked_zyal_files_parse_and_preview
+	rtk env CARGO_TARGET_DIR=target/zyal-validation just zyalc-compile-check
+
+# Broad full-suite lane for local release-style port workflow proof.
+# jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=false
+zyal-port-full:
+	rtk cargo test --manifest-path crates/jankurai-runner/Cargo.toml --locked --no-fail-fast
+	rtk cargo test -p jekko-store --locked --no-fail-fast
+	rtk cargo test -p jekko-runtime --locked --no-fail-fast
+	rtk cargo test -p jekko-cli --locked --no-fail-fast
+	rtk cargo test -p jekko-server --locked --no-fail-fast
+	rtk just zyalc-fast
+
 # Local sandbox-loop experiment entrypoint. Override `cmd` to change the inner command.
 # jankurai:proof HLT-012-OVERBROAD-AGENCY parallel=1 cache=cargo-build narrow-targets=true
 experiment cmd="just --list":

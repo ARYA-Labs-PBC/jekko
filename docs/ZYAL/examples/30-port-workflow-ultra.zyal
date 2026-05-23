@@ -1,0 +1,175 @@
+# Generic ZYAL port workflow: discover target, plan phases, build in bounded
+# worktree workers, enforce Jankurai, and close target-switched parity/perf gaps.
+<<<ZYAL v1:daemon id=generic-port-workflow-ultra>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Generic port workflow"
+  objective: |
+    Build a replacement implementation with reference-target parity. Discover
+    behavior from target docs, source, tests, and examples; finalize an ordered
+    master plan; execute phase tasks in safe worktrees; enforce proof lanes and
+    Jankurai gates; then close correctness and performance gaps with
+    target-switched parity reports.
+  risk:
+    - "Do not hard-code target-specific phases."
+    - "Do not accept model-only parity claims."
+
+port:
+  target: "MiniKV"
+  replacement: "MiniKV Rust"
+  target_repo: "./fixtures/minikv-reference"
+  replacement_repo: "."
+  phase_strategy: brainstorm_then_finalize
+  worker_cap: 10
+  resume_store: sqlite
+  require_clean_start: true
+  stop_on:
+    - dirty_primary_worktree
+    - budget_expired
+    - destructive_target_repo_operation
+    - jankurai_hard_regression
+    - repeated_worker_quarantine
+
+repo_graph:
+  enabled: true
+  store: sqlite
+  export: "target/zyal/repo-graph/${run.id}/graph.json"
+  nodes: [files, modules, functions, structs, commands, tests, docs, phases, tasks, parity_cases]
+  edges: [contains, imports, calls, tests, implements, derives_from, parity_covers, phase_owns, changed_by]
+  feed_workers: true
+
+parity_lab:
+  enabled: true
+  report_schema: zyal.parity.v1
+  adapters:
+    reference:
+      target_kind: minikv
+      command: "./fixtures/minikv-reference/minikv"
+    candidate:
+      target_kind: minikv
+      command: "cargo run --bin minikv-rs"
+  required_tags: [required, approved]
+  fail_on: [zero_cases, missing_required_case, skipped_required_case, failed_case, missing_perf_data]
+  cases:
+    - id: "kv.ping.basic"
+      tags: [protocol, required, approved]
+      target_kind: minikv
+      steps:
+        - send: "PING"
+          expect: "PONG"
+      perf:
+        p95_ms_max_ratio: 1.25
+
+jankurai_gate:
+  command: "rtk jankurai audit . --mode advisory --json .jankurai/repo-score.json --md .jankurai/repo-score.md"
+  max_new_hard_findings: 0
+  max_score_drop: 0
+  block_cap_regression: true
+
+model_policy:
+  routine: jnoccio/routine
+  power: jnoccio/power-winner
+  use_power_for: [phase_finalization, stuck_debug, healing, perf_gap_analysis, review]
+  record_outcomes: true
+
+fleet:
+  max_workers: 10
+  isolation: git_worktree
+  jnoccio:
+    enabled: true
+    register_workers: true
+    heartbeat_interval: 20s
+    max_instances: 10
+
+agents:
+  supervisor:
+    agent: plan
+  workers:
+    - id: port-builder
+      count: 10
+      agent: build
+      isolation: git_worktree
+      pool_size: 10
+      commit_on_green: true
+      branch_prefix: "zyal"
+
+workflow:
+  states:
+    - capture_target
+    - brainstorm_stages
+    - finalize_master_plan
+    - phase_plan
+    - phase_build
+    - phase_verify
+    - heal_integration
+    - parity
+    - perf_closure
+    - complete
+  persist: sqlite
+  receipts: "target/zyal/runs/${run.id}/events.jsonl"
+
+checkpoint:
+  when: after_verified_change
+  noop_if_clean: true
+  verify:
+    - command: "rtk just zyal-port-fast"
+      timeout: 30m
+    - command: "rtk git diff --check"
+      timeout: 2m
+  git:
+    add: ["declared_worker_paths_only"]
+    commit_message: "zyal(port): ${task.id}"
+    push: ask
+
+rollback:
+  required_when:
+    risk_score_gte: 0.4
+  plan_required: true
+  on_failure_after_merge: revert_commit
+  quarantine_after_attempts: 3
+
+observability:
+  logs:
+    path: "target/zyal/runs/${run.id}/events.jsonl"
+    format: ndjson
+    max_line_bytes: 512
+  metrics:
+    - name: port_phase_status
+      type: gauge
+      source: sqlite
+    - name: parity_gap_count
+      type: gauge
+      source: parity_lab.report
+    - name: model_cost_usd
+      type: counter
+      source: model_policy.outcomes
+
+stop:
+  all:
+    - shell:
+        command: "test -f target/zyal/parity/${run.id}/report.json"
+        timeout: 10m
+    - shell:
+        command: "jq -e '.status == \"passed\"' target/zyal/parity/${run.id}/report.json"
+        timeout: 10m
+    - git_clean:
+        allow_untracked: false
+
+done:
+  require:
+    - target_request_captured
+    - master_plan_finalized
+    - phases_complete
+    - jankurai_gate_passed
+    - parity_report_checked
+    - perf_budgets_checked
+  forbid:
+    - model_only_claim
+    - missing_required_parity_case
+    - skipped_required_parity_case
+    - unchecked_perf_budget
+<<<END_ZYAL id=generic-port-workflow-ultra>>>
+ZYAL_ARM RUN_FOREVER id=generic-port-workflow-ultra

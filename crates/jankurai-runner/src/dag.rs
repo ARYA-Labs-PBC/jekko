@@ -85,7 +85,11 @@ fn pack_one_wave(findings: Vec<Finding>) -> (Wave, Vec<Finding>) {
     let mut leftover: Vec<Finding> = Vec::new();
 
     for finding in findings {
-        let conflicting = finding.paths.iter().any(|p| claimed_paths.contains_key(p));
+        let conflicting = finding.paths.iter().any(|p| {
+            claimed_paths
+                .keys()
+                .any(|claimed| paths_overlap(p, claimed))
+        });
         if conflicting {
             leftover.push(finding);
         } else {
@@ -100,6 +104,34 @@ fn pack_one_wave(findings: Vec<Finding>) -> (Wave, Vec<Finding>) {
     }
 
     (Wave { batches }, leftover)
+}
+
+fn paths_overlap(a: &str, b: &str) -> bool {
+    let a = path_components(a);
+    let b = path_components(b);
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    is_prefix(&a, &b) || is_prefix(&b, &a)
+}
+
+fn path_components(path: &str) -> Vec<String> {
+    std::path::Path::new(path)
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::CurDir => None,
+            std::path::Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            std::path::Component::RootDir => Some("/".to_string()),
+            std::path::Component::Prefix(value) => {
+                Some(value.as_os_str().to_string_lossy().to_string())
+            }
+            std::path::Component::ParentDir => Some("..".to_string()),
+        })
+        .collect()
+}
+
+fn is_prefix(prefix: &[String], path: &[String]) -> bool {
+    prefix.len() <= path.len() && prefix.iter().zip(path.iter()).all(|(a, b)| a == b)
 }
 
 #[cfg(test)]
@@ -152,6 +184,30 @@ mod tests {
         assert_eq!(waves[0].batches.len(), 2);
         assert_eq!(waves[1].batches.len(), 1);
         assert_eq!(waves[1].batches[0].findings[0].rule_id, "B");
+    }
+
+    #[test]
+    fn ancestor_and_descendant_paths_split_across_waves() {
+        let findings = vec![
+            finding("A", Severity::Medium, &["src"]),
+            finding("B", Severity::Medium, &["src/lib.rs"]),
+            finding("C", Severity::Medium, &["src2/lib.rs"]),
+        ];
+        let waves = schedule(&findings);
+        assert_eq!(waves.len(), 2);
+        assert_eq!(waves[0].batches.len(), 2);
+        assert_eq!(waves[1].batches[0].findings[0].rule_id, "B");
+    }
+
+    #[test]
+    fn path_prefix_strings_without_component_boundary_do_not_conflict() {
+        let findings = vec![
+            finding("A", Severity::Medium, &["src/foo"]),
+            finding("B", Severity::Medium, &["src/foobar"]),
+        ];
+        let waves = schedule(&findings);
+        assert_eq!(waves.len(), 1);
+        assert_eq!(waves[0].batches.len(), 2);
     }
 
     #[test]

@@ -1,0 +1,401 @@
+I studied the repo and ZYAL closely. My strongest recommendation: **do not design ZYAL as “a swarm of agents.” Design it as a host-governed reasoning compiler** where many weak models generate, attack, compress, test, and vote over structured artifacts — while the host, not the models, controls lifecycle, memory, budgets, promotion, and safety.
+
+ZYAL already points in exactly this direction: it is a **host-enforced YAML operating contract**, where the host controls daemon lifecycle, evidence gates, stop conditions, budgets, checkpoints, and approvals rather than trusting model self-claims. ([GitHub][1]) The strongest available ZYAL primitives for your goal are multi-agent orchestration, hypothesis tournaments, negative memory, evidence-gated promotion, anti-vibe gates, cost sovereignty, incubator passes, and durable SQLite-backed state. ([GitHub][1])
+
+## The core design: “Reasoning Mesh, Host Kernel”
+
+The best ZYAL design for weaker models should separate **generation**, **criticism**, **verification**, **synthesis**, and **memory** into distinct lanes.
+
+A weak model is unreliable when asked to “solve.” But a cluster of weak models can become powerful when each model performs a narrow role:
+
+1. **Scouts** gather facts and constraints.
+2. **Hypothesis generators** propose diverse solution paths.
+3. **Adversarial critics** attack assumptions.
+4. **Test designers** create falsification checks.
+5. **Builders** prototype in isolated worktrees.
+6. **Reducers** compare candidates using evidence, not vibes.
+7. **Archivists** compress results into durable memory.
+8. **Judges** only score structured artifacts, preferably blind.
+
+This maps beautifully to ZYAL’s existing incubator model: scout → idea → strengthen → critic → synthesize → prototype → promotion review → compress, with blind/inherit/critic/pool/promotion context modes and scratch/worktree write scopes. ([GitHub][1])
+
+The key is: **weak models should almost never be trusted as final authorities. They should be used as high-throughput proposal, critique, and evidence-extraction engines.**
+
+## The highest-power workflow I’d build
+
+Use a **three-layer ZYAL workflow**:
+
+### 1. Reasoning tournament layer
+
+For every hard task, run multiple independent hypothesis lanes.
+
+Each lane receives the same task but different framing:
+
+| Lane              | Purpose                                     |
+| ----------------- | ------------------------------------------- |
+| Minimal patch     | Find smallest safe change                   |
+| Tests-first       | Build falsifying tests before fix           |
+| Refactor-boundary | Improve architecture before patch           |
+| Invariant-seeker  | Identify hidden constraints                 |
+| Red-team          | Argue why all proposed plans fail           |
+| Prior-art         | Search repo memory and past failures        |
+| Formalizer        | Convert problem into explicit claims/checks |
+
+ZYAL already has an `experiments` / hypothesis tournament concept with disjoint lanes, isolated worktrees, blind critic scoring, weighted evaluation, and preservation of failed lanes as negative memory. ([GitHub][1]) For weak models, this is the single most important pattern.
+
+My recommendation: **make hypothesis diversity mandatory.** Do not let ten weak workers produce ten near-identical plans. Require plan-distance checks, different prompting strategies, different context slices, and different assumptions.
+
+### 2. Incubator layer
+
+Any task with high uncertainty, repeated failure, high blast radius, or conflicting evidence should route into incubator.
+
+Use incubator not merely as a fallback, but as the **default reasoning amplifier** for nontrivial work:
+
+```yaml
+incubator:
+  enabled: true
+  strategy: generate_pool_strengthen
+  route_when:
+    any:
+      - risk_score_gte: 0.45
+      - no_progress_iterations_gte: 2
+      - repeated_attempts_gte: 2
+      - readiness_score_lt: 0.70
+  budget:
+    max_passes_per_task: 10
+    max_rounds_per_task: 3
+    max_active_tasks: 4
+    max_parallel_idea_passes: 8
+  readiness:
+    promote_at: 0.82
+    model_confidence_cap: 0.35
+  passes:
+    - { id: scout, type: scout, context: blind, count: 4, writes: scratch_only }
+    - { id: ideas, type: idea, context: blind, count: 8, writes: scratch_only }
+    - { id: strengthen, type: strengthen, context: pool, count: 4, writes: scratch_only }
+    - { id: critic, type: critic, context: critic, count: 6, writes: scratch_only }
+    - { id: synth, type: synthesize, context: pool, count: 2, writes: scratch_only }
+    - { id: prototype, type: prototype, context: inherit, count: 3, writes: isolated_worktree }
+    - { id: review, type: promotion_review, context: promotion, count: 3, writes: scratch_only }
+    - { id: compress, type: compress, context: ledger_only, writes: scratch_only }
+```
+
+The important change from a normal agent loop is the **fan-in/fan-out ratio**: generate many weak hypotheses, then repeatedly compress and criticize them until only evidence-backed candidates remain.
+
+### 3. Evidence/promotion layer
+
+Promotion must require artifacts, not persuasion.
+
+ZYAL’s mission explicitly rejects model-only claims and emphasizes typed proof bundles: tests, affected files, rollback plan, risk delta, and evidence-gated promotion. ([GitHub][1]) Use that aggressively.
+
+For reasoning tasks, evidence should include:
+
+```yaml
+evidence:
+  require_before_promote:
+    - { type: problem_decomposition, must_exist: true }
+    - { type: assumptions_list, must_exist: true }
+    - { type: contradiction_scan, must_pass: true }
+    - { type: alternative_hypotheses, min_count: 3 }
+    - { type: critic_objections, must_exist: true }
+    - { type: resolved_objections, must_pass: true }
+    - { type: test_results, must_pass: true }
+    - { type: rollback_plan, must_exist: true }
+    - { type: negative_memory_update, must_exist: true }
+  sign: sha256
+  archive: true
+```
+
+The rule should be: **no single model can promote its own answer.** A candidate answer must survive independent criticism, tests, and host verification.
+
+## Memory design: the decisive advantage
+
+Memory is where a weak-model cluster can start compounding.
+
+ZYAL already treats SQLite as the source of truth and stores daemon runs, iterations, events, tasks, passes, memories, workers, and artifacts. ([GitHub][1]) Use that as a **reasoning ledger**, not just a log.
+
+I’d use four memory stores:
+
+```yaml
+memory:
+  stores:
+    task_context:
+      scope: task
+      retention: until_promotion
+      write_policy: append_only
+      read_policy: inject_at_start
+
+    failed_approaches:
+      scope: repo
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+
+    proven_patterns:
+      scope: repo
+      retention: permanent
+      write_policy: upsert
+      read_policy: search
+      searchable: true
+
+    reasoning_cases:
+      scope: global
+      retention: permanent
+      write_policy: append_only
+      read_policy: search
+      searchable: true
+
+  provenance:
+    track_source: true
+    hash_chain: true
+```
+
+The most important store is **failed_approaches**. ZYAL’s own vision says failed lanes should become negative memory so the system never repeats dead ends. ([GitHub][1]) For weak models, negative memory is enormous: they often loop on plausible-but-wrong paths. Stop that structurally.
+
+Each failed lane should save:
+
+```yaml
+negative_memory_record:
+  hypothesis: string
+  why_it_seemed_plausible: string
+  falsifying_evidence: string
+  commands_run: array
+  error_signatures: array
+  files_touched: array
+  do_not_repeat_until: condition
+```
+
+Then, every future scout pass starts by searching negative memory before proposing solutions.
+
+## Model routing: use weak models by role, not rank
+
+The repo’s full-power example routes plan/build/review/compress across model profiles and uses a different-provider critic. ([GitHub][1]) For weaker models, I would go further and route by **cognitive operation**:
+
+| Operation      | Best weak-model use                |
+| -------------- | ---------------------------------- |
+| Extraction     | Very good; use many cheap workers  |
+| Brainstorming  | Good if diversity enforced         |
+| Critique       | Good if narrow and adversarial     |
+| Synthesis      | Risky; use multiple reducers       |
+| Final judgment | Weak; require host evidence        |
+| Long planning  | Weak; break into state machine     |
+| Code changes   | Good only with tests and worktrees |
+
+Recommended profiles:
+
+```yaml
+models:
+  profiles:
+    scout: { provider: cheap_pool, model: weak-fast, temperature: 0.2 }
+    idea: { provider: cheap_pool, model: weak-fast, temperature: 0.8 }
+    critic: { provider: alternate_pool, model: weak-critical, temperature: 0.3 }
+    test_designer: { provider: cheap_pool, model: weak-fast, temperature: 0.4 }
+    builder: { provider: cheap_pool, model: weak-code, temperature: 0.2 }
+    reducer_a: { provider: pool_a, model: weak-reasoner, temperature: 0.1 }
+    reducer_b: { provider: pool_b, model: weak-reasoner, temperature: 0.1 }
+    summarizer: { provider: cheapest_pool, model: weak-small, temperature: 0.0 }
+
+  routes:
+    scout: scout
+    idea: idea
+    critic: critic
+    synthesize: reducer_a
+    review: reducer_b
+    prototype: builder
+    compress: summarizer
+
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+
+  confidence_cap: 0.35
+```
+
+The lower the model quality, the lower the allowed self-confidence. Let models contribute evidence, not authority.
+
+## Collaboration protocol: make models debate through artifacts
+
+Do not let agents chat freely. Free-form multi-agent chat tends to converge on social agreement.
+
+Instead, require structured artifacts:
+
+```yaml
+assertions:
+  require_structured_output: true
+  schema:
+    type: object
+    required:
+      - claim
+      - assumptions
+      - evidence
+      - counterarguments
+      - tests_to_run
+      - risk_score
+      - confidence
+    properties:
+      claim: { type: string }
+      assumptions: { type: array }
+      evidence: { type: array }
+      counterarguments: { type: array }
+      tests_to_run: { type: array }
+      risk_score: { type: number, minimum: 0, maximum: 1 }
+      confidence: { type: number, minimum: 0, maximum: 0.35 }
+  on_invalid: retry
+  max_retries: 2
+```
+
+Then reducers compare artifacts field-by-field. This avoids the most common weak-model failure: confident narrative synthesis without evidence.
+
+## The “maximum reasoning” ZYAL pattern
+
+Here is the workflow I would standardize:
+
+```yaml
+workflow:
+  type: state_machine
+  initial: frame
+
+  states:
+    frame:
+      agent: scout
+      writes: scratch_only
+      produces: [problem_statement, constraints, known_unknowns]
+      transitions:
+        - to: retrieve_memory
+          when: { evidence_exists: problem_statement }
+
+    retrieve_memory:
+      agent: scout
+      writes: scratch_only
+      produces: [relevant_memory, failed_approaches]
+      transitions:
+        - to: generate_hypotheses
+          when: { evidence_exists: relevant_memory }
+
+    generate_hypotheses:
+      agent: idea
+      writes: scratch_only
+      produces: [hypothesis_pool]
+      transitions:
+        - to: adversarial_review
+          when: { evidence_exists: hypothesis_pool }
+
+    adversarial_review:
+      agent: critic
+      writes: scratch_only
+      produces: [objection_matrix, contradiction_scan]
+      transitions:
+        - to: synthesize
+          when: { evidence_exists: objection_matrix }
+
+    synthesize:
+      agent: reducer_a
+      writes: scratch_only
+      produces: [ranked_plans, test_plan]
+      transitions:
+        - to: prototype
+          when: { evidence_exists: ranked_plans }
+
+    prototype:
+      agent: builder
+      writes: isolated_worktree
+      produces: [candidate_patches, test_results]
+      transitions:
+        - to: blind_review
+          when: { evidence_exists: test_results }
+        - to: generate_hypotheses
+          when: { checks_failed: true }
+
+    blind_review:
+      agent: reducer_b
+      writes: scratch_only
+      produces: [blind_review_score, unresolved_objections]
+      transitions:
+        - to: promote
+          when: { all_checks_pass: true }
+        - to: incubate
+          when: { unresolved_critical_objections_gte: 1 }
+
+    incubate:
+      agent: critic
+      writes: scratch_only
+      produces: [incubator_summary]
+      transitions:
+        - to: generate_hypotheses
+          when: { evidence_exists: incubator_summary }
+
+    promote:
+      terminal: true
+      approval: human_or_policy_gate
+```
+
+This is effectively a **weak-model reasoning flywheel**:
+
+Memory → diversity → criticism → synthesis → prototype → verification → compression → better memory.
+
+## Host-enforced safety: do not skip this
+
+ZYAL’s strongest principle is that the host owns the loop, not the model. The mission doc is explicit: the model must not decide when to start, stop, or promote; the host evaluates stop conditions, gates promotions with evidence, and enforces budgets. ([GitHub][1])
+
+That matters even more with weak models.
+
+Use:
+
+```yaml
+capabilities:
+  default: deny
+  rules:
+    - { id: read-repo, tool: read, decision: allow }
+    - { id: write-scratch, tool: edit, paths: [".jekko/**", "scratch/**"], decision: allow }
+    - { id: edit-src, tool: edit, paths: ["src/**", "test/**"], decision: ask }
+    - { id: run-tests, tool: shell, command_regex: "^(cargo test|bun test|npm test|pnpm test)", decision: allow }
+    - { id: git-commit, tool: git_commit, decision: ask }
+  command_floor:
+    always_block:
+      - "git push --force"
+      - "rm -rf /"
+      - "sudo "
+      - "curl .* | sh"
+      - "DROP DATABASE"
+```
+
+Also use taint rules wherever possible. ZYAL defines taint as origin-aware data-flow defense that labels inbound sources and prevents tainted content from triggering high-privilege actions without review or sanitization. ([GitHub][1])
+
+## Critical implementation caveat
+
+One thing I would not ignore: the repo states that some high-power ZYAL blocks are currently **parse/preview contracts** or partially wired, not necessarily fully enforced in the shipped start loop. The mission doc says core daemon execution, parsing, preview, state, checkpointing, stop checks, routing, and observability are shipped, while higher-risk blocks have varying enforcement status. ([GitHub][1]) It also specifically notes that nonce/hash arming remains preview-contract behavior until host-issued arm tokens are carried through the start API. ([GitHub][1])
+
+So my implementation recommendation is:
+
+**Phase 1: Build the reasoning workflow using only enforcement paths you trust today.**
+Core loop, SQLite state, incubator, checkpoint verification, stop checks, constraints, guardrails, evidence records, isolated worktrees.
+
+**Phase 2: Wire missing enforcement before relying on “full-power” blocks.**
+Especially: `models`, `quality`, `repo_intelligence`, `experiments`, `taint`, `arming` nonce/hash, and deeper capability enforcement.
+
+## My best “MOST powerful” design recommendation
+
+The strongest ZYAL design is:
+
+> **A bounded, host-governed, evidence-scored hypothesis tournament system with durable negative memory and blind adversarial review.**
+
+More concretely:
+
+1. **Always decompose before solving.**
+2. **Run many cheap independent hypothesis lanes.**
+3. **Force diversity between lanes.**
+4. **Use critics from different providers or model families.**
+5. **Prototype only in isolated worktrees.**
+6. **Require tests and falsification evidence before promotion.**
+7. **Preserve failed lanes as searchable negative memory.**
+8. **Use model confidence caps aggressively.**
+9. **Promote only through host-scored evidence bundles.**
+10. **Continuously compact into reusable reasoning cases.**
+
+This gives weak models a structure where their strengths compound and their weaknesses are trapped by the host.
+
+The deepest insight is this: **don’t try to make weak models think like one strong model. Make them behave like a scientific process.** ZYAL is unusually well-suited for that because its contract already separates autonomy from authority: models generate work; the host governs truth, safety, memory, and promotion.
+
+[1]: https://raw.githubusercontent.com/neverhuman/jekko/main/ZYAL_MISSION.md "raw.githubusercontent.com"
+

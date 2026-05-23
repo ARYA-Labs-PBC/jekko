@@ -5,15 +5,35 @@
 //!
 //! At PR3 the crate ships standalone — no daemon-TS bridge yet. The
 //! `runner::tick` loop is fully orchestrable in dry-run mode for tests; the
-//! daemon-side glue lands in PR4 by tailing `agent/zyal/runner-events.jsonl`.
+//! daemon-side glue lands in PR4 by tailing `target/zyal/runner-events.jsonl`.
 
 pub mod bootstrap_check;
 pub mod classifier;
 pub mod commit;
+pub mod daemon_store;
 pub mod dag;
 pub mod events;
+pub mod evidence;
+pub mod hashing;
+pub mod hero_judge;
+pub mod hero_judge_eval;
+pub mod hero_judge_runner;
+pub mod hero_judge_search;
+pub mod jankurai_gate;
 pub mod locks;
+pub mod model_client;
+pub mod model_policy;
+pub mod parity_lab;
+pub mod port;
+pub mod port_runner;
+pub mod reasoning;
+pub mod reasoning_benchmark;
+pub mod reasoning_io;
+pub mod reasoning_runner;
 pub mod receipts;
+pub mod repo_graph;
 pub mod rollback;
 pub mod runner;
+pub mod stage0_proof;
+pub mod worker_pool;
 pub mod worktree;

@@ -136,7 +136,58 @@ pub fn get_run(conn: &Connection, id: &str) -> StoreResult<Option<DaemonRunRow>>
     .map_err(StoreError::from)
 }
 
+/// List daemon runs newest first.
+pub fn list_runs(conn: &Connection, limit: usize) -> StoreResult<Vec<DaemonRunRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, root_session_id, active_session_id, status, phase, spec_json,
+                spec_hash, iteration, epoch, last_error, last_exit_result_json,
+                stopped_at, time_created, time_updated
+         FROM daemon_run ORDER BY time_updated DESC, id ASC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], daemon_run_from_row)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 /// Delete a daemon_run row.
 pub fn delete_run(conn: &Connection, id: &str) -> StoreResult<usize> {
     Ok(conn.execute("DELETE FROM daemon_run WHERE id = ?1", params![id])?)
+}
+
+fn daemon_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DaemonRunRow> {
+    let spec_text: String = row.get(5)?;
+    let last_exit_text: Option<String> = row.get(10)?;
+    let spec_json = serde_json::from_str(&spec_text).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+    let last_exit_result_json = last_exit_text
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(
+                10,
+                rusqlite::types::Type::Text,
+                Box::new(err),
+            )
+        })?;
+    Ok(DaemonRunRow {
+        id: row.get(0)?,
+        root_session_id: row.get(1)?,
+        active_session_id: row.get(2)?,
+        status: row.get(3)?,
+        phase: row.get(4)?,
+        spec_json,
+        spec_hash: row.get(6)?,
+        iteration: row.get(7)?,
+        epoch: row.get(8)?,
+        last_error: row.get(9)?,
+        last_exit_result_json,
+        stopped_at: row.get(11)?,
+        time_created: row.get(12)?,
+        time_updated: row.get(13)?,
+    })
 }

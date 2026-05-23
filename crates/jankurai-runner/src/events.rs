@@ -1,6 +1,7 @@
 //! NDJSON event sink. Append-only line stream at
-//! `agent/zyal/runner-events.jsonl`. Each line ≤ 512 bytes so the daemon-side
-//! tailer (PR4) can budget its read window. The schema is deliberately flat:
+//! `target/zyal/runs/<run_id>/events.jsonl`, mirrored to
+//! `target/zyal/runner-events.jsonl`. Each line ≤ 512 bytes so daemon-side
+//! tailers can budget their read window. The schema is deliberately flat:
 //! every event carries `ts` + `kind` + `run_id`, plus a free-form `data`
 //! object for kind-specific fields.
 
@@ -13,22 +14,49 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const EVENT_FILE_REL: &str = "agent/zyal/runner-events.jsonl";
+pub const EVENT_FILE_REL: &str = "target/zyal/runner-events.jsonl";
+pub const RUNS_DIR_REL: &str = "target/zyal/runs";
 pub const MAX_LINE_BYTES: usize = 512;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     RunStarted,
+    BrainstormStarted,
+    ReasoningState,
+    ReasoningArtifact,
+    ReasoningLane,
+    MemoryCapsule,
+    PhaseFinalized,
+    TaskAssigned,
     WorkerStarted,
     WorkerPass,
     WorkerFail,
+    ProofPassed,
+    ProofFailed,
+    AuditResult,
+    ParityResult,
+    ParityGap,
+    ParityManifestGenerated,
+    ModelAttempt,
+    ModelOutcome,
+    LiveBudget,
+    BenchmarkResult,
+    HeroJudgeGeneration,
+    ResearchReceipt,
+    HeroCandidate,
+    JudgePatch,
+    VerifierScore,
+    PromotionDecision,
+    KnowledgeCompounded,
     CommitLanded,
     RebaseConflict,
     WorkerRollback,
+    TaskQuarantined,
     GcPruned,
     RunFinished,
     BootstrapRequired,
+    Heartbeat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,17 +70,23 @@ pub struct Event {
 
 pub struct EventSink {
     path: PathBuf,
+    mirror_path: PathBuf,
     run_id: String,
 }
 
 impl EventSink {
     pub fn open(repo_root: &Path, run_id: &str) -> Result<Self> {
-        let path = repo_root.join(EVENT_FILE_REL);
+        let path = repo_root.join(run_event_file_rel(run_id));
         if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
+        }
+        let mirror_path = repo_root.join(EVENT_FILE_REL);
+        if let Some(parent) = mirror_path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
         }
         Ok(Self {
             path,
+            mirror_path,
             run_id: run_id.to_string(),
         })
     }
@@ -73,19 +107,35 @@ impl EventSink {
                 truncate_for_error(&line),
             ));
         }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .with_context(|| format!("open {}", self.path.display()))?;
-        file.write_all(line.as_bytes())?;
-        file.write_all(b"\n")?;
+        append_line(&self.path, &line)?;
+        append_line(&self.mirror_path, &line)?;
         Ok(())
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    pub fn mirror_path(&self) -> &Path {
+        &self.mirror_path
+    }
+}
+
+pub fn run_event_file_rel(run_id: &str) -> PathBuf {
+    PathBuf::from(RUNS_DIR_REL)
+        .join(run_id)
+        .join("events.jsonl")
+}
+
+fn append_line(path: &Path, line: &str) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("open {}", path.display()))?;
+    file.write_all(line.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(())
 }
 
 fn now_epoch_secs() -> u64 {
@@ -122,6 +172,8 @@ mod tests {
         assert_eq!(text.lines().count(), 2);
         assert!(text.contains("run_started"));
         assert!(text.contains("worker_started"));
+        let mirror = fs::read_to_string(sink.mirror_path()).unwrap();
+        assert_eq!(mirror.lines().count(), 2);
     }
 
     #[test]
@@ -148,5 +200,14 @@ mod tests {
         assert_eq!(event.kind, EventKind::CommitLanded);
         assert_eq!(event.run_id, "run-1");
         assert_eq!(event.data["sha"], "abc123");
+    }
+
+    #[test]
+    fn uses_per_run_event_path() {
+        let dir = tempdir().unwrap();
+        let sink = EventSink::open(dir.path(), "run-42").unwrap();
+        assert!(sink
+            .path()
+            .ends_with("target/zyal/runs/run-42/events.jsonl"));
     }
 }
