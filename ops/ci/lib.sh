@@ -84,8 +84,14 @@ resolve_github_repository() {
   if [ -n "${GITHUB_REPOSITORY:-}" ]; then
     repo_json="$GITHUB_REPOSITORY"
   elif ! repo_json="$(git_remote_repository)"; then
-    if ! repo_json="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)"; then
-      fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote"
+    if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
+      require_cmd jq "brew install jq"
+      repo_json="$(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null)"
+    fi
+    if [ -z "${repo_json:-}" ]; then
+      if ! repo_json="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)"; then
+        fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote"
+      fi
     fi
   fi
 
