@@ -50,14 +50,28 @@ fn validate_workflow(workflow: &Value) -> Result<()> {
         jobs,
         "check-standards",
         "Check PR standards",
-        "bash ops/ci/pr-standards.sh",
+        r#"export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+export GITHUB_REPOSITORY="${{ github.repository }}"
+export GITHUB_BASE_REF="${{ github.base_ref }}"
+export GITHUB_HEAD_REF="${{ github.head_ref }}"
+export GITHUB_EVENT_PATH="${{ github.event_path }}"
+bash ops/ci/pr-standards.sh
+"#,
         "check-standards",
     )?;
     assert_job(
         jobs,
         "check-compliance",
         "Check PR template compliance",
-        "bash ops/ci/pr-compliance.sh",
+        r#"export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+export GITHUB_REPOSITORY="${{ github.repository }}"
+export GITHUB_BASE_REF="${{ github.base_ref }}"
+export GITHUB_HEAD_REF="${{ github.head_ref }}"
+export GITHUB_EVENT_PATH="${{ github.event_path }}"
+bash ops/ci/pr-compliance.sh
+"#,
         "check-compliance",
     )?;
     Ok(())
@@ -164,7 +178,7 @@ fn assert_job(
     let script = mapping(&steps[2], &format!("job {name} step 2"))?;
     assert_exact_keys(
         steps[2].as_mapping().expect("step 2 mapping"),
-        &["name", "env", "run"],
+        &["name", "run"],
         &format!("job {name} step 2"),
     )?;
     assert_string(
@@ -178,21 +192,6 @@ fn assert_job(
         "run",
         expected_run,
         &format!("job {name} run command"),
-    )?;
-    assert_exact_pairs(
-        mapping(
-            value_for_key(script, "env", &format!("job {name} step env"))?,
-            &format!("job {name} step env"),
-        )?,
-        &[
-            ("GH_TOKEN", "${{ secrets.GITHUB_TOKEN }}"),
-            ("GITHUB_TOKEN", "${{ secrets.GITHUB_TOKEN }}"),
-            ("GITHUB_REPOSITORY", "${{ github.repository }}"),
-            ("GITHUB_BASE_REF", "${{ github.base_ref }}"),
-            ("GITHUB_HEAD_REF", "${{ github.head_ref }}"),
-            ("GITHUB_EVENT_PATH", "${{ github.event_path }}"),
-        ],
-        &format!("job {name} step env"),
     )?;
     Ok(())
 }
@@ -399,11 +398,10 @@ mod tests {
             .and_then(Value::as_sequence_mut)
             .expect("steps sequence");
         let script = steps[2].as_mapping_mut().expect("script step mapping");
-        let env = script
-            .get_mut(&Value::String("env".into()))
-            .and_then(Value::as_mapping_mut)
-            .expect("script step env mapping");
-        env.remove(&Value::String("GH_TOKEN".into()));
+        script.insert(
+            Value::String("run".into()),
+            Value::String("bash ops/ci/pr-standards.sh".into()),
+        );
 
         validate_workflow(&workflow).expect_err("expected failure");
     }
