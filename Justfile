@@ -687,18 +687,44 @@ ci-local-parity:
 ci-local-pr-dry-run:
 	#!/usr/bin/env bash
 	set -euo pipefail
+	ROOT="$(git rev-parse --show-toplevel)"
+	cd "$ROOT"
+	unset GH_TOKEN GITHUB_TOKEN GH_REPO GITHUB_REPOSITORY GITHUB_BASE_REF GITHUB_HEAD_REF GITHUB_EVENT_PATH GITHUB_EVENT_NAME
+	HEAD_REF="$(git branch --show-current)"
+	if [ -z "$HEAD_REF" ] || [ "$HEAD_REF" = "HEAD" ]; then
+		echo "ci-local-pr-dry-run: check out the PR branch first" >&2
+		exit 1
+	fi
+	TMPDIR="$(mktemp -d)"
+	WORKTREE="$TMPDIR/pr-policy-worktree"
+	cleanup() {
+		git -C "$ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+		rm -rf "$TMPDIR"
+	}
+	trap cleanup EXIT
+	git worktree add --detach "$WORKTREE" HEAD >/dev/null
+	cd "$WORKTREE"
+	export CARGO_TARGET_DIR="$WORKTREE/target/ci-local-pr-dry-run"
 	source ops/ci/lib.sh
-	resolve_github_repository
-	export GH_TOKEN="$(rtk gh auth token)"
+	export GH_TOKEN="$(gh auth token)"
 	export GITHUB_TOKEN="$GH_TOKEN"
+	export GH_REPO="neverhuman/jekko"
+	export GITHUB_REPOSITORY="$GH_REPO"
+	if ! GITHUB_BASE_REF="$(gh pr view --repo "$GH_REPO" "$HEAD_REF" --json baseRefName --jq '.baseRefName')"; then
+		echo "ci-local-pr-dry-run: no open PR found for branch $HEAD_REF" >&2
+		exit 1
+	fi
+	export GITHUB_BASE_REF
+	export GITHUB_HEAD_REF="$HEAD_REF"
+	if ! GITHUB_EVENT_PATH="$(pull_request_target_json "$GH_REPO" "$GITHUB_BASE_REF" "$GITHUB_HEAD_REF")"; then
+		echo "ci-local-pr-dry-run: failed to synthesize pull_request_target event" >&2
+		exit 1
+	fi
+	export GITHUB_EVENT_PATH
 	export GITHUB_EVENT_NAME="pull_request_target"
-	export GITHUB_EVENT_PATH="$(pull_request_target_json)"
-	trap 'rm -f "$GITHUB_EVENT_PATH"' EXIT
-	export GITHUB_BASE_REF="$(rtk jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")"
-	export GITHUB_HEAD_REF="$(rtk jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")"
 	rtk cargo run -p xtask --locked -- pr-workflow-contract
-	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-standards.sh
-	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-compliance.sh
+	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-policy.sh standards
+	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-policy.sh compliance
 
 ci-local-security-tools:
 	#!/usr/bin/env bash

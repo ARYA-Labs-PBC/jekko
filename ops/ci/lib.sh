@@ -15,10 +15,6 @@ CARGO_AUDIT_VERSION="${CARGO_AUDIT_VERSION:-0.22.1}"
 ZIZMOR_VERSION="${ZIZMOR_VERSION:-1.12.0}"
 CARGO_LLVM_COV_VERSION="${CARGO_LLVM_COV_VERSION:-0.6.16}"
 
-if [ -z "${GH_TOKEN:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
-  export GH_TOKEN="$GITHUB_TOKEN"
-fi
-
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 note() { printf '\033[0;90m... %s\033[0m\n' "$1"; }
 fail() { printf '\n\033[1;31m!! %s\033[0m\n' "$1" >&2; exit 1; }
@@ -43,116 +39,47 @@ assert_nonempty() {
   [[ -s "$p" ]] || fail "expected artifact is empty: $p"
 }
 
-git_remote_repository() {
-  local origin_url
-  origin_url="$(git remote get-url origin 2>/dev/null)" || return 1
+require_pr_policy_contract() {
+  local gh_token="${GH_TOKEN:-}"
+  local github_token="${GITHUB_TOKEN:-}"
+  local gh_repo="${GH_REPO:-}"
+  local github_repository="${GITHUB_REPOSITORY:-}"
+  local base_ref="${GITHUB_BASE_REF:-}"
+  local head_ref="${GITHUB_HEAD_REF:-}"
+  local event_path="${GITHUB_EVENT_PATH:-}"
 
-  if [[ "$origin_url" =~ ^(ssh://)?([^@/]+@)?github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
-    printf '%s/%s\n' "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
-    return 0
-  fi
+  [ -n "$gh_token" ] || fail "missing required env GH_TOKEN"
+  [ -n "$github_token" ] || fail "missing required env GITHUB_TOKEN"
+  [ "$gh_token" = "$github_token" ] || fail "GH_TOKEN and GITHUB_TOKEN must match"
+  [ -n "$gh_repo" ] || fail "missing required env GH_REPO"
+  [ -n "$github_repository" ] || fail "missing required env GITHUB_REPOSITORY"
+  [ "$gh_repo" = "$github_repository" ] || fail "GH_REPO and GITHUB_REPOSITORY must match"
+  [ -n "$base_ref" ] || fail "missing required env GITHUB_BASE_REF"
+  [ -n "$head_ref" ] || fail "missing required env GITHUB_HEAD_REF"
+  [ -n "$event_path" ] || fail "missing required env GITHUB_EVENT_PATH"
+  [[ -s "$event_path" ]] || fail "expected GITHUB_EVENT_PATH to point to a non-empty file: $event_path"
 
-  if [[ "$origin_url" =~ ^https?://([^@/]+@)?github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
-    printf '%s/%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
-    return 0
-  fi
-
-  if [[ "$origin_url" =~ github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
-    printf '%s/%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
-    return 0
-  fi
-
-  return 1
-}
-
-git_remote_default_branch() {
-  local default_branch
-
-  if default_branch="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"; then
-    default_branch="${default_branch#origin/}"
-    if [ -n "$default_branch" ]; then
-      printf '%s\n' "$default_branch"
-      return 0
-    fi
-  fi
-
-  if default_branch="$(git remote show origin 2>/dev/null | awk -F': ' '/HEAD branch/ { print $2; exit }')"; then
-    if [ -n "$default_branch" ]; then
-      printf '%s\n' "$default_branch"
-      return 0
-    fi
-  fi
-
-  return 1
-}
-
-resolve_github_repository() {
-  local repo_json
-
-  require_cmd gh "https://cli.github.com/manual/gh"
-
-  if [ -n "${GITHUB_REPOSITORY:-}" ]; then
-    repo_json="$GITHUB_REPOSITORY"
-  elif ! repo_json="$(git_remote_repository)"; then
-    local sanitized_origin
-    sanitized_origin="$(sanitize_git_remote_url "$(git remote get-url origin 2>/dev/null || printf '')")"
-    if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
-      require_cmd jq "brew install jq"
-      repo_json="$(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null)"
-    fi
-    if [ -z "${repo_json:-}" ]; then
-      local event_repo=""
-      if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
-        event_repo="$(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || printf '')"
-      fi
-      fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote (origin: ${sanitized_origin:-unset}; event repo: ${event_repo:-unset})"
-    fi
-  fi
-
-  GITHUB_REPOSITORY="$repo_json"
-  export GITHUB_REPOSITORY
-}
-
-sanitize_git_remote_url() {
-  local url="${1:-}"
-  if [[ "$url" =~ ^(https?://)([^@/]+@)?(.+)$ ]]; then
-    printf '%s%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
-    return 0
-  fi
-  printf '%s\n' "$url"
+  note "pr-policy contract: GH_REPO=$gh_repo GITHUB_REPOSITORY=$github_repository GITHUB_BASE_REF=$base_ref GITHUB_HEAD_REF=$head_ref GITHUB_EVENT_PATH=$event_path GH_TOKEN=[redacted] GITHUB_TOKEN=[redacted]"
 }
 
 pull_request_target_json() {
-  local pr_reference="${1:-}"
-  local current_branch
+  local repo="${1:-}"
+  local base_ref="${2:-}"
+  local head_ref="${3:-}"
   local pr_json
   local pr_number
   local author_association
-  local default_branch
   local event_path
 
   require_cmd gh "https://cli.github.com/manual/gh"
   require_cmd jq "brew install jq"
-  resolve_github_repository
 
-  if [ -z "${pr_reference}" ]; then
-    if [ -n "${GITHUB_HEAD_REF:-}" ]; then
-      pr_reference="$GITHUB_HEAD_REF"
-    fi
-  fi
+  [ -n "$repo" ] || fail "pull_request_target_json requires a repo"
+  [ -n "$base_ref" ] || fail "pull_request_target_json requires a base ref"
+  [ -n "$head_ref" ] || fail "pull_request_target_json requires a head ref"
 
-  if [ -z "${pr_reference}" ]; then
-    if ! current_branch="$(git rev-parse --abbrev-ref HEAD)"; then
-      fail "could not resolve current branch; pass an explicit PR reference: pull_request_target_json <pr_ref>"
-    fi
-    if [ -z "$current_branch" ] || [ "$current_branch" = "HEAD" ]; then
-      fail "detached HEAD; pass an explicit PR reference: pull_request_target_json <pr_ref>"
-    fi
-    pr_reference="$current_branch"
-  fi
-
-  if ! pr_json="$(gh pr view --repo "$GITHUB_REPOSITORY" "$pr_reference" --json number,title,body,author,createdAt,headRefName,baseRefName --jq '.')"; then
-    fail "gh pr view failed for '${pr_reference}' in '${GITHUB_REPOSITORY}'"
+  if ! pr_json="$(gh pr view --repo "$repo" "$head_ref" --json number,title,body,author,createdAt,headRefName,baseRefName)"; then
+    fail "gh pr view failed for '${head_ref}' in '${repo}'"
   fi
 
   pr_number="$(printf '%s' "$pr_json" | jq -r '.number')"
@@ -160,27 +87,25 @@ pull_request_target_json() {
     fail "could not resolve pull request number from gh pr view payload"
   fi
 
-  if ! author_association="$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '.author_association')"; then
-    fail "gh api failed while reading pull request author association for #${pr_number}"
+  if [ "$(printf '%s' "$pr_json" | jq -r '.baseRefName')" != "$base_ref" ] || \
+    [ "$(printf '%s' "$pr_json" | jq -r '.headRefName')" != "$head_ref" ]; then
+    fail "gh pr view returned mismatched refs for '${head_ref}' in '${repo}'"
+  fi
+
+  if ! author_association="$(gh api "/repos/${repo}/pulls/${pr_number}" --jq '.author_association')"; then
+    fail "gh api failed while reading pull request author association for #${pr_number} in '${repo}'"
   fi
 
   if [ -z "${author_association}" ] || [ "$author_association" = "null" ]; then
     fail "pull request #${pr_number} is missing author_association"
   fi
 
-  default_branch="${GITHUB_BASE_REF:-}"
-  if [ -z "$default_branch" ]; then
-    default_branch="$(git_remote_default_branch || true)"
-  fi
-  if [ -z "$default_branch" ]; then
-    fail "could not determine repository default branch for '${GITHUB_REPOSITORY}'"
-  fi
-
   event_path="$(mktemp -t jekko-pr-target-event.XXXXXX)"
   jq -n \
     --argjson pr "$pr_json" \
     --arg author_association "$author_association" \
-    --arg default_branch "$default_branch" \
+    --arg base_ref "$base_ref" \
+    --arg head_ref "$head_ref" \
     '{
       "pull_request": {
         "number": $pr.number,
@@ -189,11 +114,11 @@ pull_request_target_json() {
         "user": { "login": $pr.author.login },
         "author_association": $author_association,
         "created_at": $pr.createdAt,
-        "head": { "ref": $pr.headRefName },
-        "base": { "ref": $pr.baseRefName }
+        "head": { "ref": $head_ref },
+        "base": { "ref": $base_ref }
       },
       "repository": {
-        "default_branch": $default_branch
+        "default_branch": $base_ref
       }
     }' >"$event_path"
 

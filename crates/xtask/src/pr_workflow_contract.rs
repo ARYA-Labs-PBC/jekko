@@ -31,6 +31,22 @@ fn validate_workflow(workflow: &Value) -> Result<()> {
         EXPECTED_WORKFLOW_NAME,
         "workflow name",
     )?;
+    assert_permissions(
+        mapping(
+            value_for_key(workflow_map, "env", "workflow env")?,
+            "workflow env",
+        )?,
+        &[
+            ("GH_TOKEN", "${{ github.token }}"),
+            ("GITHUB_TOKEN", "${{ github.token }}"),
+            ("GH_REPO", "${{ github.repository }}"),
+            ("GITHUB_REPOSITORY", "${{ github.repository }}"),
+            ("GITHUB_BASE_REF", "${{ github.base_ref }}"),
+            ("GITHUB_HEAD_REF", "${{ github.head_ref }}"),
+            ("GITHUB_EVENT_PATH", "${{ github.event_path }}"),
+        ],
+        "workflow env",
+    )?;
     assert_exact_strings(
         &on_trigger_types(workflow_map)?,
         EXPECTED_TRIGGER_TYPES,
@@ -50,28 +66,14 @@ fn validate_workflow(workflow: &Value) -> Result<()> {
         jobs,
         "check-standards",
         "Check PR standards",
-        r#"export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-export GITHUB_REPOSITORY="neverhuman/jekko"
-export GITHUB_BASE_REF="${{ github.base_ref }}"
-export GITHUB_HEAD_REF="${{ github.head_ref }}"
-export GITHUB_EVENT_PATH="${{ github.event_path }}"
-bash ops/ci/pr-standards.sh
-"#,
+        "bash ops/ci/pr-policy.sh standards",
         "check-standards",
     )?;
     assert_job(
         jobs,
         "check-compliance",
         "Check PR template compliance",
-        r#"export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-export GITHUB_REPOSITORY="neverhuman/jekko"
-export GITHUB_BASE_REF="${{ github.base_ref }}"
-export GITHUB_HEAD_REF="${{ github.head_ref }}"
-export GITHUB_EVENT_PATH="${{ github.event_path }}"
-bash ops/ci/pr-compliance.sh
-"#,
+        "bash ops/ci/pr-policy.sh compliance",
         "check-compliance",
     )?;
     Ok(())
@@ -242,8 +244,8 @@ fn assert_exact_keys(map: &Mapping, expected: &[&str], label: &str) -> Result<()
 }
 
 fn assert_workflow_root_keys(workflow: &Mapping) -> Result<()> {
-    if workflow.len() != 4 {
-        bail!("workflow root expected 4 entries, found {}", workflow.len());
+    if workflow.len() != 5 {
+        bail!("workflow root expected 5 entries, found {}", workflow.len());
     }
     for key in ["name", "permissions", "jobs"] {
         if !workflow
@@ -307,10 +309,10 @@ fn on_trigger_types(workflow: &Mapping) -> Result<Vec<String>> {
         value_for_key(pull_request_target, "types", "pull_request_target.types")?,
         "pull_request_target.types",
     )?;
-    Ok(types
+    types
         .iter()
         .map(|value| value_to_string(value, "pull_request_target.types"))
-        .collect::<Result<Vec<_>>>()?)
+        .collect::<Result<Vec<_>>>()
 }
 
 fn mapping<'a>(value: &'a Value, label: &str) -> Result<&'a Mapping> {
@@ -376,27 +378,71 @@ mod tests {
         serde_yaml::from_str(&text).expect("parse workflow fixture")
     }
 
+    fn workflow_root_mut(workflow: &mut Value) -> &mut Mapping {
+        workflow.as_mapping_mut().expect("workflow mapping")
+    }
+
+    fn workflow_env_mut(workflow: &mut Value) -> &mut Mapping {
+        workflow_root_mut(workflow)
+            .get_mut(Value::String("env".into()))
+            .and_then(Value::as_mapping_mut)
+            .expect("workflow env mapping")
+    }
+
+    fn standard_job_steps_mut(workflow: &mut Value) -> &mut [Value] {
+        workflow_root_mut(workflow)
+            .get_mut(Value::String("jobs".into()))
+            .and_then(Value::as_mapping_mut)
+            .expect("jobs mapping")
+            .get_mut(Value::String("check-standards".into()))
+            .and_then(Value::as_mapping_mut)
+            .expect("check-standards job mapping")
+            .get_mut(Value::String("steps".into()))
+            .and_then(Value::as_sequence_mut)
+            .expect("steps sequence")
+    }
+
     #[test]
     fn accepts_expected_workflow_contract() {
         validate_workflow(&load_workflow()).expect("workflow contract");
     }
 
     #[test]
-    fn rejects_missing_step_env() {
+    fn rejects_missing_required_env_key() {
         let mut workflow = load_workflow();
-        let map = workflow.as_mapping_mut().expect("workflow mapping");
-        let jobs = map
-            .get_mut(&Value::String("jobs".into()))
-            .and_then(Value::as_mapping_mut)
-            .expect("jobs mapping");
-        let job = jobs
-            .get_mut(&Value::String("check-standards".into()))
-            .and_then(Value::as_mapping_mut)
-            .expect("check-standards job mapping");
-        let steps = job
-            .get_mut(&Value::String("steps".into()))
-            .and_then(Value::as_sequence_mut)
-            .expect("steps sequence");
+        workflow_env_mut(&mut workflow).remove(Value::String("GH_REPO".into()));
+
+        validate_workflow(&workflow).expect_err("expected failure");
+    }
+
+    #[test]
+    fn rejects_inline_step_exports() {
+        let mut workflow = load_workflow();
+        let steps = standard_job_steps_mut(&mut workflow);
+        let script = steps[2].as_mapping_mut().expect("script step mapping");
+        script.insert(
+            Value::String("run".into()),
+            Value::String(
+                r#"export GH_TOKEN="${{ github.token }}"
+export GITHUB_TOKEN="${{ github.token }}"
+export GH_REPO="${{ github.repository }}"
+export GITHUB_REPOSITORY="${{ github.repository }}"
+export GITHUB_BASE_REF="${{ github.base_ref }}"
+export GITHUB_HEAD_REF="${{ github.head_ref }}"
+export GITHUB_EVENT_PATH="${{ github.event_path }}"
+bash ops/ci/pr-policy.sh standards
+"#
+                .into(),
+            ),
+        );
+
+        validate_workflow(&workflow).expect_err("expected failure");
+    }
+
+    #[test]
+    fn rejects_old_wrapper_invocation() {
+        let mut workflow = load_workflow();
+        let steps = standard_job_steps_mut(&mut workflow);
         let script = steps[2].as_mapping_mut().expect("script step mapping");
         script.insert(
             Value::String("run".into()),
