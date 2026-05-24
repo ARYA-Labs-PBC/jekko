@@ -99,12 +99,14 @@ resolve_github_repository() {
       repo_json="$(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null)"
     fi
     if [ -z "${repo_json:-}" ]; then
-      note "origin url: $(sanitize_git_remote_url "$(git remote get-url origin 2>/dev/null || printf '')")"
+      local sanitized_origin
+      sanitized_origin="$(sanitize_git_remote_url "$(git remote get-url origin 2>/dev/null || printf '')")"
+      note "origin url: ${sanitized_origin}"
       if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
         note "event repository: $(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || printf '')"
       fi
       if ! repo_json="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)"; then
-        fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote"
+        fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote (origin: ${sanitized_origin:-unset})"
       fi
     fi
   fi
