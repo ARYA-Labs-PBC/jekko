@@ -228,11 +228,12 @@ undeclared paid surface as a release-blocking gap.
 
 ### `just tui-ci`
 
-CI-safe TUI lane. No production keys, no browser. Internally: builds the
-host binary, verifies `jekko --version` and `--help`, runs `cargo test -p
-jekko-tui`, compiles every `tuiwright-jekko-unlock` test, and runs the
-CI-safe PTY first-frame regression with `JEKKO_BIN` pointed at the built
-host binary (via `xtask host-binary-path`).
+CI-safe TUI lane. No production keys, no browser. The canonical workflow
+body lives in `bash ops/ci/test-tui.sh`; `just tui-ci` is the local wrapper.
+Internally: builds the host binary, verifies `jekko --version` and `--help`,
+runs `cargo test -p jekko-tui`, compiles every `tuiwright-jekko-unlock`
+test, and runs the CI-safe PTY first-frame regression with `JEKKO_BIN`
+pointed at the built host binary (via `xtask host-binary-path`).
 
 - **Covers:** TUI crate units, host binary smoke, first-frame PTY regression,
   compile-check of every PTY test.

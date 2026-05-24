@@ -4,7 +4,9 @@ Jekko is TUI-only. Browser UI and Playwright web lanes are intentionally out of 
 
 The TUI lanes drive the actual built host binary through a PTY using the
 `crates/tuiwright-jekko-unlock` harness. Tests assert real terminal frames,
-not mocked output.
+not mocked output. The canonical CI-safe lane body lives in
+`bash ops/ci/test-tui.sh`; `just tui-ci` is the local wrapper that sets
+`CARGO_TARGET_DIR=target/codex-plan` and delegates to that script.
 
 ## CI-safe lane
 
@@ -18,6 +20,9 @@ This builds the host binary, verifies `jekko --version` and `jekko --help`,
 runs the Rust TUI smoke lane, compiles the tuiwright integration tests, and
 runs the CI-safe PTY first-frame regression with `JEKKO_BIN` pointed at the
 built host binary.
+
+The actual workflow step is the shell script itself; `just tui-ci` is the
+local convenience wrapper with a dedicated target dir.
 
 The boot regression command is:
 

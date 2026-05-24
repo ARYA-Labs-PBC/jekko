@@ -5,20 +5,28 @@ GitHub. In this repo, `scripts/ci-local.sh` is the local entrypoint and
 `just` recipes wrap it. All lanes route through `just` + `cargo` (or
 `cargo run -p xtask`); there is no Node or Bun on the local CI path.
 
+The exact workflow mirrors live in the wrapper scripts: `bash
+ops/ci/test-tui.sh` mirrors `.github/workflows/test.yml`, `bash
+ops/ci/security.sh` mirrors `.github/workflows/security.yml`, and `just
+ci-local-pr-dry-run` mirrors the `pull_request_target` PR-policy path.
+`just ci-local` is the broader local superset that adds local-only helpers
+and the GitHub-only exception notes that cannot run on a workstation.
+
 ## Quick reference
 
-| Recipe                   | Mirrors                            | Lane class    | Notes |
-| ------------------------ | ---------------------------------- | ------------- | ----- |
-| `just ci-doctor`         | local prerequisite check           | quick         | reports missing tools and install hints |
-| `just ci-quick`          | fast workspace lane                | quick         | same checks as `just fast` |
-| `just fast`              | typecheck + narrow tests           | quick         | smallest feedback loop |
-| `just tui-startup-smoke` | local host-binary TUI smoke        | quick         | first-frame PTY regression on the built binary |
-| `just tui-ci`            | CI-safe TUI lane                   | comprehensive | host binary smoke, TUI crate tests, tuiwright compile + first-frame |
-| `just ci-local-pr-dry-run` | PR policy parity                   | comprehensive | uses a clean-room worktree, requires an authenticated `gh` CLI, and an open PR branch |
+| Recipe                     | Mirrors                                  | Lane class    | Notes |
+| -------------------------- | ---------------------------------------- | ------------- | ----- |
+| `just ci-doctor`           | local prerequisite check                 | quick         | reports missing tools and install hints |
+| `just ci-quick`            | fast workspace lane                      | quick         | same checks as `just fast` |
+| `just fast`                | typecheck + narrow tests                 | quick         | smallest feedback loop |
+| `just tui-startup-smoke`   | local host-binary TUI smoke              | quick         | first-frame PTY regression on the built binary |
+| `just tui-ci`              | `.github/workflows/test.yml` TUI job     | exact mirror  | local wrapper sets `CARGO_TARGET_DIR=target/codex-plan` and delegates to `bash ops/ci/test-tui.sh` |
+| `just ci-local-security`   | `.github/workflows/security.yml` wrapper  | exact mirror  | delegates to `bash ops/ci/security.sh` |
+| `just ci-local-pr-dry-run` | `pull_request_target` PR-policy path     | exact mirror  | uses a clean-room worktree, requires an authenticated `gh` CLI, and an open PR branch |
 | `cargo test --workspace --locked --no-fail-fast` | full unit + integration suite | comprehensive | run before any release lane |
-| `cargo run -p xtask -- ci-fast` | xtask-driven quick gate     | quick         | scaffold for the consolidated quick lane |
-| `just ci-audit`          | Jankurai audit lane                | comprehensive | runs the audit and zero-caps gate |
-| `just ci`                | full local CI parity               | comprehensive | runs the full local CI sequence |
+| `cargo run -p xtask -- ci-fast` | xtask-driven quick gate          | quick         | scaffold for the consolidated quick lane |
+| `just ci-audit`            | Jankurai audit lane                      | comprehensive | bootstraps the runtime schema tree via `bash ops/ci/jankurai.sh --setup-only` before running the audit and zero-caps gate |
+| `just ci-local`            | full local CI superset                   | comprehensive | runs the exact mirrors plus local-only helpers and GitHub-only exception notes; the audit lane bootstraps jankurai runtime schemas first |
 
 Pick a quick lane during iteration. Run the comprehensive lanes before
 pushing for review and before any release lane.

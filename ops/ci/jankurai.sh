@@ -84,6 +84,11 @@ if ! command -v jankurai >/dev/null 2>&1; then
   fi
 fi
 
+if [ "${1:-}" = "--setup-only" ]; then
+  patch_jankurai_schema_root
+  exit 0
+fi
+
 patch_jankurai_schema_root
 
 install_gitleaks() {
