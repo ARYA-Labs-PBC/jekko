@@ -691,6 +691,7 @@ ci-local-audit:
 	mkdir -p {{jankurai_artifact_root}}
 	bash ops/ci/jankurai.sh --setup-only
 	jankurai audit . --mode advisory --json {{jankurai_artifact_root}}/repo-score.json --md {{jankurai_artifact_root}}/repo-score.md
+	bash ops/ci/jankurai-badge.sh
 
 # CI step 2: proof routing + evidence index regeneration.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true

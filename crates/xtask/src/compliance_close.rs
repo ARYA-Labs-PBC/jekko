@@ -54,7 +54,7 @@ pub fn run() -> Result<()> {
         let _ = gh_api([
             "--method",
             "DELETE",
-            &format!("/repos/{repo}/issues/{issue_number}/labels/needs:compliance"),
+            &format!("/repos/{repo}/issues/{issue_number}/labels/needs%3Acompliance"),
         ]);
         if is_pr {
             gh_api([

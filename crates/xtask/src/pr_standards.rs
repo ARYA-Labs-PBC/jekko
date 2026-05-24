@@ -102,7 +102,7 @@ pub fn run() -> Result<()> {
         let _ = gh_api([
             "--method",
             "DELETE",
-            &format!("/repos/{repo}/issues/{number}/labels/needs:issue"),
+            &format!("/repos/{repo}/issues/{number}/labels/needs%3Aissue"),
         ]);
         return Ok(());
     }
@@ -128,8 +128,8 @@ pub fn run() -> Result<()> {
         "--method",
         "POST",
         &format!("/repos/{repo}/issues/{number}/labels"),
-        "-f",
-        "labels=[\"needs:issue\"]",
+        "-F",
+        "labels[]=needs:issue",
     ])?;
     Ok(())
 }
