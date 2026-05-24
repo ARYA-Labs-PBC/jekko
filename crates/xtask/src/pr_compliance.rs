@@ -33,8 +33,8 @@ pub fn run() -> Result<()> {
             "--method",
             "POST",
             &format!("/repos/{repo}/issues/{number}/labels"),
-            "-f",
-            "labels=[\"needs:title\"]",
+            "-F",
+            "labels[]=needs:title",
         ])?;
         gh_api([
             "--method",
@@ -51,14 +51,14 @@ pub fn run() -> Result<()> {
     let _ = gh_api([
         "--method",
         "DELETE",
-        &format!("/repos/{repo}/issues/{number}/labels/needs:title"),
+        &format!("/repos/{repo}/issues/{number}/labels/needs%3Atitle"),
     ]);
 
     if title_is_issue_exempt(&title) {
         let _ = gh_api([
             "--method",
             "DELETE",
-            &format!("/repos/{repo}/issues/{number}/labels/needs:issue"),
+            &format!("/repos/{repo}/issues/{number}/labels/needs%3Aissue"),
         ]);
         return Ok(());
     }

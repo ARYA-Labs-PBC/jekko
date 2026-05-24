@@ -18,8 +18,8 @@ pub fn run() -> Result<()> {
             "--method",
             "POST",
             &format!("/repos/{repo}/issues/{number}/labels"),
-            "-f",
-            "labels=[\"contributor\"]",
+            "-F",
+            "labels[]=contributor",
         ])?;
         println!("Applied contributor label to #{number}");
     } else {
