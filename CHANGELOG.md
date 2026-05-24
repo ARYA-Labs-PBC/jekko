@@ -10,6 +10,11 @@ releases, see `UPCOMING_CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-05-24
+
+### Changed
+- Bumped the workspace patch version and carried the README badge hard-fail gate into the next patch release.
+
 ## [2.0.4] - 2026-05-24
 
 ### Changed

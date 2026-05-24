@@ -15,6 +15,9 @@ rewrite_with_header() {
   local header_file="$1"
   local target_file="$2"
   local tmp
+  if cmp -s "$header_file" <(head -n "$(wc -l <"$header_file")" "$target_file"); then
+    return 0
+  fi
   tmp="$(mktemp)"
   {
     cat "$header_file"
