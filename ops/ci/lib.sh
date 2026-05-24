@@ -94,20 +94,18 @@ resolve_github_repository() {
   if [ -n "${GITHUB_REPOSITORY:-}" ]; then
     repo_json="$GITHUB_REPOSITORY"
   elif ! repo_json="$(git_remote_repository)"; then
+    local sanitized_origin
+    sanitized_origin="$(sanitize_git_remote_url "$(git remote get-url origin 2>/dev/null || printf '')")"
     if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
       require_cmd jq "brew install jq"
       repo_json="$(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null)"
     fi
     if [ -z "${repo_json:-}" ]; then
-      local sanitized_origin
-      sanitized_origin="$(sanitize_git_remote_url "$(git remote get-url origin 2>/dev/null || printf '')")"
-      note "origin url: ${sanitized_origin}"
+      local event_repo=""
       if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
-        note "event repository: $(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || printf '')"
+        event_repo="$(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || printf '')"
       fi
-      if ! repo_json="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)"; then
-        fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote (origin: ${sanitized_origin:-unset})"
-      fi
+      fail "could not resolve GITHUB_REPOSITORY from the checkout; set GITHUB_REPOSITORY or use a GitHub remote (origin: ${sanitized_origin:-unset}; event repo: ${event_repo:-unset})"
     fi
   fi
 
