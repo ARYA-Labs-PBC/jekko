@@ -39,50 +39,47 @@ assert_nonempty() {
   [[ -s "$p" ]] || fail "expected artifact is empty: $p"
 }
 
-resolve_github_repository() {
-  local repo_json
+require_pr_policy_contract() {
+  local gh_token="${GH_TOKEN:-}"
+  local github_token="${GITHUB_TOKEN:-}"
+  local gh_repo="${GH_REPO:-}"
+  local github_repository="${GITHUB_REPOSITORY:-}"
+  local base_ref="${GITHUB_BASE_REF:-}"
+  local head_ref="${GITHUB_HEAD_REF:-}"
+  local event_path="${GITHUB_EVENT_PATH:-}"
 
-  require_cmd gh "https://cli.github.com/manual/gh"
+  [ -n "$gh_token" ] || fail "missing required env GH_TOKEN"
+  [ -n "$github_token" ] || fail "missing required env GITHUB_TOKEN"
+  [ "$gh_token" = "$github_token" ] || fail "GH_TOKEN and GITHUB_TOKEN must match"
+  [ -n "$gh_repo" ] || fail "missing required env GH_REPO"
+  [ -n "$github_repository" ] || fail "missing required env GITHUB_REPOSITORY"
+  [ "$gh_repo" = "$github_repository" ] || fail "GH_REPO and GITHUB_REPOSITORY must match"
+  [ -n "$base_ref" ] || fail "missing required env GITHUB_BASE_REF"
+  [ -n "$head_ref" ] || fail "missing required env GITHUB_HEAD_REF"
+  [ -n "$event_path" ] || fail "missing required env GITHUB_EVENT_PATH"
+  [[ -s "$event_path" ]] || fail "expected GITHUB_EVENT_PATH to point to a non-empty file: $event_path"
 
-  if [ -z "${GITHUB_REPOSITORY:-}" ]; then
-    if ! repo_json="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"; then
-      fail "gh repo view failed; run in a repo checkout or set GITHUB_REPOSITORY"
-    fi
-  else
-    if ! repo_json="$(gh repo view "$GITHUB_REPOSITORY" --json nameWithOwner --jq '.nameWithOwner')"; then
-      fail "gh repo view failed; run in a repo checkout or set GITHUB_REPOSITORY"
-    fi
-  fi
-
-  GITHUB_REPOSITORY="$repo_json"
-  export GITHUB_REPOSITORY
+  note "pr-policy contract: GH_REPO=$gh_repo GITHUB_REPOSITORY=$github_repository GITHUB_BASE_REF=$base_ref GITHUB_HEAD_REF=$head_ref GITHUB_EVENT_PATH=$event_path GH_TOKEN=[redacted] GITHUB_TOKEN=[redacted]"
 }
 
 pull_request_target_json() {
-  local pr_reference="${1:-}"
-  local current_branch
+  local repo="${1:-}"
+  local base_ref="${2:-}"
+  local head_ref="${3:-}"
   local pr_json
   local pr_number
   local author_association
-  local default_branch
   local event_path
 
   require_cmd gh "https://cli.github.com/manual/gh"
   require_cmd jq "brew install jq"
-  resolve_github_repository
 
-  if [ -z "${pr_reference}" ]; then
-    if ! current_branch="$(git rev-parse --abbrev-ref HEAD)"; then
-      fail "could not resolve current branch; pass an explicit PR reference: pull_request_target_json <pr_ref>"
-    fi
-    if [ -z "$current_branch" ] || [ "$current_branch" = "HEAD" ]; then
-      fail "detached HEAD; pass an explicit PR reference: pull_request_target_json <pr_ref>"
-    fi
-    pr_reference="$current_branch"
-  fi
+  [ -n "$repo" ] || fail "pull_request_target_json requires a repo"
+  [ -n "$base_ref" ] || fail "pull_request_target_json requires a base ref"
+  [ -n "$head_ref" ] || fail "pull_request_target_json requires a head ref"
 
-  if ! pr_json="$(gh pr view --repo "$GITHUB_REPOSITORY" "$pr_reference" --json number,title,body,author,createdAt,headRefName,baseRefName --jq '.')"; then
-    fail "gh pr view failed for '${pr_reference}' in '${GITHUB_REPOSITORY}'"
+  if ! pr_json="$(gh pr view --repo "$repo" "$head_ref" --json number,title,body,author,createdAt,headRefName,baseRefName)"; then
+    fail "gh pr view failed for '${head_ref}' in '${repo}'"
   fi
 
   pr_number="$(printf '%s' "$pr_json" | jq -r '.number')"
@@ -90,27 +87,25 @@ pull_request_target_json() {
     fail "could not resolve pull request number from gh pr view payload"
   fi
 
-  if ! author_association="$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '.author_association')"; then
-    fail "gh api failed while reading pull request author association for #${pr_number}"
+  if [ "$(printf '%s' "$pr_json" | jq -r '.baseRefName')" != "$base_ref" ] || \
+    [ "$(printf '%s' "$pr_json" | jq -r '.headRefName')" != "$head_ref" ]; then
+    fail "gh pr view returned mismatched refs for '${head_ref}' in '${repo}'"
+  fi
+
+  if ! author_association="$(gh api "/repos/${repo}/pulls/${pr_number}" --jq '.author_association')"; then
+    fail "gh api failed while reading pull request author association for #${pr_number} in '${repo}'"
   fi
 
   if [ -z "${author_association}" ] || [ "$author_association" = "null" ]; then
     fail "pull request #${pr_number} is missing author_association"
   fi
 
-  if ! repo_json="$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef --jq '.')"; then
-    fail "gh repo view failed while reading default branch for '${GITHUB_REPOSITORY}'"
-  fi
-  default_branch="$(printf '%s' "$repo_json" | jq -r '.defaultBranchRef.name // empty')"
-  if [ -z "$default_branch" ]; then
-    fail "could not determine repository default branch for '${GITHUB_REPOSITORY}'"
-  fi
-
   event_path="$(mktemp -t jekko-pr-target-event.XXXXXX)"
   jq -n \
     --argjson pr "$pr_json" \
     --arg author_association "$author_association" \
-    --arg default_branch "$default_branch" \
+    --arg base_ref "$base_ref" \
+    --arg head_ref "$head_ref" \
     '{
       "pull_request": {
         "number": $pr.number,
@@ -119,11 +114,11 @@ pull_request_target_json() {
         "user": { "login": $pr.author.login },
         "author_association": $author_association,
         "created_at": $pr.createdAt,
-        "head": { "ref": $pr.headRefName },
-        "base": { "ref": $pr.baseRefName }
+        "head": { "ref": $head_ref },
+        "base": { "ref": $base_ref }
       },
       "repository": {
-        "default_branch": $default_branch
+        "default_branch": $base_ref
       }
     }' >"$event_path"
 

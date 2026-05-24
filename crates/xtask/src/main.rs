@@ -18,6 +18,7 @@ mod pr_compliance;
 mod pr_info;
 mod pr_management;
 mod pr_standards;
+mod pr_workflow_contract;
 mod publish_docker_image;
 mod publish_release;
 mod publish_release_artifacts;
@@ -67,6 +68,7 @@ enum Command {
     },
     PrStandards,
     PrCompliance,
+    PrWorkflowContract,
     NotifyDiscord,
     PublishVersion,
     PublishReleaseInit,
@@ -221,6 +223,7 @@ fn main() -> Result<()> {
         Command::PullRequestField { number, field } => pr_info::run(number, field),
         Command::PrStandards => pr_standards::run(),
         Command::PrCompliance => pr_compliance::run(),
+        Command::PrWorkflowContract => pr_workflow_contract::run(),
         Command::NotifyDiscord => notify_discord::run(),
         Command::PublishVersion => publish_version::run(),
         Command::PublishReleaseInit => publish_release::init(),

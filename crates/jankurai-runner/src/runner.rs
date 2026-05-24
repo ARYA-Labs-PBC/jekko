@@ -25,6 +25,7 @@ use crate::bootstrap_check;
 use crate::classifier::{classify, ClassifyResult};
 use crate::dag::{schedule, Wave};
 use crate::events::{EventKind, EventSink};
+use crate::jankurai_gate;
 use crate::receipts::ReceiptsStore;
 
 #[derive(Debug, Clone)]
@@ -198,18 +199,8 @@ fn assert_clean_tree(repo: &std::path::Path) -> Result<()> {
 fn run_jankurai_audit(repo: &std::path::Path) -> Result<()> {
     std::fs::create_dir_all(repo.join(".jankurai"))
         .with_context(|| format!("create {}", repo.join(".jankurai").display()))?;
-    let status = Command::new("jankurai")
-        .args([
-            "audit",
-            ".",
-            "--mode",
-            "advisory",
-            "--json",
-            ".jankurai/repo-score.json",
-            "--md",
-            ".jankurai/repo-score.md",
-            "--no-score-history",
-        ])
+    let status = Command::new(jankurai_gate::CANONICAL_AUDIT_PROGRAM)
+        .args(jankurai_gate::CANONICAL_AUDIT_ARGS)
         .current_dir(repo)
         .status()
         .context("spawn jankurai audit")?;

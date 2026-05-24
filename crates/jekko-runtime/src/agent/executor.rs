@@ -192,6 +192,18 @@ fn http_status_of(err: &jekko_provider::ProviderError) -> u16 {
     }
 }
 
+fn bounded_max_output_tokens(model: &jekko_core::provider::Model) -> u32 {
+    let default_limit = max_output_tokens(model);
+    let Some(env_limit) = std::env::var("JEKKO_RUN_MAX_OUTPUT_TOKENS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+    else {
+        return default_limit;
+    };
+    env_limit.min(default_limit)
+}
+
 #[async_trait]
 impl AgentExecutor for ProviderAgentExecutor {
     async fn execute(&self, request: AgentTurnRequest) -> RuntimeResult<AgentTurnResult> {
@@ -212,6 +224,7 @@ impl AgentExecutor for ProviderAgentExecutor {
         let credential = selected.as_ref().map(|s| s.credential.clone());
         let credential_user = selected.as_ref().and_then(|s| s.user_id.clone());
         let base_url = select_base_url(&provider_id);
+        let tools_disabled = std::env::var("JEKKO_RUN_DISABLE_TOOLS").as_deref() == Ok("1");
         let registry = default_registry();
         let session_seed = if !request.ephemeral {
             request.session_id.clone()
@@ -243,15 +256,19 @@ impl AgentExecutor for ProviderAgentExecutor {
         let max_rounds = 2usize;
         while round < max_rounds {
             round += 1;
-            let tools = registry
-                .catalog()
-                .into_iter()
-                .map(|tool| jekko_provider::adapter::ProviderTool {
-                    name: tool.id,
-                    description: Some(tool.description),
-                    input_schema: transform_schema(&model, tool.schema),
-                })
-                .collect::<Vec<_>>();
+            let tools = if tools_disabled {
+                Vec::new()
+            } else {
+                registry
+                    .catalog()
+                    .into_iter()
+                    .map(|tool| jekko_provider::adapter::ProviderTool {
+                        name: tool.id,
+                        description: Some(tool.description),
+                        input_schema: transform_schema(&model, tool.schema),
+                    })
+                    .collect::<Vec<_>>()
+            };
             let transformed_messages =
                 transform_message(history.clone(), &model, &provider_options);
             let provider_request = ProviderRequest {
@@ -261,10 +278,14 @@ impl AgentExecutor for ProviderAgentExecutor {
                 system: vec![],
                 messages: transformed_messages,
                 tools,
-                tool_choice: Some("auto".into()),
+                tool_choice: if tools_disabled {
+                    None
+                } else {
+                    Some("auto".into())
+                },
                 options: provider_options.clone(),
                 headers: Default::default(),
-                max_output_tokens: max_output_tokens(&model),
+                max_output_tokens: bounded_max_output_tokens(&model),
                 temperature: transform_temperature(&model),
                 top_p: transform_top_p(&model),
                 top_k: transform_top_k(&model),

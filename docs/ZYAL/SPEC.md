@@ -100,6 +100,7 @@ Canonical human-facing schema for the ZYAL `2.6.0` contract.
 | `channels` | object | no | preview | Channel definitions. |
 | `imports` | object | no | preview | Import declarations. |
 | `reasoning_privacy` | object | no | preview | Reasoning privacy policy. |
+| `hero_judge` | object | no | runtime | Hero/Judge prompt-evolution runtime with verifier, literature, red-team, meta-judge, and knowledge compounding gates. |
 | `unsupported_feature_policy` | object | no | preview | Unsupported-feature policy. |
 
 ## Schema Tree
@@ -1226,6 +1227,37 @@ Canonical human-facing schema for the ZYAL `2.6.0` contract.
   - `store_reasoning` - Store reasoning. (kind: scalar; status: runtime; optional)
   - `redact_chain_of_thought` - Redact chain-of-thought. (kind: scalar; status: runtime; optional)
   - `summaries_only` - Summaries only. (kind: scalar; status: runtime; optional)
+- `hero_judge` - Hero/Judge prompt-evolution runtime. (kind: object; status: runtime; optional)
+  - `objective` - Objective override. (kind: scalar; status: runtime; optional)
+  - `generations` - Maximum prompt evolution generations. (kind: scalar; status: runtime; optional)
+  - `population` - Lane counts and maximum parallelism. (kind: object; status: runtime; optional)
+    - `hero_lanes` - Hero candidate lanes. (kind: scalar; status: runtime; optional)
+    - `judge_lanes` - Judge patch lanes. (kind: scalar; status: runtime; optional)
+    - `verifier_lanes` - Verifier lanes. (kind: scalar; status: runtime; optional)
+    - `literature_lanes` - Literature synthesis lanes. (kind: scalar; status: runtime; optional)
+    - `red_team_lanes` - Red-team lanes. (kind: scalar; status: runtime; optional)
+    - `max_parallel` - Maximum concurrent model/search work. (kind: scalar; status: runtime; optional)
+  - `budgets` - Model and search budgets. (kind: object; status: runtime; optional)
+    - `model_calls` - Maximum model calls. (kind: scalar; status: runtime; optional)
+    - `search_queries` - Maximum search queries. (kind: scalar; status: runtime; optional)
+    - `search_pages` - Maximum searched pages or hits. (kind: scalar; status: runtime; optional)
+  - `research` - Search provider policy. (kind: object; status: runtime; optional)
+    - `enabled` - Enable search receipts. (kind: scalar; status: runtime; optional)
+    - `live_when_available` - Use live agent-search providers when armed. (kind: scalar; status: runtime; optional)
+    - `missing_provider` - Missing provider behavior. (kind: enum; status: runtime; optional; values: `skip_with_receipt`, `fail`)
+    - `queries` - Search queries. (kind: array; status: runtime; optional)
+      - `<array item>` - Search query. (kind: scalar; status: runtime; optional)
+  - `evidence` - Bounded local evidence inputs. (kind: array; status: runtime; optional)
+    - `<array item>` - Evidence input. (kind: object; status: runtime; optional)
+      - `id` - Stable evidence id. (kind: scalar; status: runtime; required)
+      - `role` - Evidence role. (kind: scalar; status: runtime; required)
+      - `path` - Relative or absolute file/glob path. (kind: scalar; status: runtime; required)
+      - `max_bytes` - Maximum bytes to read. (kind: scalar; status: runtime; optional)
+  - `promotion` - Deterministic promotion gates. (kind: object; status: runtime; optional)
+    - `min_score` - Minimum host score. (kind: scalar; status: runtime; optional)
+    - `canary_replay` - Require canary replay. (kind: scalar; status: runtime; optional)
+    - `anti_leak` - Reject leaked fixture constants and raw reasoning. (kind: scalar; status: runtime; optional)
+  - Runtime outputs include `quality_metrics.jsonl`, `quality_metrics.csv`, `quality_trend.json`, `lane_metrics.jsonl`, `lane_metrics.csv`, `hero_metrics.csv`, `judge_metrics.csv`, and `reviewer_packet.json` so theory, question, rubric, calibration, evidence, hero-lane, judge-lane, and reviewer-visible quality can be plotted over generations and run series. (kind: artifact; status: runtime; optional)
 - `unsupported_feature_policy` - Unsupported-feature policy. (kind: object; status: preview; optional)
   - `required` - Required features. (kind: array; status: runtime; optional)
     - `<array item>` - Feature. (kind: scalar; status: runtime; optional)
@@ -1256,4 +1288,3 @@ Canonical human-facing schema for the ZYAL `2.6.0` contract.
 - `repo_intelligence`, `evidence_graph`, `workflow`, and `approvals` anchor the feature-maker runbooks.
 
 _Generated from `packages/jekko/src/agent-script/schema-spec.ts`._
-

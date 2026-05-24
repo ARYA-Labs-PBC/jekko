@@ -24,6 +24,19 @@ pub(crate) fn run_preflight() -> Result<()> {
 
     let mut failures: Vec<String> = Vec::new();
 
+    let gh_auth = ProcessCommand::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .context("run gh auth token")?;
+    let gh_auth_ok = gh_auth.status.success() && !gh_auth.stdout.is_empty();
+    println!(
+        "  [{}] authenticated gh token is available",
+        if gh_auth_ok { "OK" } else { "FAIL" }
+    );
+    if !gh_auth_ok {
+        failures.push("authenticated gh token is required for PR-policy parity".into());
+    }
+
     let metadata_ok = ProcessCommand::new("cargo")
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .current_dir(&root)

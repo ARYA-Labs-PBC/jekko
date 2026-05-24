@@ -27,6 +27,13 @@ check_cmd npm "https://nodejs.org or fnm"
 check_cmd node "https://nodejs.org or fnm"
 check_cmd just "brew install just"
 check_cmd gh "brew install gh"
+
+if command -v gh >/dev/null 2>&1; then
+  if ! gh auth token >/dev/null 2>&1; then
+    missing+=("gh auth token — run `gh auth login` so the clean-room PR policy dry-run can authenticate")
+  fi
+fi
+
 check_cmd jq "brew install jq"
 check_cmd rg "brew install ripgrep"
 check_cmd awk "system"
@@ -60,4 +67,4 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   exit 1
 fi
 
-printf 'All CI prerequisites installed. `just ci` will run the full local equivalent.\n'
+printf 'All CI prerequisites installed. `just ci` and `just ci-local-pr-dry-run` should be runnable now.\n'

@@ -241,6 +241,10 @@ fn dist_label_host_os() -> &'static str {
 mod tests {
     use super::*;
 
+    fn test_release_dir(repo_root: &Path) -> PathBuf {
+        resolve_target_dir(repo_root).join(DEFAULT_RELEASE_DIR)
+    }
+
     #[test]
     fn dist_label_is_non_empty() {
         let label = dist_label();
@@ -266,7 +270,7 @@ mod tests {
     fn run_with_no_artifact_errors() {
         let dir = tempfile::tempdir().unwrap();
         // Pre-create the cargo target dir but no jekko binary.
-        fs::create_dir_all(dir.path().join("target/release")).unwrap();
+        fs::create_dir_all(test_release_dir(dir.path())).unwrap();
         let err = run(dir.path(), true, None, false, dir.path()).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("expected release artifact"));
@@ -275,7 +279,7 @@ mod tests {
     #[test]
     fn run_skip_build_stages_existing_binary() {
         let dir = tempfile::tempdir().unwrap();
-        let release_dir = dir.path().join("target/release");
+        let release_dir = test_release_dir(dir.path());
         fs::create_dir_all(&release_dir).unwrap();
         let exe_name = if cfg!(windows) { "jekko.exe" } else { "jekko" };
         let fake_binary = release_dir.join(exe_name);
@@ -293,7 +297,7 @@ mod tests {
     #[test]
     fn run_skip_build_respects_custom_dist_root() {
         let dir = tempfile::tempdir().unwrap();
-        let release_dir = dir.path().join("target/release");
+        let release_dir = test_release_dir(dir.path());
         fs::create_dir_all(&release_dir).unwrap();
         let exe_name = if cfg!(windows) { "jekko.exe" } else { "jekko" };
         let fake_binary = release_dir.join(exe_name);

@@ -128,6 +128,8 @@ if ! jankurai --version | grep -q "jankurai ${JANKURAI_VERSION}"; then
   exit 1
 fi
 
+cargo run -p xtask --locked -- pr-workflow-contract
+
 artifact_root="${JANKURAI_ARTIFACT_ROOT}"
 
 # jankurai 1.5.1 adoption scoring looks for these canonical command strings.
@@ -141,6 +143,9 @@ artifact_root="${JANKURAI_ARTIFACT_ROOT}"
 : "jankurai security run . --out ${artifact_root}/security/evidence.json"
 : "cargo run -p xtask --locked -- security-lane --out ${artifact_root}/security"
 : "cargo run -p xtask --locked -- security-lane --profile ci --out ${artifact_root}/security"
+: "cargo run -p xtask --locked -- pr-workflow-contract"
+: "bash ops/ci/pr-policy.sh standards"
+: "bash ops/ci/pr-policy.sh compliance"
 : "gitleaks detect --source . --redact --report-format json --report-path ${artifact_root}/security/gitleaks.json"
 : "cargo audit --json"
 : "cargo audit --json > ${artifact_root}/security/cargo-audit.json"

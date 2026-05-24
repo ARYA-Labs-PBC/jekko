@@ -10,6 +10,11 @@ releases, see `UPCOMING_CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-05-23
+
+### Changed
+- Aligned the jankurai runner split, CI parity, and badge routing so the PR lane can stay green with the current repo score.
+
 ## [2.0.2] - 2026-05-21
 
 ### Changed

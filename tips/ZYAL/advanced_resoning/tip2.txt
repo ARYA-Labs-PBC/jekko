@@ -1,0 +1,643 @@
+Here’s my best recommendation: build a **ZYAL Reasoning Crucible**—not a “chat swarm.” The winning pattern is to use ZYAL as the host-governed cognition kernel that forces many weaker models into narrow, auditable, evidence-producing roles, then lets the host—not any individual model—merge, verify, remember, and promote only the best-supported results.
+
+The big thing I took from the repo is that ZYAL’s power is not mainly “more agents.” It is **bounded autonomy + durable memory + isolated experimentation + evidence-gated promotion + cross-provider criticism**. The mission doc explicitly frames ZYAL as a strict, declarative YAML operating contract where the host controls lifecycle, durability, evidence gates, budgets, and approvals rather than trusting the model loop itself. ([GitHub][1]) Its own vision points directly at hypothesis tournaments, isolated branches/worktrees, cross-provider critics, anti-vibe gates, budgets, and observable daemon execution. ([GitHub][1])
+
+## 1. The core design principle
+
+For weak models, the goal is **not** to make each model reason like a frontier model. The goal is to make the overall system behave like a stronger reasoner by enforcing this loop:
+
+> **Decompose → diversify → isolate → critique → verify → reduce → remember → repeat**
+
+A weaker model is often good at one small thing: listing possibilities, finding edge cases, checking consistency, summarizing evidence, proposing tests, or attacking an assumption. ZYAL should make every worker do one bounded job, produce structured evidence, and never let unsupported text become truth.
+
+This aligns beautifully with the repo’s schema: ZYAL has top-level surfaces for `workflow`, `memory`, `evidence`, `approvals`, `fan_out`, `dispatch`, `experiments`, `models`, `budgets`, `fleet`, `taint`, `memory_kernel`, `evidence_graph`, `trust`, `evaluation`, roles, channels, and reasoning privacy. ([GitHub][2])
+
+## 2. The architecture I would build
+
+### A. Host-controlled reasoning graph
+
+Represent every hard problem as a **graph**, not a single prompt.
+
+Each node is one of:
+
+| Node type        | Purpose                                                 |
+| ---------------- | ------------------------------------------------------- |
+| `question`       | The main problem or subproblem                          |
+| `claim`          | A proposed answer or lemma                              |
+| `assumption`     | Something that must be true                             |
+| `evidence`       | Test, citation, proof, benchmark, log, execution result |
+| `objection`      | A critic’s challenge                                    |
+| `counterexample` | A concrete failure case                                 |
+| `decision`       | A host/reducer choice                                   |
+| `memory_link`    | Prior knowledge retrieved from durable memory           |
+
+The host should require workers to write only structured objects into the graph. No free-floating “I think this is true.” Every claim needs a source, test, derivation, or explicit uncertainty label.
+
+This is also supported by outside research patterns: self-consistency improves reasoning by sampling diverse reasoning paths and selecting the most consistent answer; multi-agent debate explores disagreements between model instances; Graph of Thoughts generalizes reasoning into graph-like operations where thoughts can be combined, transformed, scored, and refined. ([arXiv][3])
+
+### B. Many small workers, not many general agents
+
+Use a fleet where each worker has a tiny contract. The repo’s ultra semantic bug-finder example already points this way: dispatch routes different bug classes into fan-out, experiments, approvals, incubator, research, and sandbox lanes; worker pools are separated by function; and workers run in isolated worktrees. ([GitHub][4])
+
+Recommended worker topology:
+
+| Role                    | Best use of weak models                                      | Output                 |
+| ----------------------- | ------------------------------------------------------------ | ---------------------- |
+| `framer`                | Restate problem, identify ambiguity, define success criteria | Problem spec           |
+| `decomposer`            | Break problem into subquestions                              | Reasoning DAG          |
+| `retriever`             | Pull relevant memory/docs/code/tests                         | Evidence candidates    |
+| `solver_lane`           | Propose one solution path                                    | Claim bundle           |
+| `analogy_lane`          | Solve via similar prior cases                                | Transfer bundle        |
+| `formalizer`            | Convert fuzzy claims into precise conditions                 | Assumptions/invariants |
+| `counterexample_hunter` | Try to break claims                                          | Counterexamples        |
+| `critic`                | Attack reasoning, not solve                                  | Objection bundle       |
+| `verifier`              | Run commands, tests, calculations, citations, proofs         | Verification receipt   |
+| `reducer`               | Merge only verified pieces                                   | Candidate final        |
+| `red_team`              | Final adversarial pass                                       | Risk report            |
+| `memory_curator`        | Store compact lessons, failures, and receipts                | Durable memory updates |
+
+The strongest available model should usually be assigned to `reducer`, `critic`, or `framer`. The weakest models can still be valuable as `retriever`, `counterexample_hunter`, `test_generator`, `summarizer`, or `assumption_lister`.
+
+### C. Cross-provider blind criticism
+
+The repo is very explicit that critics should differ from builders where possible. The spec includes model routing, critic requirements, redundancy, alternate routing, and confidence caps. ([GitHub][2]) The ultra bug-finder example likewise uses separate model profiles and requires critics to differ, with a confidence cap. ([GitHub][4])
+
+For weaker-model clusters, I would make this mandatory:
+
+1. Solvers do not see each other’s answers during first pass.
+2. Critics judge anonymized candidate bundles.
+3. Judges cannot be the same provider/model family as the solver when alternatives exist.
+4. The reducer sees solver output, critic objections, verification receipts, and memory—but not raw private chain-of-thought.
+5. Majority vote is never enough unless the claim is low-risk and objectively simple.
+
+The important trick: **independence beats volume**. Ten copies of the same weak model using the same prompt usually produce correlated mistakes. Better is five workers with different prompts, retrieved context slices, temperatures, decomposition strategies, and providers.
+
+### D. Evidence-gated promotion
+
+This is the heart of it. ZYAL’s mission emphasizes evidence-gated promotion, anti-vibe gates, proof bundles, and rejecting model-only claims. ([GitHub][1]) The ultra example requires evidence such as invariants, counterexamples, failing tests, proof commands, PR evidence, rollback notes, and forbids promotion without receipts. ([GitHub][4])
+
+For reasoning tasks, define evidence levels:
+
+| Level | Evidence type           | Example                                     |
+| ----- | ----------------------- | ------------------------------------------- |
+| E0    | Unsupported claim       | “This seems right”                          |
+| E1    | Internal consistency    | No contradiction found                      |
+| E2    | Independent agreement   | Multiple isolated workers converge          |
+| E3    | External grounding      | Citation, code reference, log, dataset      |
+| E4    | Executable verification | Test, calculation, proof checker, benchmark |
+| E5    | Adversarial survival    | Red-team failed to break it                 |
+| E6    | Historical durability   | Same pattern stored as reliable memory      |
+
+Only E3+ should influence high-confidence answers. E4+ should be required for code, math, safety-critical, or production-impacting decisions.
+
+### E. Memory as the amplifier
+
+The best way to make weak models stronger over time is not larger context; it is **better memory discipline**.
+
+The repo’s memory direction is unusually relevant here. The SmartMemory/cogcore design describes a deterministic append-only ledger, FSRS-style scheduling, Hebbian co-activation, concept kernels, paper ingestion, topic-hardening, and an AutoResearch loop with worktree-isolated workers and receipt chains. ([GitHub][5]) The memory level-up doc also describes a memory core with WAL, BM25, Hebbian links, FSRS, concepts, topics, ingest, and consolidation, plus benchmark and chase-orchestrator support. ([GitHub][6])
+
+I would use five memory stores:
+
+| Store               | What goes in                                          |
+| ------------------- | ----------------------------------------------------- |
+| `verified_facts`    | Stable facts with provenance                          |
+| `solution_patterns` | Reusable reasoning strategies                         |
+| `counterexamples`   | Things that broke prior answers                       |
+| `negative_memory`   | Failed lanes, bad assumptions, hallucination patterns |
+| `receipts`          | Tests, commands, citations, diffs, benchmark outputs  |
+
+Negative memory is especially powerful. ZYAL’s experiment spec supports preserving failed lanes as negative memory. ([GitHub][2]) Weak models repeat mistakes; durable negative memory is how the host teaches the swarm not to repeat them.
+
+### F. No raw chain-of-thought storage
+
+Store **structured summaries**, not raw reasoning traces. The ZYAL spec includes `reasoning_privacy` options such as `store_reasoning`, `redact_chain_of_thought`, and `summaries_only`. ([GitHub][2])
+
+What to store instead:
+
+```yaml
+reasoning_summary:
+  claim: "Candidate A is better than Candidate B"
+  key_steps:
+    - "A satisfies invariant X"
+    - "B fails counterexample Y"
+  evidence:
+    - receipt_id: "test:boundary-017"
+    - memory_id: "counterexample:auth-race-2026-05"
+  uncertainty:
+    remaining_risks:
+      - "Only tested on synthetic input"
+      - "No human approval yet"
+```
+
+That gives future workers useful memory without preserving sensitive or noisy private traces.
+
+## 3. The workflow I would run for maximum reasoning power
+
+### Phase 0 — Arm safely
+
+ZYAL should never let assistant text self-arm. The mission docs show hash-bound arming with host nonce, accepted origins, single-use tokens, and rejection of assistant/tool/web origins. ([GitHub][1]) The repo also lists safety invariants: preview separate from arming, runs finite or host-checked, SQLite as source of truth, isolated worktrees, promotion requiring host evidence, host-enforced guardrails, and capability/anti-vibe controls. ([GitHub][1])
+
+### Phase 1 — Frame
+
+One or more framers produce:
+
+```yaml
+problem:
+  objective: ...
+  success_criteria: ...
+  constraints: ...
+  unknowns: ...
+  required_evidence_level: E4
+```
+
+Then critics attack the framing before solving begins.
+
+### Phase 2 — Decompose
+
+Decomposers produce a graph:
+
+```yaml
+subquestions:
+  - id: q1
+    text: ...
+    depends_on: []
+  - id: q2
+    text: ...
+    depends_on: [q1]
+```
+
+A reducer merges the decomposition into one canonical problem graph.
+
+### Phase 3 — Retrieve memory
+
+Memory workers retrieve:
+
+```yaml
+memory_hits:
+  verified_facts: [...]
+  prior_failures: [...]
+  counterexamples: [...]
+  patterns: [...]
+```
+
+Critically, retrieved memories must include provenance and freshness. ZYAL’s memory kernel/evidence graph surfaces include stores, redaction, provenance, hash chains, nodes, edges, merge witnesses, trust zones, and taint handling. ([GitHub][2])
+
+### Phase 4 — Fan-out solver lanes
+
+Run independent lanes:
+
+| Lane                   | Strategy                                |
+| ---------------------- | --------------------------------------- |
+| `direct`               | Solve normally                          |
+| `formal`               | Convert to invariants/logic             |
+| `counterexample_first` | Try to disprove likely answers          |
+| `analogy`              | Search memory for similar solved cases  |
+| `minimalist`           | Find simplest sufficient answer         |
+| `simulation`           | Test with examples or executable checks |
+| `research`             | Pull external grounding if allowed      |
+| `adversarial`          | Assume current answer is wrong          |
+
+The repo’s experiment blocks already support diversity axes, blind judges, scoring weights, final verification, and negative memory preservation. ([GitHub][2])
+
+### Phase 5 — Blind critique tournament
+
+Each candidate is anonymized. Critics score:
+
+```yaml
+critique:
+  candidate_id: anon_3
+  fatal_flaws: [...]
+  unsupported_claims: [...]
+  missing_evidence: [...]
+  counterexamples: [...]
+  recommended_next_test: ...
+  score:
+    correctness: 0.0-1.0
+    evidence: 0.0-1.0
+    robustness: 0.0-1.0
+```
+
+### Phase 6 — Verification
+
+Verifiers run tests, calculations, proof checks, citations, shell commands, or code review. For coding tasks, the repo’s anti-vibe gates are exactly right: block test deletion, assertion weakening, silent catches, fake data/substitutes, and require root cause plus failing test. ([GitHub][2])
+
+### Phase 7 — Reduction
+
+The reducer does not “average opinions.” It constructs the strongest answer from verified pieces:
+
+```yaml
+reduction:
+  accepted_claims:
+    - claim_id: c17
+      evidence_level: E4
+  rejected_claims:
+    - claim_id: c09
+      reason: "Broken by counterexample ce12"
+  open_questions:
+    - ...
+  final_confidence: 0.72
+```
+
+For weak-model clusters, confidence should be capped unless there is strong external verification. The ZYAL model spec includes confidence caps. ([GitHub][2])
+
+### Phase 8 — Red-team final
+
+A final adversarial pass asks:
+
+1. What would make this answer wrong?
+2. What claim has the weakest evidence?
+3. What did all workers assume without proof?
+4. What would a stronger model likely notice?
+5. What should be stored as negative memory?
+
+### Phase 9 — Promote memory
+
+Only store compact, provenance-backed memory:
+
+```yaml
+memory_write:
+  store: counterexamples
+  content: ...
+  provenance:
+    evidence_ids: [...]
+    hash_chain: true
+  retention: long
+```
+
+The workflow doc’s shared append-only log pattern is also important: agents reread the log before appending and entries end with the agent name. ([GitHub][7]) That is a simple but powerful coordination primitive.
+
+## 4. Draft ZYAL shape for this system
+
+This is a design template, not an armable runbook. I would intentionally omit any final arming token from assistant-generated content and require the host to preview, hash, nonce, and arm it.
+
+```yaml
+zyal:
+  version: "2.6.0"
+  id: "reasoning-crucible"
+  intent: "host_governed_cluster_reasoning"
+
+  objective:
+    statement: "Solve hard reasoning tasks using a cluster of weaker models through decomposition, diversity, verification, reduction, and durable memory."
+    required_evidence_level: "E4"
+    forbid:
+      - "model_only_final_answers"
+      - "unsupported_high_confidence"
+      - "single_lane_promotion"
+
+  arming:
+    preview_hash_required: true
+    host_nonce_required: true
+    single_use: true
+    reject_origins:
+      - assistant
+      - tool
+      - web
+      - untrusted_mcp
+    accepted_origins:
+      - trusted_user
+      - signed_cli
+      - host_button
+
+  capabilities:
+    default: deny
+    allow:
+      - read_repo
+      - search_memory
+      - write_structured_memory
+      - run_verification_commands
+      - spawn_isolated_worker
+    require_approval:
+      - network_research
+      - modify_repo
+      - install_dependency
+      - expose_secret
+      - deploy
+      - approve_final_high_risk
+
+  reasoning_privacy:
+    store_reasoning: false
+    redact_chain_of_thought: true
+    summaries_only: true
+    store:
+      - claims
+      - assumptions
+      - evidence
+      - objections
+      - decisions
+      - compact_rationales
+
+  fleet:
+    max_workers: 16
+    isolation: "worktree_or_sandbox_per_lane"
+    worker_timeout: "bounded"
+    max_parallel: 8
+    confidence_cap_default: 0.45
+
+  models:
+    profiles:
+      weak_fast:
+        role: ["retriever", "summarizer", "assumption_lister"]
+      weak_solver:
+        role: ["solver_lane", "analogy_lane", "test_generator"]
+      weak_critic:
+        role: ["critic", "counterexample_hunter"]
+      strongest_available:
+        role: ["framer", "reducer", "final_auditor"]
+    critic_policy:
+      must_differ_from_builder: true
+      prefer_different_provider: true
+      blind_review: true
+    routing:
+      use_rolling_scorecards: true
+      score_dimensions:
+        - correctness
+        - calibration
+        - verifier_pass_rate
+        - critic_catch_rate
+        - cost
+        - latency
+
+  memory_kernel:
+    stores:
+      verified_facts:
+        retention: long
+        searchable: true
+        require_provenance: true
+      solution_patterns:
+        retention: long
+        searchable: true
+      counterexamples:
+        retention: long
+        searchable: true
+      negative_memory:
+        retention: long
+        searchable: true
+      receipts:
+        retention: long
+        searchable: true
+    provenance:
+      track_source: true
+      hash_chain: true
+    redaction:
+      secrets: true
+      personal_data: true
+      raw_chain_of_thought: true
+
+  evidence_graph:
+    required_nodes:
+      - question
+      - claim
+      - assumption
+      - evidence
+      - objection
+      - counterexample
+      - decision
+    promotion_rules:
+      final_answer_requires:
+        - at_least_one_verified_solution_path
+        - critic_objections_resolved_or_disclosed
+        - evidence_level_at_least_E3
+      code_or_math_requires:
+        - evidence_level_at_least_E4
+
+  workflow:
+    states:
+      frame:
+        agents: ["framer", "critic"]
+        produces: ["problem_spec", "success_criteria"]
+      decompose:
+        agents: ["decomposer"]
+        produces: ["reasoning_graph"]
+      retrieve:
+        agents: ["retriever", "memory_curator"]
+        produces: ["memory_hits", "prior_counterexamples"]
+      solve_fanout:
+        strategy: "diverse_independent_lanes"
+        lanes:
+          - direct
+          - formal
+          - analogy
+          - counterexample_first
+          - minimalist
+          - simulation
+          - adversarial
+          - research_if_allowed
+        produces: ["candidate_bundles"]
+      blind_critique:
+        agents: ["critic"]
+        requires:
+          - anonymized_candidates
+        produces: ["critique_bundles"]
+      verify:
+        agents: ["verifier"]
+        produces: ["receipts", "failed_claims", "verified_claims"]
+      reduce:
+        agents: ["reducer"]
+        strategy: "best_verified_synthesis"
+        produces: ["candidate_final"]
+      red_team:
+        agents: ["final_auditor", "counterexample_hunter"]
+        produces: ["risk_report"]
+      promote:
+        requires:
+          - evidence_gate_passed
+          - confidence_calibrated
+          - unresolved_risks_disclosed
+        produces:
+          - final_answer
+          - memory_updates
+          - benchmark_item_if_useful
+
+  quality:
+    anti_vibe: true
+    forbid:
+      - test_deletion
+      - assertion_weakening
+      - silent_catch
+      - fake_data_substitution
+      - unsupported_claim
+      - confidence_without_evidence
+    require:
+      - root_cause_or_explicit_unknown
+      - counterexample_search
+      - verification_receipt
+      - rollback_or_recovery_note_for_code_changes
+
+  budgets:
+    max_total_cost: "configured_by_host"
+    max_iterations_per_state: 3
+    stop_when:
+      - evidence_threshold_met
+      - no_new_information_gain
+      - budget_exhausted
+      - safety_gate_triggered
+
+  unsupported_feature_policy:
+    required_blocks_fail_closed:
+      - arming
+      - capabilities
+      - evidence_graph
+      - memory_kernel
+      - quality
+      - reasoning_privacy
+```
+
+## 5. The most important implementation support to add
+
+One caveat from the repo: some powerful ZYAL blocks are parsed or previewed but not necessarily fully enforced everywhere yet. The mission/status text says several blocks are “policy/spec now” and may need small runtime patches, and the spec notes that quality, experiments, research, and taint are preview-heavy while fleet/dispatch/sandbox are central routing and containment primitives. ([GitHub][1])
+
+So I would prioritize these host-side additions:
+
+### 1. Structured worker I/O schema
+
+Every worker output should validate against a JSON/YAML schema:
+
+```yaml
+worker_result:
+  worker_id: string
+  role: enum
+  claim: string
+  assumptions: list
+  evidence: list
+  objections: list
+  counterexamples: list
+  confidence: number
+  requested_next_action: string
+```
+
+Invalid output gets rejected or sent to a repair worker.
+
+### 2. Capability scorecards per model
+
+Because model power can vary, keep rolling scorecards:
+
+```yaml
+model_scorecard:
+  model: string
+  role: critic
+  tasks_seen: 184
+  verified_success_rate: 0.61
+  false_positive_rate: 0.18
+  hallucination_rate: 0.09
+  best_roles:
+    - counterexample_hunter
+    - summarizer
+  avoid_roles:
+    - final_reducer
+```
+
+Routing should be empirical. A cheap weak model that is excellent at finding edge cases should get that job repeatedly.
+
+### 3. Independence controller
+
+The host should deliberately decorrelate workers:
+
+```yaml
+diversity_axes:
+  - provider
+  - prompt_style
+  - retrieved_context_slice
+  - reasoning_strategy
+  - temperature
+  - role
+  - tool_access
+```
+
+This matters more than raw worker count.
+
+### 4. Reducer that is evidence-first
+
+The reducer should rank candidates by:
+
+```yaml
+score:
+  verified_tests: 0.35
+  counterexample_survival: 0.20
+  citation_or_source_quality: 0.15
+  simplicity: 0.10
+  critic_score: 0.10
+  memory_consistency: 0.10
+```
+
+For code tasks, tests and receipts should dominate. For research tasks, citation quality and source agreement should dominate. For abstract reasoning, counterexample survival and formal consistency should dominate.
+
+### 5. Negative memory pipeline
+
+Every failed lane should produce a durable lesson:
+
+```yaml
+negative_memory:
+  failed_claim: ...
+  why_failed: ...
+  counterexample: ...
+  detection_method: ...
+  avoid_next_time: ...
+```
+
+This is one of the highest-ROI upgrades for weaker models.
+
+### 6. Benchmark harness
+
+Use the cluster itself to generate hard benchmark items, then track improvement over time. The memory docs already point toward north-star scoring, determinism, shadow runs, calibration, and receipt-based validation. ([GitHub][6])
+
+Track:
+
+| Metric                       | Why it matters                              |
+| ---------------------------- | ------------------------------------------- |
+| `verified_success_rate`      | Did final answers survive objective checks? |
+| `critic_catch_rate`          | Are critics actually finding flaws?         |
+| `false_green_rate`           | Are we approving bad answers?               |
+| `memory_reuse_gain`          | Does memory improve future tasks?           |
+| `cost_per_verified_solution` | Are more agents worth it?                   |
+| `diversity_gain`             | Did independent lanes find better answers?  |
+| `calibration_error`          | Is confidence honest?                       |
+
+## 6. My strongest practical recommendation
+
+Start with **8–12 workers**, not 50. ZYAL mentions fleet-style execution but also hard boundedness and caps; the spec has fleet fields such as `max_workers`, isolation, and provider policy. ([GitHub][2]) More workers only help when the reducer and verifier can absorb their outputs.
+
+A strong initial layout:
+
+```text
+1 framer
+2 decomposers
+4 solver lanes
+2 critics
+2 verifiers
+1 reducer
+1 red-team auditor
+1 memory curator
+```
+
+That is enough to create real diversity while keeping coordination manageable.
+
+## 7. The non-negotiables
+
+For the “most powerful reasoning” ZYAL design, I would not compromise on these:
+
+1. **Host owns the loop.** The model never self-arms, self-approves, or self-promotes.
+2. **Every claim is a graph node.** No orphan claims.
+3. **Every important claim needs evidence.** Prefer executable or external evidence.
+4. **Solvers and critics are separated.** Blind critique should be the default.
+5. **Failed lanes become negative memory.** Mistakes are assets.
+6. **Confidence is capped without verification.** Weak models must earn confidence.
+7. **Memory is append-only and provenance-backed.** No silent rewriting of truth.
+8. **Reducer synthesizes verified parts, not popular opinions.**
+9. **Raw reasoning traces are not stored.** Store compact, auditable summaries.
+10. **Preview-heavy ZYAL features must fail closed until host-enforced.**
+
+The short name I would give this design is:
+
+> **ZYAL-RC: Reasoning Crucible**
+> A host-governed, evidence-first, memory-amplified, multi-lane reasoning workflow for extracting frontier-like performance from non-frontier models.
+
+The biggest unlock is making the cluster behave less like a committee and more like a scientific lab: many hypotheses, isolated experiments, skeptical peer review, reproducible receipts, durable memory, and strict promotion rules.
+
+[1]: https://github.com/neverhuman/jekko/blob/main/ZYAL_MISSION.md "jekko/ZYAL_MISSION.md at main · neverhuman/jekko · GitHub"
+[2]: https://github.com/neverhuman/jekko/blob/main/docs/ZYAL/SPEC.md "jekko/docs/ZYAL/SPEC.md at main · neverhuman/jekko · GitHub"
+[3]: https://arxiv.org/abs/2203.11171?utm_source=chatgpt.com "Self-Consistency Improves Chain of Thought Reasoning in Language Models"
+[4]: https://github.com/neverhuman/jekko/blob/main/docs/ZYAL/examples/20-semantic-bug-finder-ultra.zyal "jekko/docs/ZYAL/examples/20-semantic-bug-finder-ultra.zyal at main · neverhuman/jekko · GitHub"
+[5]: https://github.com/neverhuman/jekko/tree/main/smartmemory "jekko/smartmemory at main · neverhuman/jekko · GitHub"
+[6]: https://github.com/neverhuman/jekko/blob/main/MEMORY_SYSTEM_LEVELUP.md "jekko/MEMORY_SYSTEM_LEVELUP.md at main · neverhuman/jekko · GitHub"
+[7]: https://github.com/neverhuman/jekko/blob/main/ZYAL_WORKFLOW.md "jekko/ZYAL_WORKFLOW.md at main · neverhuman/jekko · GitHub"
+

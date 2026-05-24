@@ -1,0 +1,974 @@
+## My best recommendation: build a **Proof-Carrying Reasoning Mesh**, not a “swarm”
+
+The strongest ZYAL design for weaker models is not “spawn lots of agents and hope.” It is a **host-enforced reasoning economy** where weak models produce narrow artifacts, other weak models try to falsify them, tools verify them, and memory prevents repeat failures.
+
+That fits ZYAL’s stated philosophy very well: ZYAL treats autonomy as a **runtime-enforced operating contract**, not a prompt trick. Its mission doc explicitly calls out multi-agent orchestration, isolated worktrees, cross-provider critics, evidence-gated promotion, hypothesis tournaments, negative memory, anti-vibe engineering, and cost budgets as core mechanisms. ([GitHub][1]) The canonical spec also makes this very concrete: ZYAL has durable workflow state machines, governed memory stores, evidence bundles, approvals, fleet coordination, model routing, experiments, budgets, capabilities, and quality gates. ([GitHub][2])
+
+The key design principle:
+
+> **Weak models become powerful when the system converts reasoning into small, independent, adversarial, evidence-bearing artifacts.**
+
+Do not ask a weak model to “solve the whole thing.” Ask 30 weak models to each produce one of these: a risk map, a failing test, a counterexample, a minimal patch, a plan, an invariant, a proof obligation, a critique, a reproduction recipe, a dependency hypothesis, a merge witness, a rollback proof, or a memory capsule.
+
+---
+
+## 1. The core architecture: Map → Falsify → Verify → Reduce → Remember
+
+I would design the ZYAL workflow as a repeated loop:
+
+```text
+Problem intake
+  ↓
+Independent scouts
+  ↓
+Blind planners
+  ↓
+Hypothesis tournament
+  ↓
+Adversarial critics
+  ↓
+Tool-based verification
+  ↓
+Host reducer chooses/synthesizes
+  ↓
+Evidence bundle + approval gate
+  ↓
+Memory write: wins, failures, counterexamples, invariants
+```
+
+This matters because weak-model clusters fail when they share the same context too early. They converge on the same wrong answer. ZYAL’s existing tournament pattern is almost exactly the right primitive: the example tournament spawns disjoint candidates in isolated worktrees, scores them with a weighted matrix, uses a blind different-provider critic, and preserves failed lanes as negative memory. ([GitHub][3]) The spec supports this with `experiments.strategy`, distinct lanes, diversity policy, blind judges, reduction strategies such as `best_verified_patch` / `synthesize_best`, final verification, and negative memory. ([GitHub][2])
+
+For weaker models, I would make this pattern universal, not occasional.
+
+---
+
+## 2. Recommended ZYAL “reasoning mesh” workflow
+
+### Phase A — Intake and task crystallization
+
+Use cheap scout models to independently restate the task. Each scout outputs only structured fields:
+
+```json
+{
+  "objective": "...",
+  "acceptance_criteria": ["..."],
+  "unknowns": ["..."],
+  "risk_areas": ["..."],
+  "needed_evidence": ["..."],
+  "likely_failure_modes": ["..."]
+}
+```
+
+Then a reducer builds a single **Task Contract**. No model gets write privileges yet.
+
+The point is to eliminate ambiguity before autonomy begins. ZYAL’s `workflow` block is a good fit because states can declare required artifacts, produced artifacts, write scope, approvals, hooks, timeouts, and transitions. ([GitHub][2])
+
+### Phase B — Independent decomposition
+
+Run 5–9 weak planners with different prompt strategies:
+
+```text
+planner_minimal
+planner_test_first
+planner_architectural
+planner_security
+planner_perf
+planner_adversarial
+planner_rollback
+planner_spec_contract
+planner_null_hypothesis
+```
+
+Each planner sees the Task Contract but **not the other plans**. Each must produce:
+
+```json
+{
+  "plan": ["..."],
+  "assumptions": ["..."],
+  "tests_to_add": ["..."],
+  "risks": ["..."],
+  "how_this_plan_could_fail": ["..."],
+  "rollback_strategy": "..."
+}
+```
+
+Then a critic cluster ranks plans by **testability, reversibility, minimality, and risk**, not by eloquence.
+
+### Phase C — Hypothesis tournament
+
+Spawn isolated lanes, ideally 4–8 at a time. Each lane gets a different hypothesis, not just a different model.
+
+Recommended lanes:
+
+1. **Minimal patch lane** — smallest safe change.
+2. **Test-first lane** — create failing test before implementation.
+3. **Boundary/refactor lane** — repair the abstraction boundary.
+4. **Spec-contract lane** — compare implementation to docs/API/schema.
+5. **Adversarial bug lane** — try to disprove the leading hypothesis.
+6. **Runtime/tool lane** — inspect logs, traces, CI, static analysis.
+7. **Null lane** — argue that no code change is needed; maybe config/docs/test issue.
+8. **Synthesis lane** — only after other lanes finish.
+
+ZYAL already models this well with isolated worktrees, lane budgets, scoring, blind judging, and best-verified reduction. ([GitHub][3])
+
+The important twist for weak models: **do not use majority vote as truth**. Majority vote should only decide which artifacts deserve verification. Tool results and evidence bundles decide promotion.
+
+### Phase D — Critique lattice
+
+For every candidate, spawn critics with narrow jobs:
+
+```text
+critic_correctness: find logical errors
+critic_tests: find missing regression tests
+critic_security: find exploit paths
+critic_regression: find changed behavior
+critic_scope: find unnecessary files/diff
+critic_rollback: verify revert path
+critic_memory: compare against known dead ends
+```
+
+Weak critics are surprisingly useful when their task is “find one reason this is wrong.”
+
+Require each critic to output:
+
+```json
+{
+  "verdict": "pass|fail|unknown",
+  "blocking_issues": ["..."],
+  "counterexample": "...",
+  "evidence_needed": ["..."],
+  "confidence": 0.0
+}
+```
+
+Set confidence caps aggressively. ZYAL’s `models` block supports routing and critic policies, including making the critic differ from the builder and using alternate routing/redundancy. ([GitHub][2]) For a cluster of weaker models, I would set `confidence_cap` around `0.45–0.60` and require evidence, not self-reported certainty.
+
+### Phase E — Verification gauntlet
+
+Promotion should require:
+
+```text
+tests pass
+typecheck/lint pass
+new failing test existed before fix, for bug fixes
+static/security checks pass where relevant
+diff budget respected
+rollback plan tested
+blind critic approval
+evidence bundle signed/archived
+```
+
+ZYAL’s evidence policy supports required evidence before promotion, bundle format, SHA256 signing, and archiving. ([GitHub][2]) Its quality block supports anti-vibe controls such as blocking test deletion, assertion weakening, silent catches, fake-data substitutes, `@ts-ignore`, and requiring a failing test first for bug fixes. ([GitHub][2])
+
+This is where the cluster becomes more capable than the individual models: the model’s job is to propose; the host’s job is to verify.
+
+### Phase F — Reduction and synthesis
+
+Use a non-LLM reducer wherever possible. The reducer should rank candidates by:
+
+```text
+verified score
+test coverage delta
+risk delta
+diff size
+rollback simplicity
+critic objections
+alignment with task contract
+memory conflicts
+```
+
+Only after this ranking should a synthesis model merge ideas. The synthesis model must not invent; it may only combine verified artifacts.
+
+### Phase G — Memory write
+
+Every run should write three kinds of memory:
+
+1. **Positive memory** — what worked, why, evidence hash.
+2. **Negative memory** — failed hypotheses, counterexamples, dead ends.
+3. **Invariant memory** — project rules, architecture facts, contracts, forbidden changes.
+
+ZYAL’s memory block already supports scoped stores, retention, compression, write/read policies, searchability, redaction, provenance, source tracking, and hash chains. ([GitHub][2]) The mission doc also specifically identifies “failed lanes become negative memory” as a core mechanism. ([GitHub][1])
+
+For weaker models, negative memory is huge. It prevents the cluster from wasting cycles rediscovering the same plausible but wrong path.
+
+---
+
+## 3. The agent roles I would use
+
+Use roles with tiny, strict output contracts.
+
+### Supervisor
+
+The supervisor should mostly be a scheduler, not a genius. It owns state transitions, budget checks, worker leases, and evidence requirements. It should not be allowed to declare success without host-verified evidence.
+
+### Scouts
+
+Many cheap models. They gather facts, restate objectives, search code, identify likely files, and propose unknowns. They do not patch.
+
+### Planners
+
+Several weak reasoning models produce independent plans. They must be blind to each other until reduce time.
+
+### Builders
+
+Builders work in isolated git worktrees. Each builder gets one hypothesis and one acceptance contract. Builders should be prevented from editing tests unless the lane is explicitly test-first and anti-vibe rules are active.
+
+### Refuters
+
+Refuters try to break the builder’s answer. They are especially important for weak clusters. A weak model may not be great at building the answer, but it can often find one flaw.
+
+### Verifiers
+
+Tool-first agents. They run tests, typechecks, static analysis, grep checks, schema checks, and security scans. These can be weak models because the tools do most of the judging.
+
+### Memory curator
+
+Summarizes only evidence-backed results into memory. This agent must not write raw guesses into durable memory.
+
+### Reducer / arbiter
+
+Prefer deterministic host scoring. Use an LLM only to explain or synthesize after scores are computed.
+
+---
+
+## 4. Memory design for maximum reasoning
+
+I would implement memory as four layers.
+
+### Layer 1 — Immutable run ledger
+
+Append-only JSONL:
+
+```text
+.jekko/daemon/<run_id>/ledger.jsonl
+```
+
+Contains task states, worker outputs, evidence hashes, approvals, budget events, tool results, and memory writes.
+
+### Layer 2 — Task capsules
+
+Small, current-state summaries injected into every worker:
+
+```json
+{
+  "objective": "...",
+  "acceptance_criteria": ["..."],
+  "current_best_hypotheses": ["..."],
+  "known_dead_ends": ["..."],
+  "required_evidence": ["..."],
+  "open_questions": ["..."]
+}
+```
+
+### Layer 3 — Global semantic memory
+
+Project-wide facts:
+
+```text
+architecture decisions
+known failure modes
+API contracts
+security invariants
+dependency quirks
+test conventions
+review preferences
+```
+
+### Layer 4 — Counterexample bank
+
+This is the highest-leverage memory for weak models:
+
+```text
+failing tests
+regression examples
+false-green signatures
+bugs that looked fixed but were not
+bad patches and why they failed
+```
+
+Memory writes should require evidence. A failed plan should be stored with the reason it failed, the command/evidence proving it failed, and a hash of the artifact. ZYAL’s memory provenance and evidence signing support this pattern. ([GitHub][2])
+
+---
+
+## 5. Collaboration design: avoid groupthink
+
+The biggest danger in a weak-model cluster is correlated error. So the workflow must intentionally manufacture independence.
+
+Use these rules:
+
+```text
+No shared transcript before initial plans.
+No lane reads another lane’s solution before it produces its own.
+Critics are blind to author/model identity.
+Builders and critics use different model/provider/profile when available.
+Memory injection is selective, not global.
+Consensus is never sufficient for promotion.
+Promotion requires tools + evidence.
+```
+
+This is directly aligned with the ZYAL tournament example, which uses isolated worktrees, distinct hypotheses, a blind judge, different-provider criticism, and negative memory. ([GitHub][3])
+
+For model clusters with varying power, add a **capability scoreboard**:
+
+```text
+model_profile → success rate by task type
+model_profile → false positive rate as critic
+model_profile → average verified score
+model_profile → cost per accepted artifact
+model_profile → tendency to over-edit
+```
+
+Then route dynamically:
+
+```text
+stronger model → reducer, critic, synthesis
+weaker model → scout, refuter, test generator, invariant extractor
+cheap model → grep/search/summarize
+code-specialized model → builder lane
+high-precision model → approval explainer
+```
+
+---
+
+## 6. Fleet strategy
+
+For a serious deployment, I would run this as a bounded fleet, not a single run. ZYAL’s `fleet` block supports maximum workers, isolation mode, Jnoccio integration, worker registration, heartbeat paths, heartbeat intervals, max instances, and telemetry. ([GitHub][2]) The fleet example shows a long-running daemon that dispatches isolated runs with per-task budgets, leases for zombie detection, anti-recursion, and triggers from cron/GitHub/CI/Slack. ([GitHub][4])
+
+My recommended default:
+
+```text
+max_workers: 12
+max_parallel_experiment_lanes: 4
+max_planners_per_task: 7
+max_critics_per_candidate: 3
+max_synthesis_passes: 2
+hard_stop_on_budget_exhaustion: true
+worker_heartbeat: 30s
+zombie_reclaim_after: 3 missed heartbeats
+```
+
+Scale up only when evidence quality improves. More agents without better verification creates noise.
+
+---
+
+## 7. A strong ZYAL skeleton for this design
+
+This is the shape I would build toward. Provider/model names and shell commands need to match the actual host environment, but the control structure is the important part.
+
+```yaml
+<<<ZYAL v1:daemon id=weak-model-reasoning-mesh>>>
+version: v1
+intent: daemon
+confirm: RUN_FOREVER
+
+job:
+  name: "Weak-model proof-carrying reasoning mesh"
+  objective: |
+    Maximize reasoning quality from a cluster of weaker models by decomposing
+    work into independent artifacts, racing diverse hypotheses, adversarially
+    critiquing outputs, verifying with tools, reducing by evidence, and writing
+    positive/negative memory.
+
+loop:
+  policy: forever
+  sleep: 5s
+  continue_on: [assistant_stop, compaction]
+  pause_on: [permission_denied, budget_exhausted, approval_required]
+  circuit_breaker:
+    max_consecutive_errors: 4
+    on_trip: pause
+
+context:
+  strategy: hybrid
+  compact_every: 8
+  hard_clear_every: 24
+  preserve:
+    - objective
+    - task_contract
+    - acceptance_criteria
+    - current_state
+    - evidence_requirements
+    - known_dead_ends
+    - memory_keys
+
+checkpoint:
+  every: 1
+  require:
+    - git_status_clean_or_isolated
+    - evidence_bundle_written
+    - no_blocking_critic_findings
+
+workflow:
+  type: state_machine
+  initial: intake
+  states:
+    intake:
+      agent: supervisor
+      writes: scratch_only
+      produces: [task_contract, acceptance_criteria, evidence_plan]
+      transitions:
+        - to: scout
+          when: { artifact_exists: task_contract }
+
+    scout:
+      agent: scout_pool
+      writes: scratch_only
+      produces: [fact_map, risk_map, unknowns]
+      transitions:
+        - to: decompose
+          when: { evidence: fact_map }
+
+    decompose:
+      agent: planner_pool
+      writes: scratch_only
+      produces: [candidate_plans, plan_distance_report]
+      transitions:
+        - to: tournament
+          when: { shell: "scripts/plan-distance-check .jekko/current", assert: { exit_code: 0 } }
+
+    tournament:
+      agent: builder_pool
+      writes: isolated_worktree
+      requires: [candidate_plans]
+      produces: [candidate_patches, lane_evidence]
+      transitions:
+        - to: critique
+          when: { artifact_exists: lane_evidence }
+
+    critique:
+      agent: critic_pool
+      writes: scratch_only
+      requires: [candidate_patches, lane_evidence]
+      produces: [critic_reports, counterexamples]
+      transitions:
+        - to: verify
+          when: { artifact_exists: critic_reports }
+
+    verify:
+      agent: verifier
+      writes: scratch_only
+      requires: [candidate_patches, critic_reports]
+      produces: [verification_matrix, rollback_report]
+      transitions:
+        - to: reduce
+          when: { all_checks: pass }
+
+    reduce:
+      agent: reducer
+      writes: scratch_only
+      requires: [verification_matrix, critic_reports, rollback_report]
+      produces: [winner_commit, merge_witness, final_evidence_bundle]
+      approval: promote_patch
+      transitions:
+        - to: remember
+          when: { approval: approved }
+
+    remember:
+      agent: memory_curator
+      writes: scratch_only
+      requires: [final_evidence_bundle, critic_reports]
+      produces: [memory_write_receipts]
+      transitions:
+        - to: done
+          when: { artifact_exists: memory_write_receipts }
+
+    done:
+      terminal: true
+
+agents:
+  supervisor:
+    model: supervisor_weak
+    role: scheduler
+    write_access: none
+  scout_pool:
+    model: scout_weak
+    count: 8
+    role: independent_fact_extraction
+    write_access: none
+  planner_pool:
+    model: planner_weak
+    count: 7
+    role: blind_planning
+    write_access: none
+  builder_pool:
+    model: builder_weak
+    count: 4
+    role: isolated_patch_builder
+    isolation: git_worktree
+  critic_pool:
+    model: critic_weak_alt
+    count: 4
+    role: blind_adversarial_review
+    write_access: none
+  verifier:
+    model: verifier_weak
+    role: tool_runner
+    write_access: none
+  memory_curator:
+    model: summarizer_weak
+    role: evidence_backed_memory_writer
+    write_access: memory_only
+  reducer:
+    model: reducer_best_available
+    role: evidence_reducer
+    write_access: none
+
+fleet:
+  max_workers: 12
+  isolation: git_worktree
+  jnoccio:
+    enabled: true
+    register_workers: true
+    heartbeat_interval: 30s
+    max_instances: 1
+  telemetry:
+    publish_to: ".jekko/daemon/reasoning-mesh.telemetry.jsonl"
+
+experiments:
+  strategy: disjoint_tournament
+  fork_from: last_green_checkpoint
+  max_parallel: 4
+  diversity:
+    require_distinct_plan: true
+    min_plan_distance: 0.45
+    axes:
+      - minimal_patch
+      - test_first
+      - boundary_refactor
+      - adversarial_counterexample
+      - spec_contract
+      - runtime_trace
+      - null_hypothesis
+  lanes:
+    - id: minimal
+      hypothesis: "Smallest safe change satisfies acceptance criteria."
+      prompt_strategy: smallest_safe_change
+      agent: builder_pool
+      isolation: git_worktree
+      budget: { max_iterations: 4, max_diff_lines: 250, max_cost_usd: 1.50 }
+
+    - id: test_first
+      hypothesis: "A failing regression test identifies the true fix."
+      prompt_strategy: failing_test_first
+      agent: builder_pool
+      isolation: git_worktree
+      budget: { max_iterations: 5, max_diff_lines: 350, max_cost_usd: 2.00 }
+
+    - id: boundary
+      hypothesis: "The bug is an abstraction or contract-boundary violation."
+      prompt_strategy: interface_boundary_repair
+      agent: builder_pool
+      isolation: git_worktree
+      budget: { max_iterations: 5, max_diff_lines: 450, max_cost_usd: 2.00 }
+
+    - id: adversarial
+      hypothesis: "The leading plan is wrong; find a counterexample first."
+      prompt_strategy: disprove_current_best
+      agent: critic_pool
+      isolation: git_worktree
+      budget: { max_iterations: 3, max_diff_lines: 150, max_cost_usd: 1.00 }
+
+  scoring:
+    weights:
+      tests: 0.30
+      correctness: 0.25
+      regression_risk: 0.15
+      security: 0.10
+      maintainability: 0.10
+      rollback_simplicity: 0.05
+      diff_size: 0.05
+    command: "scripts/score-reasoning-lane .jekko/daemon/current"
+    judge:
+      agent: critic_pool
+      blind: true
+      must_use_different_provider: true
+
+  reduce:
+    strategy: best_verified_patch
+    require_final_verification: true
+
+  on_partial_failure: continue
+  preserve_failed_lanes_as_negative_memory: true
+
+models:
+  profiles:
+    supervisor_weak:
+      provider: jnoccio
+      model: weak-general
+      temperature: 0.1
+      budget_usd: 0.50
+
+    scout_weak:
+      provider: jnoccio
+      model: weak-fast
+      temperature: 0.4
+      budget_usd: 0.25
+
+    planner_weak:
+      provider: jnoccio
+      model: weak-reasoner
+      temperature: 0.7
+      budget_usd: 0.75
+
+    builder_weak:
+      provider: jnoccio
+      model: weak-coder
+      temperature: 0.3
+      budget_usd: 1.00
+
+    critic_weak_alt:
+      provider: alternate
+      model: weak-critic
+      temperature: 0.2
+      budget_usd: 0.75
+
+    summarizer_weak:
+      provider: jnoccio
+      model: weak-summarizer
+      temperature: 0.1
+      budget_usd: 0.25
+
+    reducer_best_available:
+      provider: jnoccio
+      model: best-available-small
+      temperature: 0.0
+      budget_usd: 1.00
+
+  routes:
+    scout: scout_weak
+    plan: planner_weak
+    build: builder_weak
+    critique: critic_weak_alt
+    summarize: summarizer_weak
+    reduce: reducer_best_available
+
+  critic:
+    must_differ_from_builder: true
+    must_use_different_provider: true
+
+  redundancy:
+    on_rate_limit: alternate
+    on_context_overflow: summarizer_weak
+    chain: [scout_weak, planner_weak, critic_weak_alt]
+
+  confidence_cap: 0.55
+
+memory:
+  stores:
+    task_capsules:
+      scope: run
+      retention: until_complete
+      max_entries: 200
+      compression: rolling_summary
+      write_policy: supervisor_only
+      read_policy: all_agents
+      searchable: true
+      path: ".jekko/daemon/{{run_id}}/STATE.md"
+
+    failed_approaches:
+      scope: global
+      retention: permanent
+      max_entries: 5000
+      compression: evidence_summary
+      write_policy: evidence_required
+      read_policy: relevant_only
+      searchable: true
+      path: ".jekko/memory/failed_approaches.jsonl"
+
+    counterexamples:
+      scope: project
+      retention: permanent
+      max_entries: 5000
+      compression: none
+      write_policy: evidence_required
+      read_policy: critics_and_planners
+      searchable: true
+      path: ".jekko/memory/counterexamples.jsonl"
+
+    invariants:
+      scope: project
+      retention: permanent
+      max_entries: 1000
+      compression: canonicalize
+      write_policy: approval_required
+      read_policy: all_agents
+      searchable: true
+      path: ".jekko/memory/invariants.jsonl"
+
+  redaction:
+    patterns:
+      - "sk-[A-Za-z0-9_-]+"
+      - "ghp_[A-Za-z0-9_]+"
+      - "AKIA[0-9A-Z]{16}"
+    action: hash
+
+  provenance:
+    track_source: true
+    hash_chain: true
+
+evidence:
+  require_before_promote:
+    - type: task_contract
+      must_exist: true
+    - type: test_results
+      must_pass: true
+    - type: typecheck
+      must_pass: true
+    - type: blind_critic
+      must_pass: true
+    - type: rollback_plan
+      must_exist: true
+    - type: regression_diff
+      must_be_known: true
+    - type: memory_write_receipts
+      must_exist: true
+  bundle_format: json
+  sign: sha256
+  archive: true
+
+approvals:
+  gates:
+    promote_patch:
+      required_role: maintainer
+      decisions: [approved, rejected, revise]
+      require_evidence:
+        - final_evidence_bundle
+        - verification_matrix
+        - rollback_report
+      auto_approve_if:
+        risk_score_lt: 0.20
+        all_required_evidence_passed: true
+
+quality:
+  anti_vibe:
+    enabled: true
+    fail_closed: true
+    block_test_deletion: true
+    block_assertion_weakening: true
+    block_silent_catch: true
+    block_fake_data_substitutes: true
+    block_ts_ignore: true
+    require_root_cause_for_bugfix: true
+    require_failing_test_first_for_bugfix: true
+  diff_budget:
+    max_files_changed: 12
+    max_added_lines: 600
+    max_deleted_lines: 300
+    on_violation: require_approval
+
+capabilities:
+  default: deny
+  rules:
+    - id: read_repo
+      tool: filesystem
+      paths: ["."]
+      decision: allow
+      reason: "Agents need read access for task analysis."
+
+    - id: isolated_edit
+      tool: edit
+      paths: [".", "!secrets/**", "!infra/prod/**"]
+      decision: allow
+      require_gate: isolated_worktree_only
+      expires: "1h"
+
+    - id: test_shell
+      tool: shell
+      command_regex: "^(cargo test|cargo check|npm test|pnpm test|bun test|pytest|scripts/score-|scripts/verify-)"
+      decision: allow
+      expires: "1h"
+
+    - id: risky_shell
+      tool: shell
+      command_regex: "(git push|rm -rf|sudo|curl .*\\|.*sh|chmod 777|DROP TABLE|TRUNCATE)"
+      decision: deny
+
+  command_floor:
+    always_block:
+      - "git push --force"
+      - "rm -rf /"
+      - "sudo"
+      - "curl .* | sh"
+      - "chmod -R 777"
+      - "DROP TABLE"
+      - "TRUNCATE"
+
+budgets:
+  run:
+    wall_clock: 8h
+    max_cost_usd: 50
+    on_exhaust: pause
+  task:
+    max_iterations: 12
+    max_cost_usd: 10
+    on_exhaust: park
+  iteration:
+    max_tool_calls: 80
+    max_diff_lines: 800
+    on_exhaust: checkpoint_and_pause
+  experiment_lane:
+    max_cost_usd: 2
+    max_iterations: 5
+    on_exhaust: score_partial
+
+repo_intelligence:
+  scale: large
+  indexes: [symbols, imports, tests, ownership, dependency_graph]
+  scope_control:
+    max_files_initial: 30
+    expand_scope_requires_evidence: true
+  blast_radius:
+    compute_on: [diff, imports, ownership, tests]
+    pause_when_score_gte: 0.75
+
+observability:
+  spans: [workflow_state, agent_call, tool_call, evidence_bundle, memory_write]
+  metrics: [cost, latency, tokens, lane_score, verification_pass_rate, rollback_success]
+  cost:
+    budget: 50
+    currency: USD
+    alert_at_percent: 70
+    on_budget_exceeded: pause
+  report:
+    format: markdown
+    on_checkpoint: ".jekko/daemon/{{run_id}}/REPORT.md"
+    include: [scoreboard, evidence, failures, memory_writes, next_actions]
+
+done:
+  require:
+    - final_evidence_bundle
+    - winner_commit
+    - memory_write_receipts
+    - rollback_report
+  forbid:
+    - uncommitted_changes
+    - unresolved_blocking_critic_findings
+    - unsigned_evidence
+<<<END_ZYAL id=weak-model-reasoning-mesh>>>
+ZYAL_ARM RUN_FOREVER id=weak-model-reasoning-mesh
+```
+
+---
+
+## 8. What needs to be built or hardened to support this
+
+A very important implementation note: the ZYAL docs distinguish runtime-enforced blocks from preview/partially host-enforced blocks. The spec’s status legend says `runtime` means shipped parser/runtime surface, while `preview` means parsed and previewed but enforcement is partial or host-enforced. ([GitHub][2]) The mission doc also says v2.1–v2.4 power blocks are strict parser/preview contracts today, while some blocks are not fully wired into the shipped start loop yet. ([GitHub][1])
+
+So to get the “most powerful” version, I would prioritize these support pieces:
+
+### A. Hard reducer and scorer scripts
+
+Build deterministic scripts:
+
+```text
+scripts/score-reasoning-lane
+scripts/verify-evidence-bundle
+scripts/plan-distance-check
+scripts/merge-witness
+scripts/rollback-verify
+scripts/memory-write-verify
+scripts/critic-report-validate
+```
+
+Weak models should feed these scripts; scripts should decide pass/fail.
+
+### B. Evidence graph
+
+Represent every claim as:
+
+```json
+{
+  "claim": "...",
+  "source": "...",
+  "supporting_evidence": ["..."],
+  "opposing_evidence": ["..."],
+  "status": "verified|refuted|unknown",
+  "hash": "..."
+}
+```
+
+Then reducers operate on evidence, not model prose.
+
+### C. Model capability scoreboard
+
+Track each model’s actual verified performance by role. Route based on measured behavior, not reputation.
+
+```text
+model X: good scout, bad builder
+model Y: good critic, too verbose as planner
+model Z: cheap summarizer, unreliable with code
+```
+
+### D. Strict memory governance
+
+Do not let models write durable memory directly. Require evidence-backed write receipts. Store negative memory aggressively.
+
+### E. Blindness controls
+
+The host should enforce lane blindness. Do not rely on prompts like “do not look at other lanes.”
+
+### F. Anti-correlation strategy
+
+Use different prompts, contexts, temperatures, retrieval slices, and providers. If all models are the same, vary:
+
+```text
+prompt strategy
+context subset
+tool access
+critic rubric
+lane objective
+temperature
+ordering of evidence
+```
+
+### G. Evaluation harness
+
+Continuously compare:
+
+```text
+single weak model
+weak model with memory
+weak model with critics
+weak tournament
+full reasoning mesh
+```
+
+Measure:
+
+```text
+verified success rate
+false success rate
+cost per accepted patch
+time to evidence
+regression rate
+repeat-dead-end rate
+diff size
+rollback success
+```
+
+This is how you make the cluster improve instead of merely become louder.
+
+---
+
+## 9. The highest-leverage design choices
+
+The biggest wins are these:
+
+1. **Blind independent first pass** — prevents early groupthink.
+2. **Hypothesis tournament** — transforms weak reasoning into search over strategies.
+3. **Adversarial refuters** — cheap models are useful when asked to find one flaw.
+4. **Tool-verified evidence** — never trust “I think this works.”
+5. **Negative memory** — failed lanes become future speedups.
+6. **Strict write scopes** — scouts/planners/critics do not patch.
+7. **Capability leases** — autonomy stays bounded.
+8. **Confidence caps** — weak models cannot promote themselves by sounding certain.
+9. **Host reducer** — final choice is evidence-weighted, not rhetoric-weighted.
+10. **Continuous model scoreboard** — route based on observed performance.
+
+My strongest recommendation is to make the **hypothesis tournament + evidence graph + negative memory** the center of the system. That is where weaker models stop behaving like weak isolated agents and start behaving like a coordinated reasoning engine.
+
+[1]: https://github.com/neverhuman/jekko/blob/main/ZYAL_MISSION.md "jekko/ZYAL_MISSION.md at main · neverhuman/jekko · GitHub"
+[2]: https://github.com/neverhuman/jekko/blob/main/docs/ZYAL/SPEC.md "jekko/docs/ZYAL/SPEC.md at main · neverhuman/jekko · GitHub"
+[3]: https://github.com/neverhuman/jekko/blob/main/docs/ZYAL/examples/02-hypothesis-tournament.zyal "jekko/docs/ZYAL/examples/02-hypothesis-tournament.zyal at main · neverhuman/jekko · GitHub"
+[4]: https://github.com/neverhuman/jekko/blob/main/docs/ZYAL/examples/04-fleet-portfolio.zyal "jekko/docs/ZYAL/examples/04-fleet-portfolio.zyal at main · neverhuman/jekko · GitHub"
+

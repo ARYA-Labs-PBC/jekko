@@ -75,10 +75,11 @@ async fn dry_run_tick_on_green_repo_emits_run_started_and_finished() {
     let report = run_tick(&config, 1).await.unwrap();
     assert!(report.classify.findings.is_empty());
     assert!(report.waves.is_empty());
-    let events_path = dir.path().join("agent/zyal/runner-events.jsonl");
+    let events_path = dir.path().join("target/zyal/runs/test-run/events.jsonl");
     let text = fs::read_to_string(&events_path).unwrap();
     assert!(text.contains("run_started"));
     assert!(text.contains("run_finished"));
+    assert!(dir.path().join("target/zyal/runner-events.jsonl").exists());
 }
 
 #[tokio::test]

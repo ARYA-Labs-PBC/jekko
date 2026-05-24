@@ -8,6 +8,8 @@ use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use jekko_provider::adapter::ProviderCredential;
+use jekko_provider::key_pool::KeyPool;
+use jekko_provider::providers::jnoccio::JNOCCIO_DEFAULT_API_KEY;
 use jekko_provider::providers::{
     AnthropicAdapter, JNoccioAdapter, JekkoAdapter, LiteLlmAdapter, OpenAiAdapter,
     OpenRouterAdapter,
@@ -32,7 +34,8 @@ pub(super) fn select_provider_id(request: &AgentTurnRequest) -> RuntimeResult<St
     }
     let snapshot = env_snapshot();
     let developer_unlocked = jekko_jnoccio_boot::unlock::is_unlocked();
-    let selection = choose_active_provider(&snapshot, developer_unlocked);
+    let runtime_snapshot = supported_runtime_snapshot(&snapshot);
+    let selection = choose_active_provider(&runtime_snapshot, developer_unlocked);
     match selection.active_provider_id {
         Some(id) => Ok(id),
         None => Err(RuntimeError::invalid(NO_PROVIDER_CONFIGURED_MSG)),
@@ -108,6 +111,12 @@ pub(super) fn select_credential(
                 user_id: None,
             }));
         }
+        return Ok(Some(SelectedCredential {
+            credential: ProviderCredential::ApiKey {
+                key: JNOCCIO_DEFAULT_API_KEY.to_string(),
+            },
+            user_id: None,
+        }));
     }
     Ok(None)
 }
@@ -116,7 +125,7 @@ pub(super) fn select_credential(
 /// can call [`reset_balancer_for_tests`].
 fn balancer() -> &'static Mutex<Option<KeyBalancer>> {
     static BALANCER: OnceLock<Mutex<Option<KeyBalancer>>> = OnceLock::new();
-    BALANCER.get_or_init(|| Mutex::new(KeyBalancer::new(jekko_jnoccio_boot::unlock::is_unlocked())))
+    BALANCER.get_or_init(|| Mutex::new(KeyBalancer::new(true)))
 }
 
 fn balancer_pick(provider_id: &str, model_id: &str) -> Option<crate::key_balancer::KeyPick> {
@@ -271,6 +280,7 @@ fn env_snapshot() -> BTreeMap<String, EnvValue> {
             }
         }
     }
+    merge_key_pool_snapshot(&mut values, true);
     if values
         .get("JNOCCIO_DEVELOPER_KEY")
         .and_then(|v| v.value.as_ref())
@@ -287,6 +297,63 @@ fn env_snapshot() -> BTreeMap<String, EnvValue> {
         }
     }
     values
+}
+
+fn merge_key_pool_snapshot(values: &mut BTreeMap<String, EnvValue>, developer_unlocked: bool) {
+    let Some(mut pool) = KeyPool::new(developer_unlocked) else {
+        return;
+    };
+    for entry in CATALOG {
+        if !is_supported_runtime_provider(entry.provider_id) {
+            continue;
+        }
+        if pool.candidates(entry.provider_id).is_empty() {
+            continue;
+        }
+        for env_name in entry.env_names {
+            values
+                .entry((*env_name).to_string())
+                .and_modify(|value| {
+                    if value.value.is_none() {
+                        value.value = Some("present".to_string());
+                        value.source = Some(ModelKeySource::UserLlmEnv);
+                    }
+                })
+                .or_insert_with(|| EnvValue {
+                    value: Some("present".to_string()),
+                    source: Some(ModelKeySource::UserLlmEnv),
+                });
+        }
+    }
+}
+
+fn supported_runtime_snapshot(values: &BTreeMap<String, EnvValue>) -> BTreeMap<String, EnvValue> {
+    let mut filtered = BTreeMap::new();
+    for entry in CATALOG {
+        if !is_supported_runtime_provider(entry.provider_id) {
+            continue;
+        }
+        for env_name in entry.env_names {
+            if let Some(value) = values.get(*env_name) {
+                filtered.insert((*env_name).to_string(), value.clone());
+            }
+        }
+        if let Some(companion) = entry.companion_env_names {
+            for env_name in companion {
+                if let Some(value) = values.get(*env_name) {
+                    filtered.insert((*env_name).to_string(), value.clone());
+                }
+            }
+        }
+    }
+    filtered
+}
+
+fn is_supported_runtime_provider(provider_id: &str) -> bool {
+    matches!(
+        provider_id,
+        "anthropic" | "jekko" | "openai" | "openrouter" | "jnoccio" | "litellm" | "llmgateway"
+    )
 }
 
 #[cfg(test)]
@@ -360,5 +427,70 @@ mod tests {
         let selection =
             choose_active_provider(&snapshot, jekko_jnoccio_boot::unlock::is_unlocked());
         assert_eq!(selection.active_provider_id.as_deref(), Some("jnoccio"));
+    }
+
+    #[test]
+    fn provider_selection_sees_default_user_key_pool() {
+        let home = TempDir::new().unwrap();
+        let user_dir = home.path().join(".jekko/users/user");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(user_dir.join("llm.env"), "OPENROUTER_API_KEY=key\n").unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+
+        let snapshot = env_snapshot();
+        let selection =
+            choose_active_provider(&snapshot, jekko_jnoccio_boot::unlock::is_unlocked());
+        assert_eq!(selection.active_provider_id.as_deref(), Some("openrouter"));
+    }
+
+    #[test]
+    fn provider_selection_sees_extra_user_key_pool_without_unlock() {
+        let home = TempDir::new().unwrap();
+        let user_dir = home.path().join(".jekko/users/user_1");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(user_dir.join("llm.env"), "OPENROUTER_API_KEY=key\n").unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+
+        let snapshot = env_snapshot();
+        let selection = choose_active_provider(
+            &supported_runtime_snapshot(&snapshot),
+            jekko_jnoccio_boot::unlock::is_unlocked(),
+        );
+        assert_eq!(selection.active_provider_id.as_deref(), Some("openrouter"));
+    }
+
+    #[test]
+    fn provider_selection_skips_configured_but_unsupported_provider() {
+        let home = TempDir::new().unwrap();
+        let user_dir = home.path().join(".jekko/users/user_1");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(
+            user_dir.join("llm.env"),
+            "GEMINI_API_KEY=google-key\nOPENROUTER_API_KEY=openrouter-key\n",
+        )
+        .unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+
+        let snapshot = env_snapshot();
+        let selection = choose_active_provider(
+            &supported_runtime_snapshot(&snapshot),
+            jekko_jnoccio_boot::unlock::is_unlocked(),
+        );
+        assert_eq!(selection.active_provider_id.as_deref(), Some("openrouter"));
+    }
+
+    #[test]
+    fn jnoccio_credential_uses_local_default_without_developer_key() {
+        let home = TempDir::new().unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+
+        let selected = select_credential("jnoccio", "jnoccio/jnoccio-fusion")
+            .unwrap()
+            .expect("jnoccio local credential");
+        assert!(selected.user_id.is_none());
+        assert!(matches!(
+            selected.credential,
+            ProviderCredential::ApiKey { ref key } if key == JNOCCIO_DEFAULT_API_KEY
+        ));
     }
 }

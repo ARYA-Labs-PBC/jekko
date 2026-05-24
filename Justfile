@@ -427,6 +427,26 @@ zyalc-compile-check:
 # Composed zyalc fast lane.
 zyalc-fast: zyalc-check zyalc-test zyalc-compile-check
 
+# ZYAL generic port workflow lane: runner, durable store, daemon surfaces, and ZYAL compile checks.
+# jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=true
+zyal-port-fast:
+	rtk cargo test --manifest-path crates/jankurai-runner/Cargo.toml --locked --no-fail-fast
+	rtk cargo test -p jekko-store --locked --test daemon_port_roundtrip -- --test-threads=1
+	rtk cargo check -p jekko-cli --locked
+	rtk cargo check -p jekko-server --locked
+	rtk cargo test -p tuiwright-jekko-unlock --locked all_tracked_zyal_files_parse_and_preview
+	rtk env CARGO_TARGET_DIR=target/zyal-validation just zyalc-compile-check
+
+# Broad full-suite lane for local release-style port workflow proof.
+# jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=false
+zyal-port-full:
+	rtk cargo test --manifest-path crates/jankurai-runner/Cargo.toml --locked --no-fail-fast
+	rtk cargo test -p jekko-store --locked --no-fail-fast
+	rtk cargo test -p jekko-runtime --locked --no-fail-fast
+	rtk cargo test -p jekko-cli --locked --no-fail-fast
+	rtk cargo test -p jekko-server --locked --no-fail-fast
+	rtk just zyalc-fast
+
 # Local sandbox-loop experiment entrypoint. Override `cmd` to change the inner command.
 # jankurai:proof HLT-012-OVERBROAD-AGENCY parallel=1 cache=cargo-build narrow-targets=true
 experiment cmd="just --list":
@@ -665,8 +685,46 @@ ci-local-parity:
 	bash ops/ci/guard-advisory.sh
 
 ci-local-pr-dry-run:
-	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-standards.sh
-	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-compliance.sh
+	#!/usr/bin/env bash
+	set -euo pipefail
+	ROOT="$(git rev-parse --show-toplevel)"
+	cd "$ROOT"
+	unset GH_TOKEN GITHUB_TOKEN GH_REPO GITHUB_REPOSITORY GITHUB_BASE_REF GITHUB_HEAD_REF GITHUB_EVENT_PATH GITHUB_EVENT_NAME
+	HEAD_REF="$(git branch --show-current)"
+	if [ -z "$HEAD_REF" ] || [ "$HEAD_REF" = "HEAD" ]; then
+		echo "ci-local-pr-dry-run: check out the PR branch first" >&2
+		exit 1
+	fi
+	TMPDIR="$(mktemp -d)"
+	WORKTREE="$TMPDIR/pr-policy-worktree"
+	cleanup() {
+		git -C "$ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+		rm -rf "$TMPDIR"
+	}
+	trap cleanup EXIT
+	git worktree add --detach "$WORKTREE" HEAD >/dev/null
+	cd "$WORKTREE"
+	export CARGO_TARGET_DIR="$WORKTREE/target/ci-local-pr-dry-run"
+	source ops/ci/lib.sh
+	export GH_TOKEN="$(gh auth token)"
+	export GITHUB_TOKEN="$GH_TOKEN"
+	export GH_REPO="neverhuman/jekko"
+	export GITHUB_REPOSITORY="$GH_REPO"
+	if ! GITHUB_BASE_REF="$(gh pr view --repo "$GH_REPO" "$HEAD_REF" --json baseRefName --jq '.baseRefName')"; then
+		echo "ci-local-pr-dry-run: no open PR found for branch $HEAD_REF" >&2
+		exit 1
+	fi
+	export GITHUB_BASE_REF
+	export GITHUB_HEAD_REF="$HEAD_REF"
+	if ! GITHUB_EVENT_PATH="$(pull_request_target_json "$GH_REPO" "$GITHUB_BASE_REF" "$GITHUB_HEAD_REF")"; then
+		echo "ci-local-pr-dry-run: failed to synthesize pull_request_target event" >&2
+		exit 1
+	fi
+	export GITHUB_EVENT_PATH
+	export GITHUB_EVENT_NAME="pull_request_target"
+	rtk cargo run -p xtask --locked -- pr-workflow-contract
+	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-policy.sh standards
+	JEKKO_PR_DRY_RUN=1 bash ops/ci/pr-policy.sh compliance
 
 ci-local-security-tools:
 	#!/usr/bin/env bash
