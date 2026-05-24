@@ -26,6 +26,7 @@ check_cmd rustc "https://rustup.rs"
 check_cmd npm "https://nodejs.org or fnm"
 check_cmd node "https://nodejs.org or fnm"
 check_cmd just "brew install just"
+check_cmd rtk "see /Users/bentaylor/.codex/RTK.md"
 check_cmd gh "brew install gh"
 
 if command -v gh >/dev/null 2>&1; then
@@ -78,4 +79,4 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   exit 1
 fi
 
-printf 'All CI prerequisites installed. `just ci` and `just ci-local-pr-dry-run` should be runnable now.\n'
+printf 'All CI prerequisites installed. The workflow wrappers in `ops/ci/`, `scripts/ci-local.sh`, and `just ci-local-pr-dry-run` should be runnable now.\n'

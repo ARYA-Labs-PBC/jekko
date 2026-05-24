@@ -607,12 +607,15 @@ memory-benchmark-fast: memory-benchmark-check memory-benchmark-test memory-bench
 
 memory-benchmark-full: memory-benchmark-fast memory-benchmark-generated qbank-validate memory-benchmark-qbank-smoke
 
-# Local mirror of .github/workflows/jankurai.yml. Catches CI failures
-# before push. Run individual sub-lanes (`just ci-local-audit`, etc.) for
-# fast iteration; run `just ci-local` for the full preflight.
+# Local superset of the workflow mirror lanes. The exact workflow bodies
+# live in `ops/ci/*.sh`; this recipe adds local-only helpers and the
+# GitHub-only exception notes that have no direct local equivalent.
+# Run individual sub-lanes (`just ci-local-audit`, etc.) for fast iteration;
+# run `just ci-local` for the full preflight.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-audit:
 	mkdir -p {{jankurai_artifact_root}}
+	bash ops/ci/jankurai.sh --setup-only
 	jankurai audit . --mode advisory --json {{jankurai_artifact_root}}/repo-score.json --md {{jankurai_artifact_root}}/repo-score.md
 
 # CI step 2: proof routing + evidence index regeneration.
@@ -649,11 +652,10 @@ ci-local-bad-behavior:
 	mkdir -p {{jankurai_artifact_root}}
 	jankurai audit . --mode advisory --changed-fast --changed-from origin/main --json {{jankurai_artifact_root}}/language-bad-behavior.json --md {{jankurai_artifact_root}}/language-bad-behavior.md
 
-# CI step 7: security scan in CI profile (strict).
+# CI step 7: security wrapper (mirrors ops/ci/security.sh).
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
 ci-local-security:
-	mkdir -p {{jankurai_artifact_root}}/security
-	cargo run -p xtask --locked -- security-lane --profile ci --out {{jankurai_artifact_root}}/security
+	bash ops/ci/security.sh
 
 # CI step 8: cargo audit on tuiwright-jekko-unlock (CI runs it there).
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
@@ -767,13 +769,7 @@ tui-ci:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	export CARGO_TARGET_DIR=target/codex-plan
-	jekko_bin="$(rtk cargo run -p xtask -- host-binary-path)"
-	rtk cargo build -p jekko-cli --locked
-	rtk cargo run -p jekko-cli -- --version
-	rtk cargo run -p jekko-cli -- --help
-	rtk cargo test -p jekko-tui --locked --no-fail-fast
-	JEKKO_BIN="$jekko_bin" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml default_tui_paints_first_frame -- --nocapture
-	JEKKO_BIN="$jekko_bin" cargo test --manifest-path crates/tuiwright-jekko-unlock/Cargo.toml --no-run
+	bash ops/ci/test-tui.sh
 
 tuiwright-local-full:
 	#!/usr/bin/env bash
