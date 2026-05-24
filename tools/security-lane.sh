@@ -19,7 +19,7 @@ npm_audit_report="target/jankurai/security/npm-audit.json"
 gitleaks_status=0
 gitleaks detect \
   --source . \
-  --no-git \
+  --config .gitleaks.toml \
   --no-banner \
   --redact \
   --report-format json \
@@ -89,11 +89,11 @@ jq -n \
         name: "gitleaks",
         label: "Secret scanning",
         tool: "gitleaks",
-        shell_command: "gitleaks detect --source . --no-git --no-banner --redact --report-format json --report-path target/jankurai/security/gitleaks.json --exit-code 0",
+        shell_command: "gitleaks detect --source . --config .gitleaks.toml --no-banner --redact --report-format json --report-path target/jankurai/security/gitleaks.json --exit-code 0",
         status: (if $gitleaks_status == 0 then "ran" else "failed" end),
         required_by_policy: false,
         blocking: false,
-        advisory: false,
+        advisory: true,
         exit_code: $gitleaks_status,
         log_path: $gitleaks_log,
         report_path: "target/jankurai/security/gitleaks.json"

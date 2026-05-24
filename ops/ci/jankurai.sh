@@ -176,9 +176,22 @@ fi
 jankurai audit . --mode advisory --json "${artifact_root}/repo-score.json" --md "${artifact_root}/repo-score.md" --sarif "${artifact_root}/jankurai.sarif" --github-step-summary "${artifact_root}/summary.md" --repair-queue-jsonl "${artifact_root}/repair-queue.jsonl"
 jankurai copy-code . --json "${artifact_root}/copy-code.json" --md "${artifact_root}/copy-code.md"
 cargo run -p xtask --locked -- jankurai-gate --score "${artifact_root}/repo-score.json"
-jankurai proof . --changed-from origin/main --out "${artifact_root}/proof-plan.json" --md "${artifact_root}/proof-plan.md"
+collect_changed_args() {
+  local -a changed_args=()
+  while IFS= read -r path; do
+    [[ -n "${path}" ]] || continue
+    changed_args+=(--changed "${path}")
+  done < <({
+    git diff --name-only --diff-filter=ACMR origin/main
+    git ls-files --others --exclude-standard
+  })
+  printf '%s\n' "${changed_args[@]}"
+}
+
+mapfile -t proof_args < <(collect_changed_args)
+jankurai proof . "${proof_args[@]}" --out "${artifact_root}/proof-plan.json" --md "${artifact_root}/proof-plan.md"
 cargo run -p xtask --locked -- proof-receipt --lane security --status ok --out "${artifact_root}/proof-receipts/agent-tool-supply.json"
-if ! jankurai proofbind verify . --changed-from origin/main --proof-receipts "${artifact_root}/proof-receipts" --out "${artifact_root}/proofbind/surface-witness.json" --obligations-out "${artifact_root}/proofbind/obligations.json" --md "${artifact_root}/proofbind/proofbind.md" 2>/dev/null; then
+if ! jankurai proofbind verify . "${proof_args[@]}" --proof-receipts "${artifact_root}/proof-receipts" --out "${artifact_root}/proofbind/surface-witness.json" --obligations-out "${artifact_root}/proofbind/obligations.json" --md "${artifact_root}/proofbind/proofbind.md" 2>/dev/null; then
   jankurai proofbind verify . --changed agent/owner-map.json --changed agent/test-map.json --changed agent/tool-adoption.toml --proof-receipts "${artifact_root}/proof-receipts" --out "${artifact_root}/proofbind/surface-witness.json" --obligations-out "${artifact_root}/proofbind/obligations.json" --md "${artifact_root}/proofbind/proofbind.md"
 fi
 jankurai proofmark rust . --obligations "${artifact_root}/proofbind/obligations.json"

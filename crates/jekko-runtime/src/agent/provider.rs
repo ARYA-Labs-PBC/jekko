@@ -28,12 +28,41 @@ use jekko_core::provider::{
 
 use super::types::AgentTurnRequest;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum CredentialSourcePolicy {
+    #[default]
+    Any,
+    UsersOnly,
+}
+
+impl CredentialSourcePolicy {
+    pub(super) fn from_env() -> Self {
+        match env::var("JEKKO_KEY_SOURCE_POLICY") {
+            Ok(value) if value == "users-only" => Self::UsersOnly,
+            _ => Self::Any,
+        }
+    }
+
+    fn users_only(self) -> bool {
+        matches!(self, Self::UsersOnly)
+    }
+
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::UsersOnly => "users-only",
+        }
+    }
+}
+
 pub(super) fn select_provider_id(request: &AgentTurnRequest) -> RuntimeResult<String> {
     if let Some(provider) = request.provider.clone() {
         return Ok(provider);
     }
-    let snapshot = env_snapshot();
-    let developer_unlocked = jekko_jnoccio_boot::unlock::is_unlocked();
+    let credential_policy = CredentialSourcePolicy::from_env();
+    let snapshot = env_snapshot_for(credential_policy);
+    let developer_unlocked =
+        credential_policy.users_only() || jekko_jnoccio_boot::unlock::is_unlocked();
     let runtime_snapshot = supported_runtime_snapshot(&snapshot);
     let selection = choose_active_provider(&runtime_snapshot, developer_unlocked);
     match selection.active_provider_id {
@@ -78,7 +107,17 @@ pub(super) fn select_credential(
     provider_id: &str,
     model_id: &str,
 ) -> RuntimeResult<Option<SelectedCredential>> {
+    let credential_policy = CredentialSourcePolicy::from_env();
     if let Some(pick) = balancer_pick(provider_id, model_id) {
+        if credential_policy.users_only()
+            && provider_id == "jnoccio"
+            && matches!(
+                pick.credential,
+                ProviderCredential::ApiKey { ref key } if key == JNOCCIO_DEFAULT_API_KEY
+            )
+        {
+            return Ok(None);
+        }
         tracing::debug!(
             provider = provider_id,
             model = model_id,
@@ -90,6 +129,9 @@ pub(super) fn select_credential(
             credential: pick.credential,
             user_id: Some(pick.user_id),
         }));
+    }
+    if credential_policy.users_only() {
+        return Ok(None);
     }
     let Some(entry) = catalog_entry(provider_id) else {
         return Ok(None);
@@ -126,6 +168,13 @@ pub(super) fn select_credential(
 fn balancer() -> &'static Mutex<Option<KeyBalancer>> {
     static BALANCER: OnceLock<Mutex<Option<KeyBalancer>>> = OnceLock::new();
     BALANCER.get_or_init(|| Mutex::new(KeyBalancer::new(true)))
+}
+
+#[cfg(test)]
+fn reset_balancer_for_tests() {
+    if let Ok(mut guard) = balancer().lock() {
+        *guard = KeyBalancer::new(true);
+    }
 }
 
 fn balancer_pick(provider_id: &str, model_id: &str) -> Option<crate::key_balancer::KeyPick> {
@@ -254,21 +303,16 @@ pub(super) fn provider_adapter(
     }
 }
 
+#[cfg(test)]
 fn env_snapshot() -> BTreeMap<String, EnvValue> {
+    env_snapshot_for(CredentialSourcePolicy::from_env())
+}
+
+fn env_snapshot_for(credential_policy: CredentialSourcePolicy) -> BTreeMap<String, EnvValue> {
     let mut values = BTreeMap::new();
-    for entry in CATALOG {
-        for env_name in entry.env_names {
-            let value = env::var(env_name).ok().filter(|v| !v.trim().is_empty());
-            values.insert(
-                (*env_name).to_string(),
-                EnvValue {
-                    value,
-                    source: Some(ModelKeySource::ProcessEnv),
-                },
-            );
-        }
-        if let Some(companion) = entry.companion_env_names {
-            for env_name in companion {
+    if !credential_policy.users_only() {
+        for entry in CATALOG {
+            for env_name in entry.env_names {
                 let value = env::var(env_name).ok().filter(|v| !v.trim().is_empty());
                 values.insert(
                     (*env_name).to_string(),
@@ -278,13 +322,26 @@ fn env_snapshot() -> BTreeMap<String, EnvValue> {
                     },
                 );
             }
+            if let Some(companion) = entry.companion_env_names {
+                for env_name in companion {
+                    let value = env::var(env_name).ok().filter(|v| !v.trim().is_empty());
+                    values.insert(
+                        (*env_name).to_string(),
+                        EnvValue {
+                            value,
+                            source: Some(ModelKeySource::ProcessEnv),
+                        },
+                    );
+                }
+            }
         }
     }
     merge_key_pool_snapshot(&mut values, true);
-    if values
-        .get("JNOCCIO_DEVELOPER_KEY")
-        .and_then(|v| v.value.as_ref())
-        .is_none()
+    if !credential_policy.users_only()
+        && values
+            .get("JNOCCIO_DEVELOPER_KEY")
+            .and_then(|v| v.value.as_ref())
+            .is_none()
     {
         if let Some(value) = jekko_jnoccio_boot::unlock::developer_key() {
             values.insert(
@@ -367,7 +424,10 @@ mod tests {
 
     struct EnvGuard {
         prev_home: Option<std::ffi::OsString>,
+        prev_jekko_home: Option<std::ffi::OsString>,
         prev_dev: Option<std::ffi::OsString>,
+        prev_policy: Option<std::ffi::OsString>,
+        prev_openai: Option<std::ffi::OsString>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
@@ -375,15 +435,25 @@ mod tests {
         fn install(home: &std::path::Path, dev_key: Option<&str>) -> Self {
             let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let prev_home = std::env::var_os("HOME");
+            let prev_jekko_home = std::env::var_os("JEKKO_HOME");
             let prev_dev = std::env::var_os("JNOCCIO_DEVELOPER_KEY");
+            let prev_policy = std::env::var_os("JEKKO_KEY_SOURCE_POLICY");
+            let prev_openai = std::env::var_os("OPENAI_API_KEY");
             std::env::set_var("HOME", home);
+            std::env::remove_var("JEKKO_HOME");
+            std::env::remove_var("JEKKO_KEY_SOURCE_POLICY");
+            std::env::remove_var("OPENAI_API_KEY");
             match dev_key {
                 Some(v) => std::env::set_var("JNOCCIO_DEVELOPER_KEY", v),
                 None => std::env::remove_var("JNOCCIO_DEVELOPER_KEY"),
             }
+            reset_balancer_for_tests();
             Self {
                 prev_home,
+                prev_jekko_home,
                 prev_dev,
+                prev_policy,
+                prev_openai,
                 _lock: lock,
             }
         }
@@ -395,10 +465,23 @@ mod tests {
                 Some(v) => std::env::set_var("HOME", v),
                 None => std::env::remove_var("HOME"),
             }
+            match &self.prev_jekko_home {
+                Some(v) => std::env::set_var("JEKKO_HOME", v),
+                None => std::env::remove_var("JEKKO_HOME"),
+            }
             match &self.prev_dev {
                 Some(v) => std::env::set_var("JNOCCIO_DEVELOPER_KEY", v),
                 None => std::env::remove_var("JNOCCIO_DEVELOPER_KEY"),
             }
+            match &self.prev_policy {
+                Some(v) => std::env::set_var("JEKKO_KEY_SOURCE_POLICY", v),
+                None => std::env::remove_var("JEKKO_KEY_SOURCE_POLICY"),
+            }
+            match &self.prev_openai {
+                Some(v) => std::env::set_var("OPENAI_API_KEY", v),
+                None => std::env::remove_var("OPENAI_API_KEY"),
+            }
+            reset_balancer_for_tests();
         }
     }
 
@@ -492,5 +575,92 @@ mod tests {
             selected.credential,
             ProviderCredential::ApiKey { ref key } if key == JNOCCIO_DEFAULT_API_KEY
         ));
+    }
+
+    #[test]
+    fn users_only_ignores_process_env_key() {
+        let home = TempDir::new().unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+        std::env::set_var("OPENAI_API_KEY", "process-key");
+        std::env::set_var("JEKKO_KEY_SOURCE_POLICY", "users-only");
+
+        let snapshot = env_snapshot();
+        let selection = choose_active_provider(&supported_runtime_snapshot(&snapshot), true);
+        assert_eq!(selection.active_provider_id, None);
+        assert!(select_credential("openai", "gpt-5").unwrap().is_none());
+    }
+
+    #[test]
+    fn users_only_ignores_home_env_jnoccio_file() {
+        let home = TempDir::new().unwrap();
+        fs::write(
+            home.path().join(".env.jnoccio"),
+            "JNOCCIO_DEVELOPER_KEY=file-secret\n",
+        )
+        .unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+        std::env::set_var("JEKKO_KEY_SOURCE_POLICY", "users-only");
+
+        let snapshot = env_snapshot();
+        let selection = choose_active_provider(&supported_runtime_snapshot(&snapshot), true);
+        assert_ne!(selection.active_provider_id.as_deref(), Some("jnoccio"));
+    }
+
+    #[test]
+    fn users_only_rejects_jnoccio_local_default() {
+        let home = TempDir::new().unwrap();
+        let user_dir = home.path().join(".jekko/users/user");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(
+            user_dir.join("llm.env"),
+            format!("JNOCCIO_DEVELOPER_KEY={JNOCCIO_DEFAULT_API_KEY}\n"),
+        )
+        .unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+        std::env::set_var("JEKKO_KEY_SOURCE_POLICY", "users-only");
+        reset_balancer_for_tests();
+
+        assert!(select_credential("jnoccio", "jnoccio-fusion")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn users_only_allows_jnoccio_when_key_is_in_user_llm_env() {
+        let home = TempDir::new().unwrap();
+        let user_dir = home.path().join(".jekko/users/user_1");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(
+            user_dir.join("llm.env"),
+            "JNOCCIO_DEVELOPER_KEY=user-secret\n",
+        )
+        .unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+        std::env::set_var("JEKKO_KEY_SOURCE_POLICY", "users-only");
+        reset_balancer_for_tests();
+
+        let snapshot = env_snapshot();
+        let selection = choose_active_provider(&supported_runtime_snapshot(&snapshot), true);
+        assert_eq!(selection.active_provider_id.as_deref(), Some("jnoccio"));
+        let selected = select_credential("jnoccio", "jnoccio-fusion")
+            .unwrap()
+            .expect("user llm.env credential");
+        assert_eq!(selected.user_id.as_deref(), Some("user_1"));
+    }
+
+    #[test]
+    fn selected_credential_in_users_only_always_has_user_id() {
+        let home = TempDir::new().unwrap();
+        let user_dir = home.path().join(".jekko/users/user");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(user_dir.join("llm.env"), "OPENAI_API_KEY=user-key\n").unwrap();
+        let _guard = EnvGuard::install(home.path(), None);
+        std::env::set_var("JEKKO_KEY_SOURCE_POLICY", "users-only");
+        reset_balancer_for_tests();
+
+        let selected = select_credential("openai", "gpt-5")
+            .unwrap()
+            .expect("user llm.env credential");
+        assert_eq!(selected.user_id.as_deref(), Some("user"));
     }
 }

@@ -1,4 +1,4 @@
-//! Model-routing policy for port workflow tasks.
+//! Provider-neutral model-routing policy for ZYAL workflow tasks.
 
 use serde::{Deserialize, Serialize};
 
@@ -56,35 +56,125 @@ pub enum ModelTaskKind {
     KnowledgeCurate,
 }
 
-/// Static model policy. Jnoccio can replace these ids at runtime.
+/// One provider-neutral route. Both fields are optional: an empty route lets
+/// the runtime choose the provider and model from its configured defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ModelRoute {
+    /// Structured route form.
+    Record(ModelRouteRecord),
+    /// Compact `provider/model` or `model` string form.
+    Compact(String),
+}
+
+impl Default for ModelRoute {
+    fn default() -> Self {
+        Self::Record(ModelRouteRecord::default())
+    }
+}
+
+impl ModelRoute {
+    /// Return this route as a normalized record.
+    pub fn normalized(&self) -> ModelRouteRecord {
+        match self {
+            Self::Record(record) => record.clone(),
+            Self::Compact(value) => ModelRouteRecord::from_compact(value),
+        }
+    }
+}
+
+/// Structured route record.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelRouteRecord {
+    /// Optional provider id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Optional model id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl ModelRouteRecord {
+    fn from_compact(value: &str) -> Self {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Self::default();
+        }
+        match trimmed.split_once('/') {
+            Some((provider, model)) if !provider.is_empty() && !model.is_empty() => Self {
+                provider: Some(provider.to_string()),
+                model: Some(model.to_string()),
+            },
+            _ => Self {
+                provider: None,
+                model: Some(trimmed.to_string()),
+            },
+        }
+    }
+
+    /// Whether neither provider nor model was explicitly configured.
+    pub fn is_empty(&self) -> bool {
+        self.provider.is_none() && self.model.is_none()
+    }
+}
+
+/// Static route policy. Defaults are provider-neutral.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelPolicy {
-    /// Cheap reliable model id for routine work.
-    pub routine_model: String,
-    /// Power model id for hard synthesis and review.
-    pub power_model: String,
+    /// Routine route.
+    #[serde(default)]
+    pub routine: ModelRoute,
+    /// Power route for hard synthesis and review.
+    #[serde(default)]
+    pub power: ModelRoute,
+    /// Critic route.
+    #[serde(default)]
+    pub critic: ModelRoute,
+    /// Verifier route.
+    #[serde(default)]
+    pub verifier: ModelRoute,
+    /// Meta-judge route.
+    #[serde(default)]
+    pub meta_judge: ModelRoute,
+    /// Reproducer route.
+    #[serde(default)]
+    pub reproducer: ModelRoute,
+    /// Memory-curator route.
+    #[serde(default)]
+    pub memory_curator: ModelRoute,
     /// Allow power routing for routine roles.
     #[serde(default)]
     pub allow_power_for_routine_roles: bool,
 }
 
-impl Default for ModelPolicy {
-    fn default() -> Self {
-        Self {
-            routine_model: "jnoccio/routine".to_string(),
-            power_model: "jnoccio/power-winner".to_string(),
-            allow_power_for_routine_roles: false,
-        }
-    }
-}
-
 impl ModelPolicy {
-    /// Select a model id for a workflow task kind.
-    pub fn select(&self, kind: ModelTaskKind) -> &str {
-        if self.allow_power_for_routine_roles || kind.uses_power_model() {
-            &self.power_model
-        } else {
-            &self.routine_model
+    /// Select a route for a workflow task kind.
+    pub fn select(&self, kind: ModelTaskKind) -> ModelRouteRecord {
+        let power = || self.power.normalized();
+        let inherit_power_when_empty = |route: ModelRouteRecord| {
+            if route.is_empty() {
+                power()
+            } else {
+                route
+            }
+        };
+        match kind {
+            ModelTaskKind::Critic | ModelTaskKind::RedTeam => {
+                inherit_power_when_empty(self.critic.normalized())
+            }
+            ModelTaskKind::Verifier => self.verifier.normalized(),
+            ModelTaskKind::MetaJudge => inherit_power_when_empty(self.meta_judge.normalized()),
+            ModelTaskKind::MemoryCurate | ModelTaskKind::KnowledgeCurate => {
+                self.memory_curator.normalized()
+            }
+            ModelTaskKind::ParityGenerate => self.reproducer.normalized(),
+            _ => {
+                if self.allow_power_for_routine_roles || kind.uses_power_model() {
+                    self.power.normalized()
+                } else {
+                    self.routine.normalized()
+                }
+            }
         }
     }
 }
@@ -146,40 +236,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn routine_uses_cheap_model_and_hard_tasks_use_power_model() {
+    fn model_policy_default_is_provider_neutral() {
         let policy = ModelPolicy::default();
-        assert_eq!(policy.select(ModelTaskKind::Implement), "jnoccio/routine");
-        assert_eq!(policy.select(ModelTaskKind::Verifier), "jnoccio/routine");
-        assert_eq!(
-            policy.select(ModelTaskKind::StageBrainstorm),
-            "jnoccio/routine"
-        );
-        assert_eq!(
-            policy.select(ModelTaskKind::Healing),
-            "jnoccio/power-winner"
-        );
-        assert_eq!(policy.select(ModelTaskKind::Review), "jnoccio/power-winner");
-        assert_eq!(
-            policy.select(ModelTaskKind::StageCritique),
-            "jnoccio/power-winner"
-        );
-        assert_eq!(policy.select(ModelTaskKind::Critic), "jnoccio/power-winner");
-        assert_eq!(
-            policy.select(ModelTaskKind::HardEscalation),
-            "jnoccio/power-winner"
-        );
-        assert_eq!(
-            policy.select(ModelTaskKind::MetaJudge),
-            "jnoccio/power-winner"
-        );
-        assert_eq!(
-            policy.select(ModelTaskKind::RedTeam),
-            "jnoccio/power-winner"
-        );
-        assert_eq!(
-            policy.select(ModelTaskKind::HeroGenerate),
-            "jnoccio/routine"
-        );
-        assert_eq!(policy.select(ModelTaskKind::JudgePatch), "jnoccio/routine");
+        for kind in [
+            ModelTaskKind::Implement,
+            ModelTaskKind::Verifier,
+            ModelTaskKind::StageBrainstorm,
+            ModelTaskKind::Healing,
+            ModelTaskKind::Review,
+            ModelTaskKind::StageCritique,
+            ModelTaskKind::Critic,
+            ModelTaskKind::HardEscalation,
+            ModelTaskKind::MetaJudge,
+            ModelTaskKind::RedTeam,
+            ModelTaskKind::HeroGenerate,
+            ModelTaskKind::JudgePatch,
+        ] {
+            let route = policy.select(kind);
+            assert_eq!(route.provider, None);
+            assert_eq!(route.model, None);
+        }
+    }
+
+    #[test]
+    fn compact_route_string_splits_provider_and_model() {
+        let policy = ModelPolicy {
+            routine: ModelRoute::Compact("openrouter/qwen".to_string()),
+            ..ModelPolicy::default()
+        };
+        let route = policy.select(ModelTaskKind::Implement);
+        assert_eq!(route.provider.as_deref(), Some("openrouter"));
+        assert_eq!(route.model.as_deref(), Some("qwen"));
     }
 }

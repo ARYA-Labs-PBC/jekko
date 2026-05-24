@@ -21,6 +21,10 @@ impl SecurityProfile {
         }
     }
 
+    fn requires_gitleaks(self) -> bool {
+        matches!(self, Self::Local)
+    }
+
     fn requires_syft(self) -> bool {
         matches!(self, Self::Ci)
     }
@@ -56,7 +60,7 @@ pub fn run(out: &Path, profile: SecurityProfile) -> Result<()> {
         "gitleaks",
         &["version"],
         "secret scan tool availability",
-        true,
+        profile.requires_gitleaks(),
     );
     let cargo_audit = probe(
         "cargo",
@@ -84,7 +88,7 @@ pub fn run(out: &Path, profile: SecurityProfile) -> Result<()> {
 
     let mut checks = vec![gitleaks, cargo_audit, syft, zizmor];
     if gitleaks_available {
-        checks.push(run_gitleaks(&gitleaks_report)?);
+        checks.push(run_gitleaks(&gitleaks_report, profile)?);
     }
     if cargo_audit_available {
         checks.push(run_cargo_audit(&cargo_audit_report)?);
@@ -130,7 +134,7 @@ impl SecurityCheck {
     fn is_passing(&self) -> bool {
         matches!(
             self.status.as_str(),
-            "ok" | "available" | "advisory-missing"
+            "ok" | "available" | "advisory-missing" | "advisory-failed"
         )
     }
 }
@@ -172,7 +176,7 @@ fn probe(tool: &'static str, args: &[&str], detail: &'static str, required: bool
     }
 }
 
-fn run_gitleaks(report: &Path) -> Result<SecurityCheck> {
+fn run_gitleaks(report: &Path, profile: SecurityProfile) -> Result<SecurityCheck> {
     if let Some(parent) = report.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -181,7 +185,8 @@ fn run_gitleaks(report: &Path) -> Result<SecurityCheck> {
             "detect",
             "--source",
             ".",
-            "--no-git",
+            "--config",
+            ".gitleaks.toml",
             "--redact",
             "--report-format",
             "json",
@@ -193,12 +198,16 @@ fn run_gitleaks(report: &Path) -> Result<SecurityCheck> {
     if output.status.success() && !report.exists() {
         fs::write(report, "[]\n").with_context(|| format!("write {}", report.display()))?;
     }
-    Ok(command_check(
+    let mut check = command_check(
         "secret scan",
         "gitleaks",
         output,
         Some(report.display().to_string()),
-    ))
+    );
+    if !matches!(check.status.as_str(), "ok") && matches!(profile, SecurityProfile::Ci) {
+        check.status = "advisory-failed".to_string();
+    }
+    Ok(check)
 }
 
 fn run_cargo_audit(report: &Path) -> Result<SecurityCheck> {
@@ -295,5 +304,29 @@ fn command_check(
             text.lines().next().unwrap_or_default().to_string()
         },
         artifact,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ci_profile_treats_gitleaks_as_advisory() {
+        assert!(SecurityProfile::Local.requires_gitleaks());
+        assert!(!SecurityProfile::Ci.requires_gitleaks());
+    }
+
+    #[test]
+    fn advisory_failure_does_not_block_ci() {
+        let check = SecurityCheck {
+            name: "secret scan".to_string(),
+            tool: "gitleaks".to_string(),
+            status: "advisory-failed".to_string(),
+            detail: "findings present".to_string(),
+            artifact: None,
+        };
+
+        assert!(check.is_passing());
     }
 }

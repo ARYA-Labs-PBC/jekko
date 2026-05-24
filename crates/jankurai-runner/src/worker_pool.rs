@@ -1,11 +1,12 @@
 //! Safe worker-pool planning for port tasks.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::port::{PortMasterTask, MAX_PORT_WORKERS};
+use crate::port::{MasterTaskStatus, PortMasterTask, MAX_PORT_WORKERS};
 
 /// Worker-pool policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,7 +72,15 @@ pub fn plan_assignments(
 ) -> Result<Vec<WorkerAssignment>> {
     let repo_root = repo_root.into();
     let mut assignments = Vec::new();
-    for task in tasks.iter().filter(|task| task.status.is_assignable()) {
+    let statuses = tasks
+        .iter()
+        .map(|task| (task.id.as_str(), task.status))
+        .collect::<BTreeMap<_, _>>();
+    for task in tasks
+        .iter()
+        .filter(|task| task.status.is_assignable())
+        .filter(|task| dependencies_resolved(task, &statuses))
+    {
         if assignments.len() >= policy.max_workers {
             break;
         }
@@ -94,6 +103,18 @@ pub fn plan_assignments(
         });
     }
     Ok(assignments)
+}
+
+fn dependencies_resolved(
+    task: &PortMasterTask,
+    statuses: &BTreeMap<&str, MasterTaskStatus>,
+) -> bool {
+    task.dependencies.iter().all(|dep| {
+        statuses
+            .get(dep.as_str())
+            .map(|status| matches!(status, MasterTaskStatus::Done | MasterTaskStatus::Merged))
+            .unwrap_or(false)
+    })
 }
 
 /// Validate a declared write scope against the policy.
@@ -130,17 +151,34 @@ fn sanitize_branch_segment(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::port::MasterTaskStatus;
 
     fn task(id: &str, status: MasterTaskStatus, scope: &[&str]) -> PortMasterTask {
         PortMasterTask {
             id: id.to_string(),
             stage_id: "stage".to_string(),
             title: id.to_string(),
+            task_kind: "implementation".to_string(),
+            risk_level: "medium".to_string(),
             write_scope: scope.iter().map(|s| (*s).to_string()).collect(),
+            bounded_write_scope: true,
+            dependencies: Vec::new(),
             proof_lane: "just fast".to_string(),
+            done_evidence: vec!["tests".to_string()],
+            memory_scope: "run".to_string(),
+            generated_zone_boundary_checks: true,
             status,
         }
+    }
+
+    fn task_with_deps(
+        id: &str,
+        status: MasterTaskStatus,
+        scope: &[&str],
+        dependencies: &[&str],
+    ) -> PortMasterTask {
+        let mut task = task(id, status, scope);
+        task.dependencies = dependencies.iter().map(|dep| (*dep).to_string()).collect();
+        task
     }
 
     #[test]
@@ -179,5 +217,40 @@ mod tests {
         let err =
             validate_write_scope(&["target/zyal/report.json".to_string()], &policy).unwrap_err();
         assert!(err.to_string().contains("forbidden"));
+    }
+
+    #[test]
+    fn blocks_assignment_until_dependencies_are_resolved() {
+        let policy = WorkerPoolPolicy::new(3).unwrap();
+        let assignments = plan_assignments(
+            "run-1",
+            "/tmp/repo",
+            &[
+                task("a", MasterTaskStatus::Queued, &["src/a.rs"]),
+                task_with_deps("b", MasterTaskStatus::Queued, &["src/b.rs"], &["a"]),
+                task_with_deps("c", MasterTaskStatus::Queued, &["src/c.rs"], &["missing"]),
+            ],
+            &policy,
+        )
+        .unwrap();
+        assert_eq!(
+            assignments
+                .iter()
+                .map(|assignment| assignment.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+
+        let assignments = plan_assignments(
+            "run-1",
+            "/tmp/repo",
+            &[
+                task("a", MasterTaskStatus::Done, &["src/a.rs"]),
+                task_with_deps("b", MasterTaskStatus::Queued, &["src/b.rs"], &["a"]),
+            ],
+            &policy,
+        )
+        .unwrap();
+        assert_eq!(assignments[0].task_id, "b");
     }
 }

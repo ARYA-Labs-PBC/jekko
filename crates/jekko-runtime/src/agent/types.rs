@@ -70,6 +70,12 @@ pub struct AgentTurnResult {
     /// Completed tool calls observed in the stream.
     #[serde(default)]
     pub tool_calls: Vec<Value>,
+    /// Credential source policy applied to this turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_source_policy: Option<String>,
+    /// User folder id when the credential came from `~/.jekko/users/*/llm.env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_user_id: Option<String>,
 }
 
 /// Result of a one-shot run.
@@ -101,6 +107,12 @@ pub struct RunResult {
     /// Tool calls observed during the turn.
     #[serde(default)]
     pub tool_calls: Vec<Value>,
+    /// Credential source policy applied to this turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_source_policy: Option<String>,
+    /// User folder id when the credential came from `~/.jekko/users/*/llm.env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_user_id: Option<String>,
     /// Whether the runtime accepted the request.
     pub accepted: bool,
 }

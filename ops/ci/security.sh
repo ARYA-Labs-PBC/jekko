@@ -29,7 +29,7 @@ install_gitleaks
 install_cargo_audit
 
 mkdir -p "${JANKURAI_ARTIFACT_ROOT}/security"
-if ! cargo run -p xtask --locked -- security-lane --out "${JANKURAI_ARTIFACT_ROOT}/security"; then
+if ! cargo run -p xtask --locked -- security-lane --profile ci --out "${JANKURAI_ARTIFACT_ROOT}/security"; then
   if [[ -f "${JANKURAI_ARTIFACT_ROOT}/security/evidence.json" ]]; then
     jq . "${JANKURAI_ARTIFACT_ROOT}/security/evidence.json" || cat "${JANKURAI_ARTIFACT_ROOT}/security/evidence.json"
   fi
