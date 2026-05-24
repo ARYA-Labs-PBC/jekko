@@ -29,7 +29,10 @@ pub(crate) fn parse_model_master_plan(
             .unwrap_or_else(|| format!("stage-{:02}-{}", idx + 1, slug(&name)));
         let objective = string_field(stage, &["objective", "summary", "description"])
             .unwrap_or_else(|| format!("Complete target-derived work for {name}."));
-        let dependencies = string_array_field(stage, "dependencies").unwrap_or_default();
+        let dependencies = match string_array_field(stage, "dependencies") {
+            Some(dependencies) => dependencies,
+            None => Vec::new(),
+        };
         stages.push(PortStage {
             id,
             ordinal: idx + 1,
