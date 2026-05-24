@@ -1,0 +1,110 @@
+use anyhow::{anyhow, Context, Result};
+
+use crate::profile::Profile;
+
+/// Returns (body, comment-line-prefix). The comment prefix differs between
+/// TOML (`# `) and YAML (`# `), so we centralise it here for the trailer.
+pub(super) fn emit(profile: &Profile, raw: &str) -> Result<(String, String)> {
+    match profile {
+        Profile::Runbook => Ok((raw.to_string(), String::new())),
+        Profile::DeclarativeToml { .. } => Ok((emit_toml(raw)?, "# ".into())),
+        Profile::Workflow { .. } => Ok((emit_workflow(raw)?, "# ".into())),
+        Profile::Daemon { .. } => Err(anyhow!("daemon profiles are validation-only")),
+    }
+}
+
+pub(super) fn emit_toml(raw: &str) -> Result<String> {
+    let body = strip_pragmas(raw);
+    let parsed: serde_yaml::Value =
+        serde_yaml::from_str(&body).context("parse declarative YAML body")?;
+    let toml_value = yaml_to_toml(parsed)?;
+    let rendered = toml::to_string_pretty(&toml_value).context("render TOML")?;
+    Ok(rendered)
+}
+
+fn emit_workflow(raw: &str) -> Result<String> {
+    let body = strip_pragmas(raw);
+    let parsed: serde_yaml::Value =
+        serde_yaml::from_str(&body).context("parse workflow YAML body")?;
+    let rendered = serde_yaml::to_string(&parsed).context("render workflow YAML")?;
+    Ok(rendered)
+}
+
+pub(super) fn strip_pragmas(raw: &str) -> String {
+    raw.lines()
+        .filter(|line| !line.trim_start().starts_with("# zyal:"))
+        .filter(|line| !line.trim_start().starts_with("# zyalc:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Convert a YAML mapping into a TOML value. The declarative schema uses
+/// `lanes: [...]` at the top level; TOML's natural array-of-tables form is
+/// `[[lane]]`, so we rename the key during translation.
+fn yaml_to_toml(value: serde_yaml::Value) -> Result<toml::Value> {
+    use serde_yaml::Value as Y;
+    let map = match value {
+        Y::Mapping(m) => m,
+        _ => return Err(anyhow!("declarative body must be a YAML mapping")),
+    };
+    let mut tbl = toml::value::Table::new();
+    for (k, v) in map {
+        let key = match k.as_str() {
+            Some(s) => s.to_string(),
+            None => return Err(anyhow!("non-string key")),
+        };
+        if key == "lanes" {
+            let array = match v.as_sequence() {
+                Some(arr) => arr.clone(),
+                None => return Err(anyhow!("lanes must be a sequence")),
+            };
+            let mut arr = Vec::with_capacity(array.len());
+            for item in array {
+                arr.push(yaml_value_to_toml(item)?);
+            }
+            tbl.insert("lane".into(), toml::Value::Array(arr));
+        } else {
+            tbl.insert(key, yaml_value_to_toml(v)?);
+        }
+    }
+    Ok(toml::Value::Table(tbl))
+}
+
+fn yaml_value_to_toml(v: serde_yaml::Value) -> Result<toml::Value> {
+    use serde_yaml::Value as Y;
+    Ok(match v {
+        Y::Null => toml::Value::String(String::new()),
+        Y::Bool(b) => toml::Value::Boolean(b),
+        Y::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                toml::Value::Integer(i)
+            } else if let Some(u) = n.as_u64() {
+                toml::Value::Integer(u as i64)
+            } else if let Some(f) = n.as_f64() {
+                toml::Value::Float(f)
+            } else {
+                toml::Value::String(n.to_string())
+            }
+        }
+        Y::String(s) => toml::Value::String(s),
+        Y::Sequence(seq) => {
+            let mut arr = Vec::with_capacity(seq.len());
+            for item in seq {
+                arr.push(yaml_value_to_toml(item)?);
+            }
+            toml::Value::Array(arr)
+        }
+        Y::Mapping(m) => {
+            let mut tbl = toml::value::Table::new();
+            for (k, v) in m {
+                let key = match k.as_str() {
+                    Some(s) => s.to_string(),
+                    None => return Err(anyhow!("non-string key in mapping")),
+                };
+                tbl.insert(key, yaml_value_to_toml(v)?);
+            }
+            toml::Value::Table(tbl)
+        }
+        Y::Tagged(t) => yaml_value_to_toml(t.value)?,
+    })
+}

@@ -77,7 +77,7 @@ hero_judge:
     red_team_lanes: 1
     max_parallel: 2
   budgets:
-    model_calls: 12
+    model_calls: 24
     search_queries: 1
     search_pages: 2
 "#,
@@ -143,6 +143,10 @@ fn scripted_success(
         error: None,
         budget_used: None,
         budget_remaining: None,
+        route: Some(kind_label(kind).to_string()),
+        credential_policy: None,
+        credential_user_id: None,
+        retry_count: Some(0),
     }
 }
 
@@ -165,6 +169,10 @@ fn scripted_failure(
         error: Some(error.to_string()),
         budget_used: None,
         budget_remaining: None,
+        route: Some(kind_label(kind).to_string()),
+        credential_policy: None,
+        credential_user_id: None,
+        retry_count: Some(0),
     }
 }
 
@@ -211,6 +219,13 @@ async fn deterministic_run_writes_required_artifacts() {
     assert!(report.quality_metrics_jsonl.exists());
     assert!(report.quality_metrics_csv.exists());
     assert!(report.quality_trend_json.exists());
+    assert!(report.superreasoning_packet_json.exists());
+    assert!(report.replay_receipt_json.exists());
+    assert!(report.claim_ledger_jsonl.exists());
+    assert!(report.unsupported_claims_jsonl.exists());
+    assert!(report.negative_memory_jsonl.exists());
+    assert!(report.headless_state_json.exists());
+    assert!(report.headless_state_md.exists());
     assert!(report.complete_ok.exists());
     assert_eq!(report.knowledge_entry_count, 1);
     assert!(report.last_promotion_decision.promoted);

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use zyalc::compile;
+use zyalc::{compile, replay_verify, runbook_lint};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -36,6 +36,35 @@ enum Cmd {
     },
     /// Print the detected profile + emitted target for a `.zyal` file.
     Inspect { path: PathBuf },
+    /// Lint strict superreasoning runbooks.
+    LintSuper {
+        /// Path to a .zyal file. Omit with --all to lint known sources.
+        path: Option<PathBuf>,
+        /// Lint every known superreasoning runbook.
+        #[arg(long)]
+        all: bool,
+        /// Enable strict completion-gate checks.
+        #[arg(long)]
+        strict: bool,
+        /// Output format: text or json.
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Repo root (default: current working directory).
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
+    /// Independently verify a completed superreasoning run directory.
+    VerifyReplay {
+        /// Path to the run directory containing superreasoning_packet.json
+        /// and replay_receipt.json.
+        run_dir: PathBuf,
+        /// Output format: text or json.
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Exit non-zero on the first failure rather than reporting all.
+        #[arg(long)]
+        strict: bool,
+    },
 }
 
 fn main() {
@@ -110,6 +139,66 @@ fn dispatch(cli: &Cli) -> Result<i32> {
                 println!("schema:  {schema}");
             }
             Ok(0)
+        }
+        Cmd::LintSuper {
+            path,
+            all,
+            strict,
+            format,
+            root,
+        } => {
+            let report = if *all {
+                runbook_lint::lint_all(root, *strict)?
+            } else {
+                let path = path
+                    .as_ref()
+                    .context("provide a .zyal path or pass --all")?;
+                runbook_lint::lint_file(path, *strict)?
+            };
+            if format == "json" {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else if report.findings.is_empty() {
+                println!(
+                    "zyalc lint-super: {} checked, 0 findings",
+                    report.checked.len()
+                );
+            } else {
+                for finding in &report.findings {
+                    eprintln!(
+                        "{}: {}: {}",
+                        finding.path.display(),
+                        finding.code,
+                        finding.message
+                    );
+                }
+            }
+            Ok(if report.findings.is_empty() { 0 } else { 1 })
+        }
+        Cmd::VerifyReplay {
+            run_dir,
+            format,
+            strict,
+        } => {
+            let report = if *strict {
+                replay_verify::verify_strict(run_dir)?
+            } else {
+                replay_verify::verify(run_dir)?
+            };
+            if format == "json" {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else if report.status == "passed" {
+                println!(
+                    "zyalc verify-replay: passed — {} artifact(s), {} gate(s)",
+                    report.artifact_count,
+                    report.gates.len()
+                );
+            } else {
+                eprintln!("zyalc verify-replay: failed");
+                for failure in &report.failures {
+                    eprintln!("  - {failure}");
+                }
+            }
+            Ok(report.exit_code())
         }
     }
 }

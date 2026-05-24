@@ -123,6 +123,8 @@ impl Runtime {
             provider_id: Some(turn.provider_id),
             model_id: Some(turn.model_id),
             tool_calls: turn.tool_calls,
+            credential_source_policy: turn.credential_source_policy,
+            credential_user_id: turn.credential_user_id,
             accepted: true,
         })
     }
@@ -135,6 +137,8 @@ fn assistant_payload(turn: &AgentTurnResult) -> Value {
         "provider": turn.provider_id,
         "model": turn.model_id,
         "toolCalls": turn.tool_calls,
+        "credentialSourcePolicy": turn.credential_source_policy,
+        "credentialUserID": turn.credential_user_id,
     })
 }
 

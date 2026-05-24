@@ -28,6 +28,7 @@ use super::oneshot::{
 use super::provider::{
     build_model, provider_adapter, record_credential_failure, record_credential_success,
     select_base_url, select_credential, select_model_id, select_provider_id,
+    CredentialSourcePolicy,
 };
 use super::types::{AgentTurnRequest, AgentTurnResult};
 
@@ -175,6 +176,8 @@ fn mock_agent_turn_result(request: &AgentTurnRequest) -> AgentTurnResult {
         assistant_text: mock_assistant_text(),
         reasoning_text: String::new(),
         tool_calls: Vec::new(),
+        credential_source_policy: None,
+        credential_user_id: None,
     }
 }
 
@@ -223,6 +226,7 @@ impl AgentExecutor for ProviderAgentExecutor {
         let selected = select_credential(&provider_id, &model_id)?;
         let credential = selected.as_ref().map(|s| s.credential.clone());
         let credential_user = selected.as_ref().and_then(|s| s.user_id.clone());
+        let credential_source_policy = CredentialSourcePolicy::from_env().as_str().to_string();
         let base_url = select_base_url(&provider_id);
         let tools_disabled = std::env::var("JEKKO_RUN_DISABLE_TOOLS").as_deref() == Ok("1");
         let registry = default_registry();
@@ -252,6 +256,8 @@ impl AgentExecutor for ProviderAgentExecutor {
             assistant_text: String::new(),
             reasoning_text: String::new(),
             tool_calls: Vec::new(),
+            credential_source_policy: Some(credential_source_policy.clone()),
+            credential_user_id: credential_user.clone(),
         };
         let max_rounds = 2usize;
         while round < max_rounds {
@@ -355,6 +361,8 @@ impl AgentExecutor for ProviderAgentExecutor {
                 assistant_text: assistant_text.clone(),
                 reasoning_text: reasoning_text.clone(),
                 tool_calls: tool_calls.clone(),
+                credential_source_policy: Some(credential_source_policy.clone()),
+                credential_user_id: credential_user.clone(),
             };
 
             if tool_calls.is_empty() {

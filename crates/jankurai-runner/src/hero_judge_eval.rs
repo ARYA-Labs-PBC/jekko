@@ -9,6 +9,7 @@ use crate::hero_judge::{
     HeroJudgeConfig, HeroJudgeLaneArtifact, HeroJudgeRunbook, KnowledgeEntry, PromotionDecision,
     PromptVariant,
 };
+use crate::model_client::CredentialSourcePolicy;
 use crate::reasoning::{
     stable_reasoning_hash, AdvancedReasoningConfig, EvidenceLevel, MemoryCapsule,
     ReasoningArtifact, ReasoningArtifactKind, ReasoningRole,
@@ -236,6 +237,18 @@ pub(crate) fn validate_config(config: &HeroJudgeConfig) -> Result<()> {
     if config.budgets.model_calls == 0 {
         anyhow::bail!("hero_judge.budgets.model_calls must be at least 1");
     }
+    if config.population.max_parallel > crate::superreasoning::MAX_SUPERREASONING_WORKERS {
+        anyhow::bail!("hero_judge.population.max_parallel must be <= 10");
+    }
+    if !config.super_reasoning.enabled {
+        anyhow::bail!("hero_judge.super_reasoning.enabled must be true");
+    }
+    if config.super_reasoning.max_workers > crate::superreasoning::MAX_SUPERREASONING_WORKERS {
+        anyhow::bail!("hero_judge.super_reasoning.max_workers must be <= 10");
+    }
+    if config.super_reasoning.credential_policy != CredentialSourcePolicy::UsersOnly {
+        anyhow::bail!("hero_judge.super_reasoning.credential_policy must be users-only");
+    }
     if !config.promotion.min_score.is_finite() {
         anyhow::bail!("hero_judge.promotion.min_score must be finite");
     }
@@ -243,15 +256,18 @@ pub(crate) fn validate_config(config: &HeroJudgeConfig) -> Result<()> {
 }
 
 pub(crate) fn zyal_yaml_body(text: &str) -> Result<String> {
-    let mut lines = text.lines();
-    let Some(first) = lines.next() else {
+    let lines = text.lines().collect::<Vec<_>>();
+    let Some((sentinel_idx, first)) = lines.iter().enumerate().find(|(_, line)| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    }) else {
         anyhow::bail!("empty ZYAL document");
     };
     if !first.starts_with("<<<ZYAL ") {
         return Ok(text.to_string());
     }
     let mut body = Vec::new();
-    for line in lines {
+    for line in lines.into_iter().skip(sentinel_idx + 1) {
         if line.starts_with("<<<END_ZYAL ") {
             return Ok(body.join("\n"));
         }
