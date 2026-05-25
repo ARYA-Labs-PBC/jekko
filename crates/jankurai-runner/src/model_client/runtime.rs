@@ -115,9 +115,14 @@ impl ModelClient for JekkoRuntimeModelClient {
     ) -> Result<ModelCallReceipt> {
         let started = Instant::now();
         let mut command = Command::new(jekko_bin());
+        let tool_mode = super::tool_mode::requires_tools(kind);
+        command.env("JEKKO_ZYAL_LANE_ID", kind_label(kind));
+        if tool_mode.disables_tools() {
+            command.env("JEKKO_RUN_DISABLE_TOOLS", "1");
+        } else if let Some(allowlist) = tool_mode.allowlist_env() {
+            command.env("JEKKO_RUN_TOOL_ALLOWLIST", allowlist);
+        }
         command
-            .env("JEKKO_RUN_DISABLE_TOOLS", "1")
-            .env("JEKKO_ZYAL_LANE_ID", kind_label(kind))
             .env(
                 "JEKKO_RUN_MAX_OUTPUT_TOKENS",
                 std::env::var("JEKKO_RUN_MAX_OUTPUT_TOKENS")
