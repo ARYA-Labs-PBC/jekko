@@ -25,15 +25,9 @@ pub struct SuperReasoningLanePlan {
     pub required_artifacts: Vec<String>,
 }
 
-/// Required artifact contract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SuperReasoningArtifactContract {
-    pub required_artifacts: Vec<String>,
-    pub forbidden_content: Vec<String>,
-    pub claim_ledger: String,
-    pub unsupported_claims_ledger: String,
-    pub negative_memory: String,
-}
+/// Required artifact contract. Canonical type lives in `zyal-core`; aliased
+/// here so existing `SuperReasoningArtifactContract` paths keep compiling.
+pub use zyal_core::ArtifactContract as SuperReasoningArtifactContract;
 
 /// Privacy contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
