@@ -30,11 +30,81 @@ pub struct MemoryCapsule {
 }
 
 impl MemoryCapsule {
-    /// Return true if this capsule is eligible for permanent memory.
-    pub fn can_write_permanent(&self) -> bool {
+    /// Capsule has been explicitly verified or rejected by the Verifier /
+    /// Reducer lane. Required gate for any permanent write.
+    pub fn is_verified_or_rejected(&self) -> bool {
         matches!(self.status.as_str(), "verified" | "rejected")
-            && self.evidence_level >= EvidenceLevel::ExternalGrounding
-            && !self.artifact_id.trim().is_empty()
+    }
+
+    /// Capsule's evidence reaches `ExternalGrounding` or stronger — i.e. it
+    /// references source / log / code / executable proof, not just internal
+    /// model consistency.
+    pub fn has_grounded_evidence(&self) -> bool {
+        self.evidence_level >= EvidenceLevel::ExternalGrounding
+    }
+
+    /// Capsule names a source artifact, so its provenance can be audited.
+    pub fn has_nonempty_provenance(&self) -> bool {
+        !self.artifact_id.trim().is_empty()
+    }
+
+    /// Eligible for permanent memory write. Equivalent to the conjunction of
+    /// the three predicates above; the split exists so callers can produce
+    /// targeted error messages about which gate failed.
+    pub fn can_write_permanent(&self) -> bool {
+        self.is_verified_or_rejected()
+            && self.has_grounded_evidence()
+            && self.has_nonempty_provenance()
+    }
+}
+
+#[cfg(test)]
+mod memory_helpers_tests {
+    use super::*;
+
+    fn capsule(status: &str, level: EvidenceLevel, artifact_id: &str) -> MemoryCapsule {
+        MemoryCapsule {
+            id: "c1".to_string(),
+            run_id: "r1".to_string(),
+            artifact_id: artifact_id.to_string(),
+            scope: "task".to_string(),
+            status: status.to_string(),
+            summary: String::new(),
+            evidence_level: level,
+            confidence: 0.5,
+            payload_json: Value::Null,
+            content_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn write_gate_requires_all_three() {
+        let ok = capsule("verified", EvidenceLevel::ExternalGrounding, "a1");
+        assert!(ok.is_verified_or_rejected());
+        assert!(ok.has_grounded_evidence());
+        assert!(ok.has_nonempty_provenance());
+        assert!(ok.can_write_permanent());
+    }
+
+    #[test]
+    fn missing_provenance_blocks_write() {
+        let c = capsule("verified", EvidenceLevel::ExternalGrounding, "   ");
+        assert!(!c.has_nonempty_provenance());
+        assert!(!c.can_write_permanent());
+    }
+
+    #[test]
+    fn weak_evidence_blocks_write() {
+        let c = capsule("verified", EvidenceLevel::IndependentAgreement, "a1");
+        assert!(!c.has_grounded_evidence());
+        assert!(!c.can_write_permanent());
+    }
+
+    #[test]
+    fn candidate_status_blocks_write() {
+        let c = capsule("candidate", EvidenceLevel::Executable, "a1");
+        assert!(!c.is_verified_or_rejected());
+        assert!(!c.can_write_permanent());
     }
 }
 
