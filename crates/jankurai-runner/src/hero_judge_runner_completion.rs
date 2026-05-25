@@ -17,6 +17,7 @@ pub(crate) struct HeroJudgeCompletionContext<'a> {
     pub db: &'a Db,
     pub sink: &'a EventSink,
     pub model_client: &'a dyn ModelClient,
+    pub require_parsed_live_json: bool,
 }
 
 pub(crate) async fn complete_hero_json(
@@ -32,7 +33,13 @@ pub(crate) async fn complete_hero_json(
         )?;
         let receipt = ctx.model_client.complete(kind, prompt, ctx.repo).await?;
         daemon_store::persist_model_receipt(ctx.db, ctx.run_id, &receipt)?;
-        let outcome = classify_hero_completion(kind, generation, attempt, &receipt);
+        let outcome = classify_hero_completion(
+            kind,
+            generation,
+            attempt,
+            &receipt,
+            ctx.require_parsed_live_json,
+        );
         ctx.sink.emit(
             EventKind::ModelOutcome,
             model_outcome_payload(&receipt, attempt, outcome.state_label()),
@@ -125,10 +132,18 @@ fn model_outcome_payload(
 ) -> serde_json::Value {
     json!({
         "kind": receipt.kind,
+        "provider": receipt.provider,
         "model": receipt.model,
         "success": receipt.success,
         "attempt": attempt,
         "state": state,
+        "latency_ms": receipt.latency_ms,
+        "response_bytes": receipt.response.as_ref().map(|response| response.len()),
+        "credential_policy": receipt.credential_policy,
+        "credential_user_id": receipt.credential_user_id,
+        "retry_count": receipt.retry_count,
+        "budget_used": receipt.budget_used,
+        "budget_remaining": receipt.budget_remaining,
     })
 }
 
@@ -186,12 +201,16 @@ fn classify_hero_completion(
     generation: usize,
     attempt: usize,
     receipt: &ModelCallReceipt,
+    require_parsed_live_json: bool,
 ) -> HeroCompletionDecision {
     if !receipt.success {
         let error = receipt
             .error
             .clone()
             .unwrap_or_else(|| "unknown model failure".to_string());
+        if require_parsed_live_json && timeout_model_error(&error) {
+            return HeroCompletionDecision::FinalBlock(error);
+        }
         if timeout_model_error(&error) {
             return HeroCompletionDecision::LiveParseSubstitution(parse_substitute_lane_value(
                 kind, generation,
@@ -214,6 +233,14 @@ fn classify_hero_completion(
         Ok(value) => HeroCompletionDecision::Parsed(value),
         Err(_) if receipt.provider == "fake" => HeroCompletionDecision::ProviderSyntheticResponse(
             synthetic_lane_value(kind, generation),
+        ),
+        Err(_) if require_parsed_live_json && attempt < 3 => {
+            HeroCompletionDecision::RetryableFailure(
+                "live model response was not parseable JSON".to_string(),
+            )
+        }
+        Err(_) if require_parsed_live_json => HeroCompletionDecision::FinalBlock(
+            "live model response was not parseable JSON".to_string(),
         ),
         Err(_) if text.trim().is_empty() && attempt < 3 => {
             HeroCompletionDecision::RetryableFailure("empty model response".to_string())

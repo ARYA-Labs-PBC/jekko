@@ -102,6 +102,7 @@ impl SuperReasoningPacket {
                 "superreasoning_packet.json".to_string(),
                 "reviewer_packet.json".to_string(),
                 "replay_receipt.json".to_string(),
+                "model_receipts.jsonl".to_string(),
                 "claim_ledger.jsonl".to_string(),
                 "unsupported_claims.jsonl".to_string(),
                 "negative_memory.jsonl".to_string(),

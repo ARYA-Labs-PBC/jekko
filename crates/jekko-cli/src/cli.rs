@@ -141,6 +141,9 @@ pub enum Command {
     /// Jankurai integration commands.
     Jankurai(cmd::jankurai::JankuraiArgs),
 
+    /// Manage local Jnoccio Fusion unlock and status.
+    Jnoccio(cmd::jnoccio::JnoccioArgs),
+
     /// Manage the background daemon.
     Daemon(cmd::daemon::DaemonArgs),
 

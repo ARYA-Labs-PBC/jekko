@@ -35,6 +35,7 @@ fn main() -> Result<()> {
         Some(Command::Mcp(args)) => cmd::mcp::run(&cli.global, args),
         Some(Command::Acp(args)) => cmd::acp::run(&cli.global, args),
         Some(Command::Jankurai(args)) => cmd::jankurai::run(&cli.global, args),
+        Some(Command::Jnoccio(args)) => cmd::jnoccio::run(&cli.global, args),
         Some(Command::Daemon(args)) => cmd::daemon::run(&cli.global, args),
         Some(Command::Plugin(args)) => cmd::plugin::run(&cli.global, args),
         Some(Command::Debug(args)) => cmd::debug::run(&cli.global, args),

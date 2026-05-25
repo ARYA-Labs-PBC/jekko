@@ -6,6 +6,7 @@
 //! - Profile C — workflow (`# zyal: declarative target=github-workflow ...`), emits YAML.
 
 pub mod compile;
+pub mod live_audit;
 pub mod profile;
 pub mod replay_verify;
 pub mod runbook_lint;

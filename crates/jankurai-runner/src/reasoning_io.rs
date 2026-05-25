@@ -37,15 +37,6 @@ pub(crate) async fn complete_structured(
         )?;
         let receipt = model_client.complete(kind, prompt, repo).await?;
         daemon_store::persist_model_receipt(db, run_id, &receipt)?;
-        sink.emit(
-            EventKind::ModelOutcome,
-            json!({
-                "kind": receipt.kind,
-                "model": receipt.model,
-                "success": receipt.success,
-                "attempt": attempt,
-            }),
-        )?;
         if receipt.budget_used.is_some() || receipt.budget_remaining.is_some() {
             sink.emit(
                 EventKind::LiveBudget,
@@ -56,29 +47,88 @@ pub(crate) async fn complete_structured(
             )?;
         }
         if !receipt.success {
-            let error = receipt
-                .error
-                .clone()
-                .unwrap_or_else(|| "unknown model failure".to_string());
+            let error = match receipt.error.clone() {
+                Some(error) => error,
+                None => "unknown model failure".to_string(),
+            };
+            emit_model_outcome(sink, &receipt, attempt, "model_failure")?;
             daemon_store::mark_daemon_run(db, run_id, "blocked", &receipt.kind, Some(&error))?;
             return Err(anyhow!("model call failed: {error}"));
         }
-        let text = receipt.response.as_deref().unwrap_or("{}");
+        let Some(text) = receipt.response.as_deref() else {
+            if receipt.provider == "fake" {
+                emit_model_outcome(sink, &receipt, attempt, "fake_provider_synthetic_response")?;
+                return Ok((receipt, synthetic_structured_value(kind)));
+            }
+            emit_model_outcome(sink, &receipt, attempt, "missing_response")?;
+            last_error = Some("model response missing".to_string());
+            continue;
+        };
         match serde_json::from_str::<serde_json::Value>(text) {
-            Ok(value) => return Ok((receipt, value)),
+            Ok(value) => {
+                emit_model_outcome(sink, &receipt, attempt, "parsed")?;
+                return Ok((receipt, value));
+            }
             Err(_err) if receipt.provider == "fake" => {
+                emit_model_outcome(sink, &receipt, attempt, "fake_provider_synthetic_response")?;
                 return Ok((receipt, synthetic_structured_value(kind)));
             }
             Err(err) => {
+                emit_model_outcome(sink, &receipt, attempt, "retryable_failure")?;
                 last_error = Some(err.to_string());
             }
         }
     }
-    let error = last_error.unwrap_or_else(|| "invalid model JSON".to_string());
+    let error = match last_error {
+        Some(error) => error,
+        None => "invalid model JSON".to_string(),
+    };
     mark_blocked_for_parse_error(db, run_id, &error)?;
     Err(anyhow!(
         "advanced reasoning model JSON parse failed: {error}"
     ))
+}
+
+fn emit_model_outcome(
+    sink: &EventSink,
+    receipt: &ModelCallReceipt,
+    attempt: usize,
+    state: &str,
+) -> Result<()> {
+    let response_bytes = match receipt.response.as_deref() {
+        Some(response) => response.len(),
+        None => 0,
+    };
+    let retry_count = match receipt.retry_count {
+        Some(retry_count) => retry_count,
+        None => attempt.saturating_sub(1),
+    };
+    let budget_used = match receipt.budget_used {
+        Some(budget_used) => budget_used,
+        None => 0,
+    };
+    let budget_remaining = match receipt.budget_remaining {
+        Some(budget_remaining) => budget_remaining,
+        None => 0,
+    };
+    sink.emit(
+        EventKind::ModelOutcome,
+        json!({
+            "kind": receipt.kind,
+            "provider": receipt.provider,
+            "model": receipt.model,
+            "success": receipt.success,
+            "attempt": attempt,
+            "state": state,
+            "latency_ms": receipt.latency_ms,
+            "response_bytes": response_bytes,
+            "credential_policy": receipt.credential_policy,
+            "credential_user_id": receipt.credential_user_id,
+            "retry_count": retry_count,
+            "budget_used": budget_used,
+            "budget_remaining": budget_remaining,
+        }),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

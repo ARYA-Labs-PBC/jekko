@@ -221,6 +221,7 @@ async fn deterministic_run_writes_required_artifacts() {
     assert!(report.quality_trend_json.exists());
     assert!(report.superreasoning_packet_json.exists());
     assert!(report.replay_receipt_json.exists());
+    assert!(report.model_receipts_jsonl.exists());
     assert!(report.claim_ledger_jsonl.exists());
     assert!(report.unsupported_claims_jsonl.exists());
     assert!(report.negative_memory_jsonl.exists());
@@ -513,6 +514,56 @@ async fn live_parse_substitution_records_storage_safe_substitution() {
         "literature_synthesis",
     );
     assert_eq!(states, vec!["live_parse_substitution"]);
+}
+
+#[tokio::test]
+async fn live_mode_invalid_json_blocks_instead_of_substituting() {
+    let dir = tempdir().unwrap();
+    bootstrap_repo(dir.path());
+    let db = Db::open_in_memory().unwrap();
+    let receipts = vec![
+        scripted_success(
+            1,
+            ModelTaskKind::LiteratureSynthesis,
+            "live",
+            "this is not json",
+        ),
+        scripted_success(
+            2,
+            ModelTaskKind::LiteratureSynthesis,
+            "live",
+            "still not json",
+        ),
+        scripted_success(
+            3,
+            ModelTaskKind::LiteratureSynthesis,
+            "live",
+            "not json on final attempt",
+        ),
+    ];
+    let err = run_hero_judge_run_with_db(
+        dir.path(),
+        "hero-judge-live-parse-block",
+        &dir.path().join("agent/zyal/openqg-hero-judge-evolve.zyal"),
+        single_lane_runbook(),
+        Some(1),
+        true,
+        &ScriptedModelClient::new(receipts),
+        &db,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("live model response was not parseable JSON"));
+    let states = read_model_outcome_states(
+        &dir.path()
+            .join("target/zyal/runs/hero-judge-live-parse-block/events.jsonl"),
+        "literature_synthesis",
+    );
+    assert_eq!(
+        states,
+        vec!["retryable_failure", "retryable_failure", "final_block"]
+    );
 }
 
 #[tokio::test]

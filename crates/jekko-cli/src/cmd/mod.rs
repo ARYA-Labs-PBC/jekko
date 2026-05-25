@@ -15,6 +15,7 @@ pub mod export;
 pub mod github;
 pub mod import;
 pub mod jankurai;
+pub mod jnoccio;
 pub mod keys;
 pub mod mcp;
 pub mod models;

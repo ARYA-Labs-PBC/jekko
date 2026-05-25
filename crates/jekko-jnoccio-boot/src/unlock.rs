@@ -139,7 +139,9 @@ pub fn has_plaintext_signals(repo_root: &Path) -> bool {
     let Ok(config_text) = fs::read_to_string(&config_path) else {
         return false;
     };
-    config_text.contains("\"jnoccio\"") && config_text.contains("\"jnoccio-fusion\"")
+    config_text.contains("\"jnoccio\"")
+        && (config_text.contains("\"jnoccio-fusion\"")
+            || config_text.contains("\"jnoccio/jnoccio-fusion\""))
 }
 
 /// Returns the `.env.jnoccio` path inside the `jnoccio-fusion/` subtree if it
@@ -234,6 +236,21 @@ mod tests {
     fn detects_plaintext_signals() {
         let tmp = TempDir::new().unwrap();
         make_plaintext_signals(tmp.path());
+        assert!(has_plaintext_signals(tmp.path()));
+    }
+
+    #[test]
+    fn detects_namespaced_plaintext_model_signal() {
+        let tmp = TempDir::new().unwrap();
+        make_plaintext_signals(tmp.path());
+        fs::write(
+            tmp.path()
+                .join("jnoccio-fusion")
+                .join("config")
+                .join("server.json"),
+            r#"{"provider":"jnoccio","model":"jnoccio/jnoccio-fusion"}"#,
+        )
+        .unwrap();
         assert!(has_plaintext_signals(tmp.path()));
     }
 

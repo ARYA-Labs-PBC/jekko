@@ -472,6 +472,12 @@ zyal-superreasoning-lint-check:
 zyal-superreasoning-verify-replay run_dir:
 	rtk cargo run --manifest-path crates/zyalc/Cargo.toml --locked --quiet -- verify-replay {{run_dir}} --strict
 
+# Strict live audit for a completed superreasoning run directory.
+# Usage: just zyal-superreasoning-audit-live run_dir=target/zyal/runs/<run_id>
+# jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-build narrow-targets=true
+zyal-superreasoning-audit-live run_dir:
+	rtk cargo run --manifest-path crates/zyalc/Cargo.toml --locked --quiet -- audit-live-run {{run_dir}} --strict
+
 # Composed superreasoning fast lane: runner packets, key routing, provider selection, and ZYAL lint.
 # jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=true
 zyal-superreasoning-fast:
@@ -498,7 +504,7 @@ zyal-superreasoning-redis-smoke:
 	rtk cargo run --manifest-path crates/zyalc/Cargo.toml --locked --quiet -- lint-super docs/ZYAL/examples/35-rust-redis-replacement-superreasoning.zyal --strict --format json
 
 # Opt-in live local superreasoning proof. Refuses CI and requires users-only credentials.
-zyal-superreasoning-live-local:
+zyal-superreasoning-live-local run_id="superreasoning-live-local" provider="" model="":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	if [ "${CI:-}" = "true" ]; then
@@ -509,7 +515,88 @@ zyal-superreasoning-live-local:
 		echo "set JEKKO_ZYAL_LIVE=1 to run live local proof" >&2
 		exit 1
 	fi
-	JEKKO_KEY_SOURCE_POLICY=users-only rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- --repo . --run-id superreasoning-live-local hero-judge-run --zyal docs/ZYAL/examples/34-superreasoning-openqg-foundry.zyal --live --max-generations 1
+	if [ -z "${JEKKO_BIN:-}" ]; then
+		if [ -x "target/debug/jekko" ]; then
+			export JEKKO_BIN="$PWD/target/debug/jekko"
+		elif [ -x "target/release/jekko" ]; then
+			export JEKKO_BIN="$PWD/target/release/jekko"
+		else
+			echo "set JEKKO_BIN to a built jekko binary before running live proof" >&2
+			exit 1
+		fi
+	fi
+	args=(--repo . --run-id "{{run_id}}" hero-judge-run --zyal docs/ZYAL/examples/34-superreasoning-openqg-foundry.zyal --live --max-generations 1)
+	if [ -n "{{provider}}" ]; then
+		args+=(--provider "{{provider}}")
+	fi
+	if [ -n "{{model}}" ]; then
+		args+=(--model "{{model}}")
+	fi
+	JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
+	rtk just zyal-superreasoning-verify-replay target/zyal/runs/{{run_id}}
+	rtk just zyal-superreasoning-audit-live target/zyal/runs/{{run_id}}
+
+# Opt-in live local advanced-reasoning proof. Refuses CI and requires users-only credentials.
+zyal-advanced-reasoning-live-local run_id="advanced-reasoning-live-local" provider="" model="":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [ "${CI:-}" = "true" ]; then
+		echo "zyal-advanced-reasoning-live-local refuses CI=true" >&2
+		exit 1
+	fi
+	if [ "${JEKKO_ZYAL_LIVE:-}" != "1" ]; then
+		echo "set JEKKO_ZYAL_LIVE=1 to run live local proof" >&2
+		exit 1
+	fi
+	if [ -z "${JEKKO_BIN:-}" ]; then
+		if [ -x "target/debug/jekko" ]; then
+			export JEKKO_BIN="$PWD/target/debug/jekko"
+		elif [ -x "target/release/jekko" ]; then
+			export JEKKO_BIN="$PWD/target/release/jekko"
+		else
+			echo "set JEKKO_BIN to a built jekko binary before running live proof" >&2
+			exit 1
+		fi
+	fi
+	args=(--repo . --run-id "{{run_id}}" port-run --config docs/ZYAL/examples/31-advanced-reasoning-foundry.port-run.json --live --max-ticks 1)
+	if [ -n "{{provider}}" ]; then
+		args+=(--provider "{{provider}}")
+	fi
+	if [ -n "{{model}}" ]; then
+		args+=(--model "{{model}}")
+	fi
+	JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
+
+# Opt-in live local MiniRedis ladder proof. Refuses CI and requires users-only credentials.
+zyal-miniredis-live-local run_id="miniredis-live-local" provider="" model="":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [ "${CI:-}" = "true" ]; then
+		echo "zyal-miniredis-live-local refuses CI=true" >&2
+		exit 1
+	fi
+	if [ "${JEKKO_ZYAL_LIVE:-}" != "1" ]; then
+		echo "set JEKKO_ZYAL_LIVE=1 to run live local proof" >&2
+		exit 1
+	fi
+	if [ -z "${JEKKO_BIN:-}" ]; then
+		if [ -x "target/debug/jekko" ]; then
+			export JEKKO_BIN="$PWD/target/debug/jekko"
+		elif [ -x "target/release/jekko" ]; then
+			export JEKKO_BIN="$PWD/target/release/jekko"
+		else
+			echo "set JEKKO_BIN to a built jekko binary before running live proof" >&2
+			exit 1
+		fi
+	fi
+	args=(--repo . --run-id "{{run_id}}" port-run --config docs/ZYAL/examples/35-rust-redis-replacement-superreasoning.port-run.json --live --max-ticks 1)
+	if [ -n "{{provider}}" ]; then
+		args+=(--provider "{{provider}}")
+	fi
+	if [ -n "{{model}}" ]; then
+		args+=(--model "{{model}}")
+	fi
+	JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
 
 # Broad full-suite lane for local release-style port workflow proof.
 # jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=false

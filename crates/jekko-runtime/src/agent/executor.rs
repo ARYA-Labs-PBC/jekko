@@ -279,7 +279,7 @@ impl AgentExecutor for ProviderAgentExecutor {
                 transform_message(history.clone(), &model, &provider_options);
             let provider_request = ProviderRequest {
                 model: format!("{provider_id}/{model_id}"),
-                api_model_id: model_id.clone(),
+                api_model_id: api_model_id_for(&provider_id, &model_id).to_string(),
                 session_id: session_seed.clone(),
                 system: vec![],
                 messages: transformed_messages,
@@ -303,13 +303,15 @@ impl AgentExecutor for ProviderAgentExecutor {
             let mut stream = match adapter.stream(provider_request, abort).await {
                 Ok(s) => s,
                 Err(err) => {
-                    if let Some(user) = credential_user.as_deref() {
-                        record_credential_failure(
-                            &provider_id,
-                            user,
-                            &model_id,
-                            http_status_of(&err),
-                        );
+                    if should_record_outer_credential_failure(&provider_id) {
+                        if let Some(user) = credential_user.as_deref() {
+                            record_credential_failure(
+                                &provider_id,
+                                user,
+                                &model_id,
+                                http_status_of(&err),
+                            );
+                        }
                     }
                     return Err(err.into());
                 }
@@ -322,13 +324,15 @@ impl AgentExecutor for ProviderAgentExecutor {
                 let event = match item {
                     Ok(ev) => ev,
                     Err(err) => {
-                        if let Some(user) = credential_user.as_deref() {
-                            record_credential_failure(
-                                &provider_id,
-                                user,
-                                &model_id,
-                                http_status_of(&err),
-                            );
+                        if should_record_outer_credential_failure(&provider_id) {
+                            if let Some(user) = credential_user.as_deref() {
+                                record_credential_failure(
+                                    &provider_id,
+                                    user,
+                                    &model_id,
+                                    http_status_of(&err),
+                                );
+                            }
                         }
                         return Err(err.into());
                     }
@@ -404,6 +408,18 @@ impl AgentExecutor for ProviderAgentExecutor {
         }
 
         Ok(final_result)
+    }
+}
+
+fn should_record_outer_credential_failure(provider_id: &str) -> bool {
+    provider_id != "jnoccio"
+}
+
+fn api_model_id_for<'a>(provider_id: &str, model_id: &'a str) -> &'a str {
+    if provider_id == "jnoccio" && model_id == "jnoccio-router" {
+        "jnoccio-fusion"
+    } else {
+        model_id
     }
 }
 
@@ -508,5 +524,18 @@ mod mock_llm_hook_tests {
 
         let _mock_zero = EnvVarGuard::set(MOCK_LLM_ENV, "0");
         assert!(!mock_llm_enabled());
+    }
+
+    #[test]
+    fn jnoccio_router_uses_gateway_model_id() {
+        assert_eq!(
+            api_model_id_for("jnoccio", "jnoccio-router"),
+            "jnoccio-fusion"
+        );
+        assert_eq!(api_model_id_for("jnoccio", "custom"), "custom");
+        assert_eq!(
+            api_model_id_for("openrouter", "jnoccio-router"),
+            "jnoccio-router"
+        );
     }
 }
