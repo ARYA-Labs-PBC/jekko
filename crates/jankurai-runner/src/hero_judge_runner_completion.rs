@@ -9,6 +9,7 @@ use crate::events::{EventKind, EventSink};
 use crate::hero_judge_eval::{parse_substitute_lane_value, synthetic_lane_value};
 use crate::model_client::{kind_label, ModelCallReceipt, ModelClient};
 use crate::model_policy::ModelTaskKind;
+use crate::reasoning_io::parse_structured_model_json;
 
 #[derive(Clone, Copy)]
 pub(crate) struct HeroJudgeCompletionContext<'a> {
@@ -41,9 +42,15 @@ pub(crate) async fn complete_hero_json(
             ctx.require_parsed_live_json,
         );
         ctx.sink.emit(
-            EventKind::ModelOutcome,
+            EventKind::ModelAttemptOutcome,
             model_outcome_payload(&receipt, attempt, outcome.state_label()),
         )?;
+        if matches!(outcome, HeroCompletionDecision::Parsed(_)) {
+            ctx.sink.emit(
+                EventKind::ModelOutcome,
+                model_outcome_payload(&receipt, attempt, outcome.state_label()),
+            )?;
+        }
         if receipt.budget_used.is_some() || receipt.budget_remaining.is_some() {
             ctx.sink.emit(
                 EventKind::LiveBudget,
@@ -110,21 +117,6 @@ fn timeout_model_error(error: &str) -> bool {
     error.to_ascii_lowercase().contains("timed out")
 }
 
-fn parse_model_json(text: &str) -> serde_json::Result<serde_json::Value> {
-    match serde_json::from_str::<serde_json::Value>(text) {
-        Ok(value) => Ok(value),
-        Err(primary) => {
-            let Some(start) = text.find('{') else {
-                return Err(primary);
-            };
-            let Some(end) = text.rfind('}') else {
-                return Err(primary);
-            };
-            serde_json::from_str::<serde_json::Value>(&text[start..=end])
-        }
-    }
-}
-
 fn model_outcome_payload(
     receipt: &ModelCallReceipt,
     attempt: usize,
@@ -140,6 +132,7 @@ fn model_outcome_payload(
         "latency_ms": receipt.latency_ms,
         "response_bytes": receipt.response.as_ref().map(|response| response.len()),
         "credential_policy": receipt.credential_policy,
+        "selected_credential_user_id": receipt.selected_credential_user_id,
         "credential_user_id": receipt.credential_user_id,
         "retry_count": receipt.retry_count,
         "budget_used": receipt.budget_used,
@@ -229,7 +222,7 @@ fn classify_hero_completion(
             HeroCompletionDecision::FinalBlock("missing model response".to_string())
         };
     };
-    match parse_model_json(text) {
+    match parse_structured_model_json(text) {
         Ok(value) => HeroCompletionDecision::Parsed(value),
         Err(_) if receipt.provider == "fake" => HeroCompletionDecision::ProviderSyntheticResponse(
             synthetic_lane_value(kind, generation),

@@ -82,7 +82,14 @@ pub fn has_plaintext_checkout() -> bool {
 ///
 /// Returns `None` only when both are missing.
 pub fn find_jnoccio_fusion_root() -> Option<PathBuf> {
-    if let Some(repo) = find_repo_root() {
+    let cwd = std::env::current_dir().ok()?;
+    find_jnoccio_fusion_root_from(&cwd)
+}
+
+/// Find the `jnoccio-fusion/` directory root by searching from an explicit
+/// starting path instead of the current process directory.
+pub fn find_jnoccio_fusion_root_from(start: &Path) -> Option<PathBuf> {
+    if let Some(repo) = find_repo_root_from(start) {
         let candidate = repo.join("jnoccio-fusion");
         if candidate.is_dir() {
             return Some(candidate);
@@ -110,7 +117,12 @@ fn xdg_config_home() -> Option<PathBuf> {
 /// Returns the **repo root** (parent of `jnoccio-fusion/`), not the subtree itself.
 pub fn find_repo_root() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
-    for ancestor in cwd.ancestors().take(10) {
+    find_repo_root_from(&cwd)
+}
+
+/// Find the repository root from an explicit starting path.
+pub fn find_repo_root_from(start: &Path) -> Option<PathBuf> {
+    for ancestor in start.ancestors().take(10) {
         if ancestor.join("jnoccio-fusion").is_dir() {
             return Some(ancestor.to_path_buf());
         }

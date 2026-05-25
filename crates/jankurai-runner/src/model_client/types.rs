@@ -68,6 +68,9 @@ pub struct ModelCallReceipt {
     /// Credential source policy used by a live child process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_policy: Option<String>,
+    /// User folder id selected before router metadata confirms the winner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_credential_user_id: Option<String>,
     /// User folder id for users-only credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_user_id: Option<String>,
@@ -94,6 +97,7 @@ impl ModelCallReceipt {
             budget_remaining: None,
             route: Some(kind_label(kind).to_string()),
             credential_policy: None,
+            selected_credential_user_id: None,
             credential_user_id: None,
             retry_count: Some(0),
         }
@@ -121,6 +125,7 @@ impl ModelCallReceipt {
             budget_remaining: None,
             route: Some(kind_label(kind).to_string()),
             credential_policy: None,
+            selected_credential_user_id: None,
             credential_user_id: None,
             retry_count: Some(0),
         }

@@ -51,30 +51,41 @@ pub(crate) async fn complete_structured(
                 Some(error) => error,
                 None => "unknown model failure".to_string(),
             };
-            emit_model_outcome(sink, &receipt, attempt, "model_failure")?;
+            emit_model_attempt_outcome(sink, &receipt, attempt, "model_failure")?;
             daemon_store::mark_daemon_run(db, run_id, "blocked", &receipt.kind, Some(&error))?;
             return Err(anyhow!("model call failed: {error}"));
         }
         let Some(text) = receipt.response.as_deref() else {
             if receipt.provider == "fake" {
-                emit_model_outcome(sink, &receipt, attempt, "fake_provider_synthetic_response")?;
+                emit_model_attempt_outcome(
+                    sink,
+                    &receipt,
+                    attempt,
+                    "fake_provider_synthetic_response",
+                )?;
                 return Ok((receipt, synthetic_structured_value(kind)));
             }
-            emit_model_outcome(sink, &receipt, attempt, "missing_response")?;
+            emit_model_attempt_outcome(sink, &receipt, attempt, "missing_response")?;
             last_error = Some("model response missing".to_string());
             continue;
         };
-        match serde_json::from_str::<serde_json::Value>(text) {
+        match parse_structured_model_json(text) {
             Ok(value) => {
+                emit_model_attempt_outcome(sink, &receipt, attempt, "parsed")?;
                 emit_model_outcome(sink, &receipt, attempt, "parsed")?;
                 return Ok((receipt, value));
             }
             Err(_err) if receipt.provider == "fake" => {
-                emit_model_outcome(sink, &receipt, attempt, "fake_provider_synthetic_response")?;
+                emit_model_attempt_outcome(
+                    sink,
+                    &receipt,
+                    attempt,
+                    "fake_provider_synthetic_response",
+                )?;
                 return Ok((receipt, synthetic_structured_value(kind)));
             }
             Err(err) => {
-                emit_model_outcome(sink, &receipt, attempt, "retryable_failure")?;
+                emit_model_attempt_outcome(sink, &receipt, attempt, "retryable_failure")?;
                 last_error = Some(err.to_string());
             }
         }
@@ -89,8 +100,89 @@ pub(crate) async fn complete_structured(
     ))
 }
 
+pub(crate) fn parse_structured_model_json(text: &str) -> serde_json::Result<serde_json::Value> {
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(value) => Ok(value),
+        Err(primary) => {
+            for (start, ch) in text.char_indices() {
+                if !matches!(ch, '{' | '[') {
+                    continue;
+                }
+                let Some(end) = find_balanced_json_end(text, start) else {
+                    continue;
+                };
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text[start..=end]) {
+                    return Ok(value);
+                }
+            }
+            Err(primary)
+        }
+    }
+}
+
+fn find_balanced_json_end(text: &str, start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, ch) in text[start..].char_indices() {
+        let idx = start + offset;
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' | '[' => depth += 1,
+            '}' | ']' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn emit_model_outcome(
     sink: &EventSink,
+    receipt: &ModelCallReceipt,
+    attempt: usize,
+    state: &str,
+) -> Result<()> {
+    emit_model_event(sink, EventKind::ModelOutcome, receipt, attempt, state)
+}
+
+fn emit_model_attempt_outcome(
+    sink: &EventSink,
+    receipt: &ModelCallReceipt,
+    attempt: usize,
+    state: &str,
+) -> Result<()> {
+    emit_model_event(
+        sink,
+        EventKind::ModelAttemptOutcome,
+        receipt,
+        attempt,
+        state,
+    )
+}
+
+fn emit_model_event(
+    sink: &EventSink,
+    kind: EventKind,
     receipt: &ModelCallReceipt,
     attempt: usize,
     state: &str,
@@ -112,7 +204,7 @@ fn emit_model_outcome(
         None => 0,
     };
     sink.emit(
-        EventKind::ModelOutcome,
+        kind,
         json!({
             "kind": receipt.kind,
             "provider": receipt.provider,
@@ -123,6 +215,7 @@ fn emit_model_outcome(
             "latency_ms": receipt.latency_ms,
             "response_bytes": response_bytes,
             "credential_policy": receipt.credential_policy,
+            "selected_credential_user_id": receipt.selected_credential_user_id,
             "credential_user_id": receipt.credential_user_id,
             "retry_count": retry_count,
             "budget_used": budget_used,
@@ -220,6 +313,20 @@ pub(crate) fn export_reasoning_graph(
     fs::write(&path, serde_json::to_string_pretty(&payload)?)
         .with_context(|| format!("write {}", path.display()))?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_structured_model_json;
+
+    #[test]
+    fn parse_structured_model_json_accepts_wrapped_object() {
+        let text =
+            "Here is the JSON: {\"answer\":true,\"count\":2}\nExtra notes: ignore this {not json}";
+        let value = parse_structured_model_json(text).expect("wrapped JSON should parse");
+        assert_eq!(value["answer"], true);
+        assert_eq!(value["count"], 2);
+    }
 }
 
 pub(crate) fn emit_state(sink: &EventSink, state: &str) -> Result<()> {

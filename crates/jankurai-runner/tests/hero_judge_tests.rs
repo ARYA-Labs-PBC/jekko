@@ -145,6 +145,7 @@ fn scripted_success(
         budget_remaining: None,
         route: Some(kind_label(kind).to_string()),
         credential_policy: None,
+        selected_credential_user_id: None,
         credential_user_id: None,
         retry_count: Some(0),
     }
@@ -171,6 +172,7 @@ fn scripted_failure(
         budget_remaining: None,
         route: Some(kind_label(kind).to_string()),
         credential_policy: None,
+        selected_credential_user_id: None,
         credential_user_id: None,
         retry_count: Some(0),
     }

@@ -77,6 +77,7 @@ pub fn persist_model_receipt(db: &Db, run_id: &str, receipt: &ModelCallReceipt) 
                 "budget_remaining": receipt.budget_remaining,
                 "route": receipt.route,
                 "credential_policy": receipt.credential_policy,
+                "selected_credential_user_id": receipt.selected_credential_user_id,
                 "credential_user_id": receipt.credential_user_id,
                 "retry_count": receipt.retry_count,
             })),
@@ -129,6 +130,7 @@ pub fn export_model_receipts_jsonl(db: &Db, run_id: &str, path: &Path) -> Result
                 "budget_remaining": payload.field("budget_remaining"),
                 "route": payload.field("route"),
                 "credential_policy": payload.field("credential_policy"),
+                "selected_credential_user_id": payload.field("selected_credential_user_id"),
                 "credential_user_id": payload.field("credential_user_id"),
                 "retry_count": payload.field("retry_count"),
             })
