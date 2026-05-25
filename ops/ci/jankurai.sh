@@ -185,7 +185,9 @@ collect_changed_args() {
     git diff --name-only --diff-filter=ACMR origin/main
     git ls-files --others --exclude-standard
   })
-  printf '%s\n' "${changed_args[@]}"
+  if (( ${#changed_args[@]} > 0 )); then
+    printf '%s\n' "${changed_args[@]}"
+  fi
 }
 
 mapfile -t proof_args < <(collect_changed_args)
