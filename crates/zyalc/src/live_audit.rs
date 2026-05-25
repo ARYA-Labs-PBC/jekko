@@ -42,21 +42,10 @@ const FORBIDDEN_OUTCOME_STATES: &[&str] = &[
     "fake_provider_synthetic_response",
 ];
 
-const FORBIDDEN_CREDENTIAL_MARKERS: &[&str] = &[
-    "OPENAI_API_KEY=",
-    "ANTHROPIC_API_KEY=",
-    "GEMINI_API_KEY=",
-    "OPENROUTER_API_KEY=",
-    "MISTRAL_API_KEY=",
-    "GROQ_API_KEY=",
-    "FIREWORKS_API_KEY=",
-    "SAMBANOVA_API_KEY=",
-    "CEREBRAS_API_KEY=",
-    "sk-",
-    "sk-or-",
-    "gsk_",
-    "ghp_",
-];
+// Canonical credential-leakage list lives in zyal-core. Re-exported under
+// the legacy name so existing `super::FORBIDDEN_CREDENTIAL_MARKERS` paths in
+// `content.rs` keep compiling unchanged.
+pub(crate) use zyal_core::FORBIDDEN_CREDENTIAL_PATTERNS as FORBIDDEN_CREDENTIAL_MARKERS;
 
 pub fn audit(run_dir: &Path, strict: bool) -> Result<LiveAuditReport> {
     let mut report = LiveAuditReport {

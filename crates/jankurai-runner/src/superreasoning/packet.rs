@@ -107,13 +107,10 @@ impl SuperReasoningPacket {
                 "unsupported_claims.jsonl".to_string(),
                 "negative_memory.jsonl".to_string(),
             ],
-            forbidden_content: vec![
-                "raw_chain_of_thought".to_string(),
-                "fixture_target_values_in_model_visible_artifacts".to_string(),
-                "process_env_credentials".to_string(),
-                ".env.jnoccio_credentials".to_string(),
-                "jnoccio-local".to_string(),
-            ],
+            forbidden_content: zyal_core::FORBIDDEN_ARTIFACT_SHAPE_PATTERNS
+                .iter()
+                .map(|pattern| (*pattern).to_string())
+                .collect(),
             claim_ledger: output_dir.join("claim_ledger.jsonl").display().to_string(),
             unsupported_claims_ledger: output_dir
                 .join("unsupported_claims.jsonl")

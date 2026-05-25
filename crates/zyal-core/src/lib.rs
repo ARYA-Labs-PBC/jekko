@@ -14,7 +14,10 @@ pub mod super_reasoning;
 
 pub use artifact_kinds::ArtifactKind;
 pub use credential_policy::CredentialSourcePolicy;
-pub use forbidden::{contains_any_forbidden, FORBIDDEN_PATTERNS};
+pub use forbidden::{
+    contains_any_credential, contains_any_forbidden, FORBIDDEN_ARTIFACT_SHAPE_PATTERNS,
+    FORBIDDEN_CREDENTIAL_PATTERNS, FORBIDDEN_PATTERNS,
+};
 pub use lane::{ArtifactRef, LaneId, RunId};
 pub use memory::{MemoryKind, MemoryPromotionStatus};
 pub use super_reasoning::{ArtifactContract, PhaseSignoffPolicy, SuperReasoningPacket};
