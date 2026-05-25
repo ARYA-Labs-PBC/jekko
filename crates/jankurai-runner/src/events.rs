@@ -39,6 +39,7 @@ pub enum EventKind {
     ParityGap,
     ParityManifestGenerated,
     ModelAttempt,
+    ModelAttemptOutcome,
     ModelOutcome,
     LiveBudget,
     BenchmarkResult,

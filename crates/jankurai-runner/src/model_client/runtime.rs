@@ -56,19 +56,16 @@ impl JekkoRuntimeModelClient {
     }
 
     /// Return the selected provider/model route for a task kind.
+    ///
+    /// When nothing is explicitly routed (no constructor override, no
+    /// per-policy selection), this returns an empty `ModelRouteRecord` and the
+    /// runtime omits `--provider` / `--model` from the spawned `jekko run`
+    /// invocation — jnoccio-fusion picks the slot at request time.
     pub fn selected_route(&self, kind: ModelTaskKind) -> ModelRouteRecord {
         let policy_route = self.policy.select(kind);
-        let route = ModelRouteRecord {
+        ModelRouteRecord {
             provider: self.provider.clone().or(policy_route.provider),
             model: self.model_override.clone().or(policy_route.model),
-        };
-        if route.is_empty() {
-            ModelRouteRecord {
-                provider: Some("jnoccio".to_string()),
-                model: Some("jnoccio-router".to_string()),
-            }
-        } else {
-            route
         }
     }
 
