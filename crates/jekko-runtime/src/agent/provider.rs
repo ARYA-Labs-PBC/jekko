@@ -31,32 +31,13 @@ use tokio::time::sleep;
 
 use super::types::AgentTurnRequest;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) enum CredentialSourcePolicy {
-    #[default]
-    Any,
-    UsersOnly,
-}
-
-impl CredentialSourcePolicy {
-    pub(super) fn from_env() -> Self {
-        match env::var("JEKKO_KEY_SOURCE_POLICY") {
-            Ok(value) if value == "users-only" => Self::UsersOnly,
-            _ => Self::Any,
-        }
-    }
-
-    fn users_only(self) -> bool {
-        matches!(self, Self::UsersOnly)
-    }
-
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Any => "any",
-            Self::UsersOnly => "users-only",
-        }
-    }
-}
+// Canonical CredentialSourcePolicy lives in `zyal-core`. Re-exported here so
+// existing `super::provider::CredentialSourcePolicy::from_env()` call sites in
+// `executor.rs` and `oneshot.rs` keep compiling unchanged. Note: zyal-core's
+// type-level `Default` is `UsersOnly` (the safer ZYAL-aligned default), but
+// `from_env()` preserves the legacy jekko-runtime behavior where an unset env
+// var still maps to `Any` (normal credential resolution).
+pub(super) use zyal_core::CredentialSourcePolicy;
 
 pub(super) fn select_provider_id(request: &AgentTurnRequest) -> RuntimeResult<String> {
     if let Some(provider) = request.provider.clone() {

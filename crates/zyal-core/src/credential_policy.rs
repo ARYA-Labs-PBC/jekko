@@ -29,9 +29,27 @@ impl CredentialSourcePolicy {
         }
     }
 
+    /// Alias for [`env_value`](Self::env_value) — kept for callers that read
+    /// "any"/"users-only" as generic policy strings.
+    pub fn as_str(self) -> &'static str {
+        self.env_value()
+    }
+
     /// Whether this policy restricts credentials to the per-user pool.
     pub fn users_only(self) -> bool {
         matches!(self, Self::UsersOnly)
+    }
+
+    /// Read the policy from the `JEKKO_KEY_SOURCE_POLICY` env var. Any value
+    /// other than `"users-only"` (including unset) maps to [`Self::Any`] —
+    /// this preserves the legacy jekko-runtime behavior where unset env means
+    /// "use normal credential resolution," even though the type-level
+    /// [`Default`] is now [`Self::UsersOnly`].
+    pub fn from_env() -> Self {
+        match std::env::var("JEKKO_KEY_SOURCE_POLICY") {
+            Ok(value) if value.trim() == "users-only" => Self::UsersOnly,
+            _ => Self::Any,
+        }
     }
 }
 
