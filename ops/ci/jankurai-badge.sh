@@ -49,4 +49,7 @@ rm -f "$json_header" "$svg_header"
 
 test -s agent/jankurai-badge.svg
 test -s agent/jankurai-badge.json
-git diff --exit-code -- README.md agent/jankurai-badge.svg agent/jankurai-badge.json
+
+if [[ "${1:-}" == "--check" ]]; then
+  git diff --exit-code -- README.md agent/jankurai-badge.svg agent/jankurai-badge.json
+fi
