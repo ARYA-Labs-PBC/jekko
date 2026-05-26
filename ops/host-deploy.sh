@@ -62,10 +62,13 @@ ensure_deploy_clone() {
   local token="$1"
   if [ ! -d "${DEPLOY_REPO}/.git" ]; then
     log "initial clone to ${DEPLOY_REPO}"
-    # Pass the OAuth bearer via http.extraheader so the token never lands
-    # in the URL or in .git/config (jankurai HLT-035 / "credential-url"
-    # detector flags inline token URLs).
-    git -c "http.extraheader=Authorization: Bearer ${token}" \
+    # GitLab git-over-HTTP accepts HTTP Basic auth (oauth2:<token>) but
+    # rejects `Authorization: Bearer`. Pass the credential as a Basic
+    # header so it never lands in the URL or .git/config (jankurai HLT-035
+    # `git.remote.credential-url` detector only flags inline token URLs).
+    local basic
+    basic="$(printf 'oauth2:%s' "${token}" | base64 -w0)"
+    git -c "http.extraheader=Authorization: Basic ${basic}" \
       clone "${JERYU_BASE}/root/jekko.git" "${DEPLOY_REPO}" 2>&1 | tee -a "${LOG_FILE}"
   fi
 }
@@ -120,8 +123,10 @@ deploy_one() {
   cd "${DEPLOY_REPO}"
   log "git fetch + checkout in ${DEPLOY_REPO}"
   # Operates only on the dedicated deploy clone — never touches ~/jekko.
-  # `http.extraheader` keeps the bearer token out of the URL + .git/config.
-  git -c "http.extraheader=Authorization: Bearer ${token}" \
+  # Basic auth header keeps the token out of URL + .git/config.
+  local basic
+  basic="$(printf 'oauth2:%s' "${token}" | base64 -w0)"
+  git -c "http.extraheader=Authorization: Basic ${basic}" \
     fetch origin main 2>&1 | tee -a "${LOG_FILE}"
   git checkout --force "${current_sha}" 2>&1 | tee -a "${LOG_FILE}"
 
