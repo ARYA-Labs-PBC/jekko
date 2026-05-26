@@ -23,8 +23,8 @@ pub(super) fn walk_waves(
     run_id: &str,
     args: &PortRunArgs,
 ) -> Result<()> {
-    let waves = execution_layers(manifest)
-        .map_err(|err| anyhow!("plan execution layers failed: {err}"))?;
+    let waves =
+        execution_layers(manifest).map_err(|err| anyhow!("plan execution layers failed: {err}"))?;
     let completed_already: BTreeSet<String> = store
         .completed_phase_ids(run_id)
         .context("load completed phase ids")?
@@ -34,11 +34,8 @@ pub(super) fn walk_waves(
 
     // Build a fast lookup so live mode can recover the prompt material from
     // a bare phase id.
-    let phase_lookup: std::collections::BTreeMap<&str, &Phase> = manifest
-        .phases
-        .iter()
-        .map(|p| (p.id.as_str(), p))
-        .collect();
+    let phase_lookup: std::collections::BTreeMap<&str, &Phase> =
+        manifest.phases.iter().map(|p| (p.id.as_str(), p)).collect();
 
     let start = Instant::now();
     let time_budget = args
@@ -55,7 +52,14 @@ pub(super) fn walk_waves(
         if let Some(budget) = time_budget {
             if start.elapsed() > budget {
                 halted = Some(HaltReason::TimeBudget);
-                block_remaining_from(store, run_id, i, &waves, &completed_already, "stopped at time_budget")?;
+                block_remaining_from(
+                    store,
+                    run_id,
+                    i,
+                    &waves,
+                    &completed_already,
+                    "stopped at time_budget",
+                )?;
                 break;
             }
         }
@@ -213,8 +217,8 @@ fn block_remaining_from(
 /// `users-only`). Aborts after `args.per_phase_timeout_secs` seconds.
 fn invoke_live_phase(phase: &Phase, args: &PortRunArgs) -> Result<String> {
     let bin = std::env::var("JEKKO_BIN").unwrap_or_else(|_| "jekko".to_string());
-    let key_policy = std::env::var("JEKKO_KEY_SOURCE_POLICY")
-        .unwrap_or_else(|_| "users-only".to_string());
+    let key_policy =
+        std::env::var("JEKKO_KEY_SOURCE_POLICY").unwrap_or_else(|_| "users-only".to_string());
     let cwd = std::env::current_dir().context("resolve cwd for live phase invocation")?;
     let prompt = format!("{}: {}", phase.name, phase.objective);
     let timeout = Duration::from_secs(args.per_phase_timeout_secs);
@@ -261,7 +265,11 @@ fn invoke_live_phase(phase: &Phase, args: &PortRunArgs) -> Result<String> {
                 "live phase `{}` exited with status {:?}: {}",
                 phase.id,
                 output.status.code(),
-                if stderr.is_empty() { "<no stderr>".to_string() } else { stderr }
+                if stderr.is_empty() {
+                    "<no stderr>".to_string()
+                } else {
+                    stderr
+                }
             );
         }
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();

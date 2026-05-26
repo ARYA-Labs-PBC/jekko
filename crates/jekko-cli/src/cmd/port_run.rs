@@ -33,7 +33,9 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use serde::Serialize;
-use zyal_supervisor::{execution_layers, validate_manifest, PhaseStatus, SuperWorkflow, SupervisorStore};
+use zyal_supervisor::{
+    execution_layers, validate_manifest, PhaseStatus, SuperWorkflow, SupervisorStore,
+};
 
 use crate::cli::GlobalOpts;
 
@@ -102,7 +104,11 @@ pub struct PortRunArgs {
     /// Per-phase subprocess timeout in seconds for `--live` mode. The
     /// subprocess is killed and the phase is marked `Failed` once the
     /// timeout fires. Defaults to 300 seconds.
-    #[arg(long = "per-phase-timeout-secs", value_name = "N", default_value_t = 300)]
+    #[arg(
+        long = "per-phase-timeout-secs",
+        value_name = "N",
+        default_value_t = 300
+    )]
     pub per_phase_timeout_secs: u64,
 }
 
@@ -145,14 +151,10 @@ pub fn run(_global: &GlobalOpts, args: &PortRunArgs) -> Result<()> {
 /// not spend tokens. Called only when `args.live` is set.
 fn gate_live_mode() -> Result<()> {
     if env_is_truthy("CI") {
-        bail!(
-            "--live refuses to run when CI=true; unset CI or run interactively to use live mode"
-        );
+        bail!("--live refuses to run when CI=true; unset CI or run interactively to use live mode");
     }
     if !env_is_truthy("JEKKO_ZYAL_LIVE") {
-        bail!(
-            "--live requires JEKKO_ZYAL_LIVE=1 (opt-in guard against accidental live runs)"
-        );
+        bail!("--live requires JEKKO_ZYAL_LIVE=1 (opt-in guard against accidental live runs)");
     }
     Ok(())
 }
@@ -191,7 +193,6 @@ fn validate_arg_combination(args: &PortRunArgs) -> Result<()> {
     Ok(())
 }
 
-
 /// Initialize a fresh run row from `manifest`. If `requested` is `Some`, the
 /// caller supplied an explicit run id; we still let the store synthesize the
 /// derived id and only log the requested value as a tag in `summary`.
@@ -217,8 +218,8 @@ fn init_or_use_run_id(
 }
 
 fn emit_dry_run_plan(manifest: &SuperWorkflow, args: &PortRunArgs) -> Result<()> {
-    let waves = execution_layers(manifest)
-        .map_err(|err| anyhow!("plan execution layers failed: {err}"))?;
+    let waves =
+        execution_layers(manifest).map_err(|err| anyhow!("plan execution layers failed: {err}"))?;
     let synthetic_run_id = args
         .run_id
         .clone()

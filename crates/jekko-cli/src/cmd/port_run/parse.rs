@@ -37,7 +37,8 @@ pub(super) fn open_store(args: &PortRunArgs, in_memory: bool) -> Result<Supervis
         std::fs::create_dir_all(parent)
             .with_context(|| format!("mkdir -p {}", parent.display()))?;
     }
-    SupervisorStore::open(&path).with_context(|| format!("open supervisor store at {}", path.display()))
+    SupervisorStore::open(&path)
+        .with_context(|| format!("open supervisor store at {}", path.display()))
 }
 
 /// Load a SuperWorkflow manifest from `path`. `.zyal` files are compiled
@@ -140,18 +141,17 @@ fn adapt_zyalc_emission(value: &JsonValue, source: &Path) -> Result<SuperWorkflo
     // [...]}}`) and the flat supervisor shape (`{phases: [...]}`). Explicit
     // matches keep the typed-state contract clean (no `or_else` fallback
     // soup); unknown shapes hit the third arm with a precise error.
-    let phases_node = if let Some(nested) =
-        value.get("superworkflow").and_then(|sw| sw.get("phases"))
-    {
-        nested
-    } else if let Some(flat) = value.get("phases") {
-        flat
-    } else {
-        return Err(anyhow!(
-            "manifest at {} is missing `superworkflow.phases` (or top-level `phases`)",
-            source.display()
-        ));
-    };
+    let phases_node =
+        if let Some(nested) = value.get("superworkflow").and_then(|sw| sw.get("phases")) {
+            nested
+        } else if let Some(flat) = value.get("phases") {
+            flat
+        } else {
+            return Err(anyhow!(
+                "manifest at {} is missing `superworkflow.phases` (or top-level `phases`)",
+                source.display()
+            ));
+        };
     let raw_phases: Vec<JsonValue> = match phases_node.as_array() {
         Some(array) => array.clone(),
         None => {

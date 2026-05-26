@@ -9,12 +9,24 @@ install_gitleaks() {
   if command -v gitleaks >/dev/null 2>&1; then
     return 0
   fi
+  # gitleaks is a Go binary, not a Rust crate — `cargo install gitleaks`
+  # fails with "could not find gitleaks in registry crates-io". If `go` is
+  # available we use it; otherwise download the static linux-amd64 release
+  # binary directly (same pattern as github-sync's gh install).
   if command -v go >/dev/null 2>&1; then
     go install github.com/zricethezav/gitleaks/v8@v8.30.1
     export PATH="$(go env GOPATH)/bin:$PATH"
   else
-    cargo install gitleaks --locked
-    export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+    local GL_VER="8.30.1"
+    local tmp
+    tmp="$(mktemp -d)"
+    curl -fsSL \
+      "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VER}/gitleaks_${GL_VER}_linux_x64.tar.gz" \
+      -o "$tmp/gitleaks.tgz"
+    tar -xzf "$tmp/gitleaks.tgz" -C "$tmp" gitleaks
+    mkdir -p "${HOME}/.local/bin"
+    install -m 0755 "$tmp/gitleaks" "${HOME}/.local/bin/gitleaks"
+    export PATH="${HOME}/.local/bin:${PATH}"
   fi
 }
 
