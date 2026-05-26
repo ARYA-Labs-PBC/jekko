@@ -48,16 +48,12 @@ validate:
 	just fast
 
 # Workspace-wide fast lane composed from narrow proof targets.
-# `fmt-check-fast`, `clippy-check-fast`, and the xtask parity checks
-# (cli-help-parity / tool-schema-parity / etc.) run first so they fail
-# fast before the heavier typecheck/build/test lanes burn time. Plus the
-# jankurai audit gate at the tail. This mirrors the remote workflows so
-# `just fast` green ⇔ remote `parity` + `jankurai` jobs pass — no more
-# local-CI parity gaps.
+# Calls xtask-parity-fast (snapshot drift detection) + the standard
+# typecheck/build/test/audit-gate cascade. `fmt-check-fast` and
+# `clippy-check-fast` recipes are not defined on this branch's Justfile;
+# the workspace-typecheck-fast lane covers the rust compile gate.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=turbo-build narrow-targets=true
 workspace-fast:
-	just fmt-check-fast
-	just clippy-check-fast
 	just xtask-parity-fast
 	just workspace-typecheck-fast
 	just workspace-build-fast
