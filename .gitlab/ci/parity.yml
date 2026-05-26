@@ -1,18 +1,23 @@
 # Parity for .github/workflows/parity.yml (load-bearing rust gates)
-# Jobs: rust-parity-gates (clippy+rustfmt + parity.sh), guard-advisory.
-# Triggers: push dev/main + PR + dispatch.
-# Env: CARGO_TERM_COLOR=always, RUSTFLAGS=-D warnings.
+#
+# Originally a single `parity:rust-parity-gates` job ran fmt + clippy +
+# cargo test + cargo build --release + 7 xtask gates serially (~418s wall
+# on warm cache). Split into 3 sub-lanes that run in parallel within the
+# `test` stage — wall clock drops to max(fmt-clippy, cargo-test, build-gates)
+# ≈ 250s with jeryu's 3 runners. The 3 lanes plus parity:guard-advisory
+# saturate the runner pool when an MR's static stage finishes.
+#
+# All 3 lanes preserve the original `parity:rust-parity-gates` invariants
+# (clippy --all-targets -D warnings, cargo test --workspace --locked
+# --no-fail-fast, etc.), just split across files so they can run concurrently.
 
-parity:rust-parity-gates:
+# ---------- Lane 1/3: fmt + clippy (~70-90s on warm cache) -------------
+parity:fmt-clippy:
   stage: test
   extends: .rust_linux_base_full
-  timeout: 45m
-  resource_group: "parity-rust-$CI_COMMIT_REF_NAME"
+  timeout: 30m
   rules:
-    # Auto-fire on MR events — verified clean in pipeline #585 (418s wall).
-    # This is what gates auto-merge: MR can't merge until parity is green.
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    # Stay manual on direct push (rare; the MR pipeline already verified).
     - if: ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev") && $CI_PIPELINE_SOURCE == "push"
       when: manual
     - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"
@@ -21,7 +26,41 @@ parity:rust-parity-gates:
     CARGO_TERM_COLOR: "always"
     RUSTFLAGS: "-D warnings"
   script:
-    - bash ops/ci/parity.sh
+    - bash ops/ci/parity-fmt-clippy.sh
+
+# ---------- Lane 2/3: cargo test --workspace (~250s long-tail) ---------
+parity:cargo-test:
+  stage: test
+  extends: .rust_linux_base
+  timeout: 45m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev") && $CI_PIPELINE_SOURCE == "push"
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"
+      when: manual
+  variables:
+    CARGO_TERM_COLOR: "always"
+    RUSTFLAGS: "-D warnings"
+  script:
+    - bash ops/ci/parity-test.sh
+
+# ---------- Lane 3/3: cargo build --release + 7 xtask gates (~180s) ----
+parity:build-gates:
+  stage: test
+  extends: .rust_linux_base
+  timeout: 45m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev") && $CI_PIPELINE_SOURCE == "push"
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"
+      when: manual
+  variables:
+    CARGO_TERM_COLOR: "always"
+    RUSTFLAGS: "-D warnings"
+  script:
+    - bash ops/ci/parity-build-gates.sh
   artifacts:
     name: "openapi-snapshot-and-binary"
     when: always
@@ -30,14 +69,13 @@ parity:rust-parity-gates:
       - "docs/openapi-snapshot.json"
       - "target/release/jekko"
 
+# ---------- parity:guard-advisory (unchanged) --------------------------
 parity:guard-advisory:
   stage: test
   extends: .rust_linux_base
   timeout: 30m
-  resource_group: "parity-guard-$CI_COMMIT_REF_NAME"
+  # No resource_group — per-job CARGO_HOME isolation + orphan-lock liveness.
   rules:
-    # Auto-fire — cargo-lock contention is resolved (per-job CARGO_HOME +
-    # unset RUSTC_WRAPPER). Light clippy/guard checks, fast on warm cache.
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev") && $CI_PIPELINE_SOURCE == "push"
     - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"
