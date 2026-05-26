@@ -1,23 +1,18 @@
-# Auto-PR from jeryu main → GitHub main.
+# Direct sync: jeryu main → GitHub main.
 #
-# Runs after every merge into jeryu's `main` branch. The job:
-#
-#   1. Verifies the prior stages' static + cargo lanes all came back green
-#      (`needs:` + `dependencies:`-style — the workflow stages already
-#      enforce this via stage ordering, so we just gate on success).
-#   2. Pushes `main` to GitHub as `jeryu-sync/<UTC-date>-<short-sha>`.
-#   3. Uses `gh pr create` to open a PR against `github/neverhuman/jekko`
-#      `main` with a synthesised description summarising the commits.
+# Runs after every merge into jeryu's `main` branch. The job pushes the
+# merged-main HEAD directly to `github.com/neverhuman/jekko:main`. No PR
+# layer — branch protection / rulesets are off on the GitHub side, so
+# direct-to-main push is the canonical (and simplest) mirror strategy.
 #
 # Required CI/CD variables (Settings → CI/CD → Variables):
 #   GITHUB_TOKEN  — fine-grained or classic PAT with `repo` + `workflow`
-#                   scopes on `neverhuman/jekko`. Mark as Masked + File
-#                   if you store the multi-line secret. The job reads
-#                   the env var directly via `gh auth login --with-token`.
+#                   scopes on `neverhuman/jekko`. gh / git pick this up
+#                   from the env automatically.
 #
 # Skip with: `git push -o ci.variable="SKIP_GITHUB_SYNC=1"` to bypass.
 
-github-sync:pr-on-main:
+github-sync:push-to-main:
   stage: deploy
   image: ubuntu:24.04
   timeout: 10m
@@ -36,10 +31,6 @@ github-sync:pr-on-main:
   variables:
     GIT_DEPTH: "0"
   before_script:
-    # Avoid apt-get install gh — the runner image's ca-certificates dpkg
-    # postinst fails on a bind-mount conflict. Instead, pull a static gh
-    # binary from the official releases tarball; ubuntu:24.04 already
-    # ships curl + git + ca-certificates configured.
     - |
       if [ -z "${GITHUB_TOKEN:-}" ]; then
         echo "GITHUB_TOKEN must be set in CI/CD vars for github-sync to push" >&2
@@ -47,11 +38,11 @@ github-sync:pr-on-main:
       fi
     - export DEBIAN_FRONTEND=noninteractive
     # Install git + curl + ca-certificates if missing (ubuntu:24.04 is minimal).
-    # Skip dpkg-reconfigure on ca-certificates to avoid the bind-mount conflict
-    # observed in pipeline #521.
+    # Pipe-filter the ca-certificates dpkg-postinst noise (bind-mount conflict
+    # on /etc/ssl/certs/ca-certificates.crt observed in pipeline #521).
     - |
       missing=""
-      for c in git curl tar; do
+      for c in git curl; do
         command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
       done
       if [ -n "$missing" ]; then
@@ -59,57 +50,27 @@ github-sync:pr-on-main:
         apt-get install -y -qq --no-install-recommends $missing ca-certificates 2>&1 \
           | grep -vE "ca-certificates.*Device or resource busy|Errors were encountered|Sub-process" || true
       fi
-    - |
-      if ! command -v gh >/dev/null 2>&1; then
-        GH_VER="2.62.0"
-        curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_amd64.tar.gz" -o /tmp/gh.tgz
-        tar -xzf /tmp/gh.tgz -C /tmp
-        install -m 0755 "/tmp/gh_${GH_VER}_linux_amd64/bin/gh" /usr/local/bin/gh
-      fi
-    - gh --version
-    # gh picks up GITHUB_TOKEN from env automatically — no `gh auth login`
-    # needed (and it errors when the env var is already set). Verify with
-    # `gh auth status` which respects the env-var auth path.
-    - gh auth status --hostname github.com
   script:
     - |
       set -euo pipefail
       SHORT_SHA=$(git rev-parse --short HEAD)
       UTC_DATE=$(date -u +%Y%m%d)
-      SYNC_BRANCH="jeryu-sync/${UTC_DATE}-${SHORT_SHA}"
-      echo "Pushing $CI_COMMIT_SHA to github as $SYNC_BRANCH"
+      echo "Pushing $CI_COMMIT_SHA ($SHORT_SHA) to github.com/neverhuman/jekko:main"
 
-      # Add github remote on the fly (GitLab Runner builds dir is fresh)
-      git remote add github "https://${GITHUB_TOKEN}@github.com/neverhuman/jekko.git" 2>/dev/null \
-        || git remote set-url github "https://${GITHUB_TOKEN}@github.com/neverhuman/jekko.git"
+      # Add github remote on the fly (GitLab Runner builds dir is fresh).
+      # Token in the URL is fine for the lifetime of the push — it's masked
+      # by GitLab's log scrubber.
+      git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/neverhuman/jekko.git" 2>/dev/null \
+        || git remote set-url github "https://x-access-token:${GITHUB_TOKEN}@github.com/neverhuman/jekko.git"
 
-      # Push the merged-main SHA as a date-stamped sync branch
-      git push --force-with-lease github "HEAD:refs/heads/${SYNC_BRANCH}"
-
-      # Compose PR body: commit subjects from $(github_main..HEAD)
+      # Fetch current github main so --force-with-lease has a real expected SHA.
       git fetch github main
-      COMMIT_LIST=$(git log --oneline github/main..HEAD | head -50 | sed 's/^/- /')
-      cat > /tmp/pr-body.md <<BODY
-      ## Summary
+      EXPECTED_GH=$(git rev-parse github/main)
+      echo "github/main expected at $EXPECTED_GH; pushing $CI_COMMIT_SHA"
 
-      Auto-sync from jeryu main → GitHub main on $UTC_DATE.
+      # Force-with-lease: succeeds only if github/main is still where our fetch
+      # saw it. If a concurrent push beat us, we abort cleanly and rerun.
+      git push --force-with-lease="main:$EXPECTED_GH" github "HEAD:refs/heads/main"
 
-      jeryu HEAD: \`$SHORT_SHA\` ($CI_PIPELINE_URL — pipeline $CI_PIPELINE_ID)
-
-      ## Commits in this sync
-
-      $COMMIT_LIST
-
-      ## How this PR was made
-
-      Generated by \`.gitlab/ci/github-sync.yml::github-sync:pr-on-main\` after the post-merge CI pipeline came back green on jeryu \`main\`. Source: \`$CI_PROJECT_URL/-/commit/$CI_COMMIT_SHA\`.
-      BODY
-
-      # Open the PR
-      gh pr create \
-        --repo neverhuman/jekko \
-        --base main \
-        --head "$SYNC_BRANCH" \
-        --title "jeryu-sync: $SHORT_SHA ($UTC_DATE)" \
-        --body-file /tmp/pr-body.md
-  allow_failure: true  # don't block the pipeline if the GitHub PR fails
+      echo "github/main now at $CI_COMMIT_SHA ($UTC_DATE / $SHORT_SHA)"
+  allow_failure: true  # don't block the pipeline if the GitHub push fails
