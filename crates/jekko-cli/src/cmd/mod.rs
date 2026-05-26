@@ -29,3 +29,4 @@ pub mod stats;
 pub mod tui;
 pub mod uninstall;
 pub mod upgrade;
+pub mod watch;

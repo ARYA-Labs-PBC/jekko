@@ -177,4 +177,8 @@ pub enum Command {
 
     /// Uninstall Jekko and remove data directories.
     Uninstall(cmd::uninstall::UninstallArgs),
+
+    /// Tail a ZYAL run's NDJSON event stream and emit per-tick snapshot +
+    /// remediation actions.
+    Watch(cmd::watch::WatchArgs),
 }
