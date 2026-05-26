@@ -43,5 +43,6 @@ pub mod rollback;
 pub mod runner;
 pub mod stage0_proof;
 pub mod superreasoning;
+pub mod watcher;
 pub mod worker_pool;
 pub mod worktree;
