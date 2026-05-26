@@ -31,6 +31,7 @@ const EXPECTED_SUBCOMMANDS: &[&str] = &[
     "upgrade",
     "uninstall",
     "watch",
+    "port-run",
 ];
 
 fn help_output() -> String {

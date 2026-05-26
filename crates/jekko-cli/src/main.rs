@@ -48,6 +48,7 @@ fn main() -> Result<()> {
         Some(Command::Upgrade(args)) => cmd::upgrade::run(&cli.global, args),
         Some(Command::Uninstall(args)) => cmd::uninstall::run(&cli.global, args),
         Some(Command::Watch(args)) => cmd::watch::run(&cli.global, args),
+        Some(Command::PortRun(args)) => cmd::port_run::run(&cli.global, args),
         None => {
             // Default: launch the TUI.
             let tui_args = cmd::tui::TuiArgs {

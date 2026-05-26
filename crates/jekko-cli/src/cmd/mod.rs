@@ -20,6 +20,7 @@ pub mod keys;
 pub mod mcp;
 pub mod models;
 pub mod plugin;
+pub mod port_run;
 pub mod pr;
 pub mod providers;
 pub mod run;

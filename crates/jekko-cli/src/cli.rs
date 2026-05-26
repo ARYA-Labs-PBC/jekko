@@ -181,4 +181,10 @@ pub enum Command {
     /// Tail a ZYAL run's NDJSON event stream and emit per-tick snapshot +
     /// remediation actions.
     Watch(cmd::watch::WatchArgs),
+
+    /// Drive a 12-stage ZYAL SuperWorkflow run (compile -> seed -> walk
+    /// waves). Phase H scaffold; the per-phase body is a stub until
+    /// `jankurai-runner` is wired in.
+    #[command(name = "port-run")]
+    PortRun(cmd::port_run::PortRunArgs),
 }

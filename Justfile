@@ -598,6 +598,42 @@ zyal-miniredis-live-local run_id="miniredis-live-local" provider="" model="":
 	fi
 	JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
 
+# Heavy live super-agent run against the canonical 12-stage MiniRedis
+# SuperWorkflow manifest. Refuses CI and requires JEKKO_ZYAL_LIVE=1 +
+# JEKKO_BIN. Phase H scaffold: per-phase work is still a stub until the
+# jankurai-runner follow-up; the recipe exists so operators can drive the
+# wave plan end-to-end against the supervisor store.
+zyal-super-redis run_id="zyal-super-redis-local":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [ "${CI:-}" = "true" ]; then
+		echo "zyal-super-redis refuses CI=true" >&2
+		exit 1
+	fi
+	if [ "${JEKKO_ZYAL_LIVE:-}" != "1" ]; then
+		echo "set JEKKO_ZYAL_LIVE=1 to run the live super-agent recipe" >&2
+		exit 1
+	fi
+	if [ -z "${JEKKO_BIN:-}" ]; then
+		if [ -x "target/debug/jekko" ]; then
+			export JEKKO_BIN="$PWD/target/debug/jekko"
+		elif [ -x "target/release/jekko" ]; then
+			export JEKKO_BIN="$PWD/target/release/jekko"
+		else
+			echo "set JEKKO_BIN to a built jekko binary before running live super-agent" >&2
+			exit 1
+		fi
+	fi
+	JEKKO_KEY_SOURCE_POLICY=users-only \
+		rtk cargo run -p jekko-cli --offline -- port-run \
+			--super agent/zyal/ambitious-superworkflow.zyal \
+			--run-id "{{run_id}}"
+
+# Print phase + task status for an existing super-agent run as JSON.
+# Usage: just zyal-super-status <run_id>
+zyal-super-status run_id:
+	rtk cargo run -p jekko-cli --offline -- port-run --status "{{run_id}}"
+
 # Broad full-suite lane for local release-style port workflow proof.
 # jankurai:proof HLT-032-ZYAL-COMPILE-DRIFT parallel=1 cache=cargo-test narrow-targets=false
 zyal-port-full:
