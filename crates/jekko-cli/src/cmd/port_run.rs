@@ -24,9 +24,9 @@
 //! - `--super <PATH>` -> compile + persist + walk waves.
 //! - `--dry-run`      -> print the wave plan as JSON without persisting.
 //! - `--resume <ID>`  -> reopen a run, reset in-flight `Running` phases to
-//!                       `Pending`, then walk remaining waves.
+//!   `Pending`, then walk remaining waves.
 //! - `--status <ID>`  -> print persisted phase + task rows as JSON; no state
-//!                       changes.
+//!   changes.
 
 use std::path::PathBuf;
 
@@ -260,10 +260,8 @@ fn run_status(args: &PortRunArgs, run_id: &str) -> Result<()> {
     let phase_rows = phase_stmt
         .query_map([run_id], |row| {
             let depends_json: String = row.get(3)?;
-            let depends_on: Vec<String> = match serde_json::from_str::<Vec<String>>(&depends_json) {
-                Ok(parsed) => parsed,
-                Err(_) => Vec::new(),
-            };
+            let depends_on: Vec<String> =
+                serde_json::from_str::<Vec<String>>(&depends_json).unwrap_or_default();
             Ok(PhaseStatusRow {
                 phase_id: row.get(0)?,
                 name: row.get(1)?,

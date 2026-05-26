@@ -175,8 +175,10 @@ mod tests {
 
     #[test]
     fn stall_fires_only_after_threshold() {
-        let mut snap = WatcherSnapshot::default();
-        snap.last_progress_ts = Some(100);
+        let snap = WatcherSnapshot {
+            last_progress_ts: Some(100),
+            ..Default::default()
+        };
         // 200s elapsed, threshold 300 — no fire.
         let actions = detect_and_remediate(&snap, 300, 300, 0.5, None, None);
         assert!(actions.is_empty());
@@ -188,9 +190,11 @@ mod tests {
 
     #[test]
     fn stall_does_not_fire_after_run_finished() {
-        let mut snap = WatcherSnapshot::default();
-        snap.last_progress_ts = Some(100);
-        snap.finished = true;
+        let snap = WatcherSnapshot {
+            last_progress_ts: Some(100),
+            finished: true,
+            ..Default::default()
+        };
         let actions = detect_and_remediate(&snap, 9999, 300, 0.5, None, None);
         assert!(actions
             .iter()
@@ -199,9 +203,11 @@ mod tests {
 
     #[test]
     fn provider_error_burst_requires_min_attempts() {
-        let mut snap = WatcherSnapshot::default();
-        snap.model_attempts = 5;
-        snap.model_failures = 4; // 80% error rate, but only 5 attempts
+        let mut snap = WatcherSnapshot {
+            model_attempts: 5,
+            model_failures: 4, // 80% error rate, but only 5 attempts
+            ..Default::default()
+        };
         let actions = detect_and_remediate(&snap, 0, 600, 0.5, None, None);
         assert!(actions
             .iter()
@@ -215,8 +221,10 @@ mod tests {
 
     #[test]
     fn parity_gaps_growing_fires_only_on_increase() {
-        let mut snap = WatcherSnapshot::default();
-        snap.parity_gaps_open = 5;
+        let snap = WatcherSnapshot {
+            parity_gaps_open: 5,
+            ..Default::default()
+        };
         // No prior — no fire.
         let actions = detect_and_remediate(&snap, 0, 600, 0.5, None, None);
         assert!(actions
@@ -233,8 +241,10 @@ mod tests {
 
     #[test]
     fn jankurai_regression_fires_on_increased_hard_findings() {
-        let mut snap = WatcherSnapshot::default();
-        snap.last_jankurai_hard_findings = Some(5);
+        let snap = WatcherSnapshot {
+            last_jankurai_hard_findings: Some(5),
+            ..Default::default()
+        };
         let actions = detect_and_remediate(&snap, 0, 600, 0.5, None, Some(3));
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].rule, RemediationRule::JankuraiRegression);
