@@ -8,7 +8,7 @@ use zyalc::{compile, live_audit, replay_verify, runbook_lint};
 #[command(
     name = "zyalc",
     version,
-    about = "Compile .zyal source files to TOML or GitHub Actions YAML"
+    about = "Compile .zyal source files to TOML, GitHub Actions YAML, or SuperWorkflow JSON"
 )]
 struct Cli {
     #[command(subcommand)]

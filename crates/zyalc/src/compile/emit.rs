@@ -10,6 +10,10 @@ pub(super) fn emit(profile: &Profile, raw: &str) -> Result<(String, String)> {
         Profile::DeclarativeToml { .. } => Ok((emit_toml(raw)?, "# ".into())),
         Profile::Workflow { .. } => Ok((emit_workflow(raw)?, "# ".into())),
         Profile::Daemon { .. } => Err(anyhow!("daemon profiles are validation-only")),
+        // SuperWorkflow emits canonical JSON; JSON has no comment syntax so
+        // the banner is suppressed in `compile_one` and the header prefix is
+        // empty here.
+        Profile::SuperWorkflow { .. } => Ok((emit_superworkflow(raw)?, String::new())),
     }
 }
 
@@ -28,6 +32,23 @@ fn emit_workflow(raw: &str) -> Result<String> {
         serde_yaml::from_str(&body).context("parse workflow YAML body")?;
     let rendered = serde_yaml::to_string(&parsed).context("render workflow YAML")?;
     Ok(rendered)
+}
+
+/// Emit a SuperWorkflow manifest as canonical JSON.
+///
+/// Validation is re-run against the parsed YAML so a direct caller of
+/// `emit_superworkflow` (notably the unit tests) cannot bypass the structural
+/// checks performed by [`super::validation::validate_superworkflow_profile`].
+pub(super) fn emit_superworkflow(raw: &str) -> Result<String> {
+    let body = strip_pragmas(raw);
+    let parsed: serde_yaml::Value =
+        serde_yaml::from_str(&body).context("parse superworkflow YAML body")?;
+    super::validation::validate_superworkflow_value(
+        std::path::Path::new("<memory>"),
+        &parsed,
+    )?;
+    let rendered = serde_json::to_string_pretty(&parsed).context("render SuperWorkflow JSON")?;
+    Ok(format!("{rendered}\n"))
 }
 
 pub(super) fn strip_pragmas(raw: &str) -> String {
