@@ -30,18 +30,20 @@ Centralization + super-agent kernel work toward driving long-running multi-stage
 | D1 | ToolMode { Off, ReadOnly, Full } policy + per-role mapping | done | 830c1ee15 |
 | D2 | Lift hardcoded JEKKO_RUN_DISABLE_TOOLS, add JEKKO_RUN_TOOL_ALLOWLIST | done | 830c1ee15 (same commit as D1) |
 | D3-D5 | Parallel brainstorm via JoinSet + reducer fence + tests | deferred (needs complete_structured refactor for Send-safety) | — |
-| E1 | Structured memory + promotion lifecycle (memory_kind, promotion_status, claim_text, approved_by_role) | done | (this branch) |
-| E2 | Semantic retrieval via embeddings (depends on E1) | pending | — |
+| E1 | Structured memory + promotion lifecycle (memory_kind, promotion_status, claim_text, approved_by_role) | done | 45d494672 |
+| E2 substrate | embedding column + encode_embedding / decode_embedding / cosine_similarity | done | (this branch) |
+| E2 runtime | OpenAICompatibleEmbedder + retrieve_for_run prompt injection | pending; needs jnoccio-fusion /v1/embeddings route | — |
 | F1 | jekko-runtime daemon: SuperReasoningPlan registration API + canonical_phases() 12-stage builder | done | fb0adf07cf |
-| F2 | jankurai-runner: SuperReasoningConfig + draft module | pending (module-name collision with existing `superreasoning/` to resolve) | — |
-| F3 | 12-stage blueprint + super_reasoning_stage_blueprint() | partially landed via F1's `canonical_phases()`; jankurai-runner-side wiring is F2/F3 | — |
-| F4 | New zyal-supervisor crate with SQLite schema | in flight (subagent) | — |
-| F5 | zyalc Profile::SuperWorkflow + ambitious-superworkflow.zyal example | pending | — |
-| G1 | Watcher metrics + remediation engine + 5 new EventKind variants | done | (this branch) |
-| G2 | Ratatui dashboard surface | pending | — |
-| G3 | jekko-cli watch subcommand + notify-based tail loop | pending | — |
-| G4 | jnoccio-fusion /metrics Prometheus endpoint | pending | — |
-| H | Live execution against MiniRedis (smoke + heavy + chaos + audit) | pending; requires F1-F5 land first | — |
+| F2 | jankurai-runner: SuperReasoningConfig extension (parallel/memory/graph/parity policies + draft_super_master_plan) | done | ff2237baf |
+| F3 | 12-stage blueprint wiring | done via F2's canonical_stage_templates() (mirrors F1's canonical_phases names) | (covered by F2) |
+| F4 | New zyal-supervisor crate (model + planner + SQLite store, 8 tables) | done | 73603a979 |
+| F5 | zyalc Profile::SuperWorkflow + ambitious-superworkflow.zyal + emitted JSON | done | c5c597272 |
+| G1 | Watcher metrics + remediation engine + 5 new EventKind variants | done | 63b7f43c4 |
+| G2 | Ratatui dashboard surface | pending (G3 prints `tui mode not yet implemented; falling back to plain`) | — |
+| G3 | jekko-cli `watch` subcommand + notify-based tail loop | done | 71ed88380 + wiring |
+| G4 | jnoccio-fusion /metrics Prometheus endpoint (text/plain; version=0.0.4) | done | (this branch) |
+| H scaffold | jekko port-run --super integration wrapper (compile→seed→plan→walk waves) | in flight (subagent) | — |
+| H live | Heavy live MiniRedis run + chaos test + audit pass | deferred to a focused session (requires the scaffold first) | — |
 
 ### Naming conventions
 
