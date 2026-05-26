@@ -17,6 +17,183 @@ use crate::reasoning::{
 };
 use crate::repo_graph::RepoGraph;
 
+/// Outcome of the pure model-call half of [`complete_structured`].
+///
+/// The retry loop runs end-to-end without touching `Db` or [`EventSink`], so
+/// callers can drive multiple of these concurrently (e.g. via
+/// `futures::future::join_all`). The caller is responsible for replaying
+/// `queued_events` through an [`EventSink`] and persisting `receipt` serially
+/// after each lane joins, preserving the existing single-writer SQL
+/// discipline.
+#[derive(Debug)]
+pub(crate) struct ModelOnlyOutcome {
+    /// Final receipt (the last attempt the loop saw before returning).
+    pub receipt: ModelCallReceipt,
+    /// Parsed JSON value (real or synthetic for the fake provider).
+    pub value: serde_json::Value,
+    /// Intermediate events to emit on the awaiting task (in order).
+    pub queued_events: Vec<(EventKind, serde_json::Value)>,
+    /// Per-attempt receipts that need to be persisted before the final one.
+    /// Empty in the common 1-attempt case.
+    pub intermediate_receipts: Vec<ModelCallReceipt>,
+}
+
+/// Pure model-call retry loop. Performs no `Db`/`EventSink` I/O; instead it
+/// accumulates events and intermediate receipts into the returned outcome so
+/// the caller can replay them serially after joining concurrent lanes.
+///
+/// The borrowed `model_client` keeps this helper compatible with the existing
+/// `&dyn ModelClient` orchestrator signature; concurrent fanout polls these
+/// futures on the same task via `futures::future::join_all` rather than
+/// `tokio::spawn`, so we don't need `Send + 'static`.
+pub(crate) async fn complete_structured_model_only(
+    repo: PathBuf,
+    _run_id: String,
+    model_client: &dyn ModelClient,
+    kind: ModelTaskKind,
+    prompt: String,
+) -> Result<ModelOnlyOutcome> {
+    let mut queued_events: Vec<(EventKind, serde_json::Value)> = Vec::new();
+    let mut intermediate_receipts: Vec<ModelCallReceipt> = Vec::new();
+    let mut last_error: Option<String> = None;
+    for attempt in 1..=3 {
+        queued_events.push((
+            EventKind::ModelAttempt,
+            json!({
+                "kind": crate::model_client::kind_label(kind),
+                "attempt": attempt,
+            }),
+        ));
+        let receipt = model_client.complete(kind, &prompt, &repo).await?;
+        if receipt.budget_used.is_some() || receipt.budget_remaining.is_some() {
+            queued_events.push((
+                EventKind::LiveBudget,
+                json!({
+                    "used": receipt.budget_used.unwrap_or(0),
+                    "remaining": receipt.budget_remaining.unwrap_or(0),
+                }),
+            ));
+        }
+        if !receipt.success {
+            let error = match receipt.error.clone() {
+                Some(error) => error,
+                None => "unknown model failure".to_string(),
+            };
+            push_model_attempt_outcome(&mut queued_events, &receipt, attempt, "model_failure");
+            // Mark-blocked is a Db side-effect; convert into a structured error
+            // the caller can act on after persisting this final receipt.
+            return Err(anyhow!(ModelOnlyError::ModelFailure {
+                outcome: Box::new(ModelOnlyOutcome {
+                    receipt: receipt.clone(),
+                    value: serde_json::Value::Null,
+                    queued_events,
+                    intermediate_receipts,
+                }),
+                error,
+            }));
+        }
+        let Some(text) = receipt.response.as_deref() else {
+            if receipt.provider == "fake" {
+                push_model_attempt_outcome(
+                    &mut queued_events,
+                    &receipt,
+                    attempt,
+                    "fake_provider_synthetic_response",
+                );
+                return Ok(ModelOnlyOutcome {
+                    receipt,
+                    value: synthetic_structured_value(kind),
+                    queued_events,
+                    intermediate_receipts,
+                });
+            }
+            push_model_attempt_outcome(&mut queued_events, &receipt, attempt, "missing_response");
+            last_error = Some("model response missing".to_string());
+            intermediate_receipts.push(receipt);
+            continue;
+        };
+        match parse_structured_model_json(text) {
+            Ok(value) => {
+                push_model_attempt_outcome(&mut queued_events, &receipt, attempt, "parsed");
+                push_model_outcome(&mut queued_events, &receipt, attempt, "parsed");
+                return Ok(ModelOnlyOutcome {
+                    receipt,
+                    value,
+                    queued_events,
+                    intermediate_receipts,
+                });
+            }
+            Err(_err) if receipt.provider == "fake" => {
+                push_model_attempt_outcome(
+                    &mut queued_events,
+                    &receipt,
+                    attempt,
+                    "fake_provider_synthetic_response",
+                );
+                return Ok(ModelOnlyOutcome {
+                    receipt,
+                    value: synthetic_structured_value(kind),
+                    queued_events,
+                    intermediate_receipts,
+                });
+            }
+            Err(err) => {
+                push_model_attempt_outcome(
+                    &mut queued_events,
+                    &receipt,
+                    attempt,
+                    "retryable_failure",
+                );
+                last_error = Some(err.to_string());
+                intermediate_receipts.push(receipt);
+            }
+        }
+    }
+    let error = match last_error {
+        Some(error) => error,
+        None => "invalid model JSON".to_string(),
+    };
+    // Use a placeholder receipt — the parse-error path historically returned
+    // an Err before producing one; intermediate receipts hold the per-attempt
+    // history the caller needs to persist + the blocked marker reason.
+    Err(anyhow!(ModelOnlyError::ParseFailure {
+        intermediate_receipts,
+        queued_events,
+        error,
+    }))
+}
+
+/// Structured error variants surfaced by [`complete_structured_model_only`].
+/// Callers downcast via `anyhow::Error::downcast_ref` to recover queued
+/// events that still need to be flushed to disk before the blocked marker.
+#[derive(Debug)]
+pub(crate) enum ModelOnlyError {
+    ModelFailure {
+        outcome: Box<ModelOnlyOutcome>,
+        error: String,
+    },
+    ParseFailure {
+        intermediate_receipts: Vec<ModelCallReceipt>,
+        queued_events: Vec<(EventKind, serde_json::Value)>,
+        error: String,
+    },
+}
+
+impl std::fmt::Display for ModelOnlyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModelOnlyError::ModelFailure { error, .. } => {
+                write!(f, "model call failed: {error}")
+            }
+            ModelOnlyError::ParseFailure { error, .. } => {
+                write!(f, "advanced reasoning model JSON parse failed: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ModelOnlyError {}
+
 pub(crate) async fn complete_structured(
     repo: &Path,
     run_id: &str,
@@ -26,78 +203,126 @@ pub(crate) async fn complete_structured(
     kind: ModelTaskKind,
     prompt: &str,
 ) -> Result<(ModelCallReceipt, serde_json::Value)> {
-    let mut last_error = None;
-    for attempt in 1..=3 {
-        sink.emit(
-            EventKind::ModelAttempt,
-            json!({
-                "kind": crate::model_client::kind_label(kind),
-                "attempt": attempt,
-            }),
-        )?;
-        let receipt = model_client.complete(kind, prompt, repo).await?;
-        daemon_store::persist_model_receipt(db, run_id, &receipt)?;
-        if receipt.budget_used.is_some() || receipt.budget_remaining.is_some() {
-            sink.emit(
-                EventKind::LiveBudget,
-                json!({
-                    "used": receipt.budget_used.unwrap_or(0),
-                    "remaining": receipt.budget_remaining.unwrap_or(0),
-                }),
-            )?;
+    let result = complete_structured_model_only(
+        repo.to_path_buf(),
+        run_id.to_string(),
+        model_client,
+        kind,
+        prompt.to_string(),
+    )
+    .await;
+    match result {
+        Ok(outcome) => {
+            for receipt in &outcome.intermediate_receipts {
+                daemon_store::persist_model_receipt(db, run_id, receipt)?;
+            }
+            daemon_store::persist_model_receipt(db, run_id, &outcome.receipt)?;
+            for (event_kind, payload) in &outcome.queued_events {
+                sink.emit(*event_kind, payload.clone())?;
+            }
+            Ok((outcome.receipt, outcome.value))
         }
-        if !receipt.success {
-            let error = match receipt.error.clone() {
-                Some(error) => error,
-                None => "unknown model failure".to_string(),
-            };
-            emit_model_attempt_outcome(sink, &receipt, attempt, "model_failure")?;
-            daemon_store::mark_daemon_run(db, run_id, "blocked", &receipt.kind, Some(&error))?;
-            return Err(anyhow!("model call failed: {error}"));
-        }
-        let Some(text) = receipt.response.as_deref() else {
-            if receipt.provider == "fake" {
-                emit_model_attempt_outcome(
-                    sink,
-                    &receipt,
-                    attempt,
-                    "fake_provider_synthetic_response",
+        Err(err) => match err.downcast::<ModelOnlyError>() {
+            Ok(ModelOnlyError::ModelFailure { outcome, error }) => {
+                for receipt in &outcome.intermediate_receipts {
+                    daemon_store::persist_model_receipt(db, run_id, receipt)?;
+                }
+                daemon_store::persist_model_receipt(db, run_id, &outcome.receipt)?;
+                for (event_kind, payload) in &outcome.queued_events {
+                    sink.emit(*event_kind, payload.clone())?;
+                }
+                daemon_store::mark_daemon_run(
+                    db,
+                    run_id,
+                    "blocked",
+                    &outcome.receipt.kind,
+                    Some(&error),
                 )?;
-                return Ok((receipt, synthetic_structured_value(kind)));
+                Err(anyhow!("model call failed: {error}"))
             }
-            emit_model_attempt_outcome(sink, &receipt, attempt, "missing_response")?;
-            last_error = Some("model response missing".to_string());
-            continue;
-        };
-        match parse_structured_model_json(text) {
-            Ok(value) => {
-                emit_model_attempt_outcome(sink, &receipt, attempt, "parsed")?;
-                emit_model_outcome(sink, &receipt, attempt, "parsed")?;
-                return Ok((receipt, value));
+            Ok(ModelOnlyError::ParseFailure {
+                intermediate_receipts,
+                queued_events,
+                error,
+            }) => {
+                for receipt in &intermediate_receipts {
+                    daemon_store::persist_model_receipt(db, run_id, receipt)?;
+                }
+                for (event_kind, payload) in &queued_events {
+                    sink.emit(*event_kind, payload.clone())?;
+                }
+                mark_blocked_for_parse_error(db, run_id, &error)?;
+                Err(anyhow!(
+                    "advanced reasoning model JSON parse failed: {error}"
+                ))
             }
-            Err(_err) if receipt.provider == "fake" => {
-                emit_model_attempt_outcome(
-                    sink,
-                    &receipt,
-                    attempt,
-                    "fake_provider_synthetic_response",
-                )?;
-                return Ok((receipt, synthetic_structured_value(kind)));
-            }
-            Err(err) => {
-                emit_model_attempt_outcome(sink, &receipt, attempt, "retryable_failure")?;
-                last_error = Some(err.to_string());
-            }
-        }
+            Err(other) => Err(other),
+        },
     }
-    let error = match last_error {
-        Some(error) => error,
-        None => "invalid model JSON".to_string(),
+}
+
+
+fn push_model_attempt_outcome(
+    queued: &mut Vec<(EventKind, serde_json::Value)>,
+    receipt: &ModelCallReceipt,
+    attempt: usize,
+    state: &str,
+) {
+    queued.push((
+        EventKind::ModelAttemptOutcome,
+        model_event_payload(receipt, attempt, state),
+    ));
+}
+
+fn push_model_outcome(
+    queued: &mut Vec<(EventKind, serde_json::Value)>,
+    receipt: &ModelCallReceipt,
+    attempt: usize,
+    state: &str,
+) {
+    queued.push((
+        EventKind::ModelOutcome,
+        model_event_payload(receipt, attempt, state),
+    ));
+}
+
+fn model_event_payload(
+    receipt: &ModelCallReceipt,
+    attempt: usize,
+    state: &str,
+) -> serde_json::Value {
+    let response_bytes = match receipt.response.as_deref() {
+        Some(response) => response.len(),
+        None => 0,
     };
-    mark_blocked_for_parse_error(db, run_id, &error)?;
-    Err(anyhow!(
-        "advanced reasoning model JSON parse failed: {error}"
-    ))
+    let retry_count = match receipt.retry_count {
+        Some(retry_count) => retry_count,
+        None => attempt.saturating_sub(1),
+    };
+    let budget_used = match receipt.budget_used {
+        Some(budget_used) => budget_used,
+        None => 0,
+    };
+    let budget_remaining = match receipt.budget_remaining {
+        Some(budget_remaining) => budget_remaining,
+        None => 0,
+    };
+    json!({
+        "kind": receipt.kind,
+        "provider": receipt.provider,
+        "model": receipt.model,
+        "success": receipt.success,
+        "attempt": attempt,
+        "state": state,
+        "latency_ms": receipt.latency_ms,
+        "response_bytes": response_bytes,
+        "credential_policy": receipt.credential_policy,
+        "selected_credential_user_id": receipt.selected_credential_user_id,
+        "credential_user_id": receipt.credential_user_id,
+        "retry_count": retry_count,
+        "budget_used": budget_used,
+        "budget_remaining": budget_remaining,
+    })
 }
 
 pub(crate) fn parse_structured_model_json(text: &str) -> serde_json::Result<serde_json::Value> {
@@ -154,74 +379,6 @@ fn find_balanced_json_end(text: &str, start: usize) -> Option<usize> {
         }
     }
     None
-}
-
-fn emit_model_outcome(
-    sink: &EventSink,
-    receipt: &ModelCallReceipt,
-    attempt: usize,
-    state: &str,
-) -> Result<()> {
-    emit_model_event(sink, EventKind::ModelOutcome, receipt, attempt, state)
-}
-
-fn emit_model_attempt_outcome(
-    sink: &EventSink,
-    receipt: &ModelCallReceipt,
-    attempt: usize,
-    state: &str,
-) -> Result<()> {
-    emit_model_event(
-        sink,
-        EventKind::ModelAttemptOutcome,
-        receipt,
-        attempt,
-        state,
-    )
-}
-
-fn emit_model_event(
-    sink: &EventSink,
-    kind: EventKind,
-    receipt: &ModelCallReceipt,
-    attempt: usize,
-    state: &str,
-) -> Result<()> {
-    let response_bytes = match receipt.response.as_deref() {
-        Some(response) => response.len(),
-        None => 0,
-    };
-    let retry_count = match receipt.retry_count {
-        Some(retry_count) => retry_count,
-        None => attempt.saturating_sub(1),
-    };
-    let budget_used = match receipt.budget_used {
-        Some(budget_used) => budget_used,
-        None => 0,
-    };
-    let budget_remaining = match receipt.budget_remaining {
-        Some(budget_remaining) => budget_remaining,
-        None => 0,
-    };
-    sink.emit(
-        kind,
-        json!({
-            "kind": receipt.kind,
-            "provider": receipt.provider,
-            "model": receipt.model,
-            "success": receipt.success,
-            "attempt": attempt,
-            "state": state,
-            "latency_ms": receipt.latency_ms,
-            "response_bytes": response_bytes,
-            "credential_policy": receipt.credential_policy,
-            "selected_credential_user_id": receipt.selected_credential_user_id,
-            "credential_user_id": receipt.credential_user_id,
-            "retry_count": retry_count,
-            "budget_used": budget_used,
-            "budget_remaining": budget_remaining,
-        }),
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
