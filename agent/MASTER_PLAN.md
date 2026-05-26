@@ -20,19 +20,28 @@ Centralization + super-agent kernel work toward driving long-running multi-stage
 | B1 | Scaffold zyal-core leaf crate (6 modules) | done | 8b1c045ac |
 | B2.1 | Migrate CredentialSourcePolicy → zyal-core | done | d7d61ece0 |
 | B2.2 | Migrate forbidden-content patterns → zyal-core (split: shape vs credential) | done | cb2a9de71 |
-| B2.3 | Alias SuperReasoningArtifactContract → zyal_core::ArtifactContract | done | (this branch) |
-| B2.4 | Alias ReasoningArtifactKind → zyal_core::ArtifactKind (+8 super-agent variants available) | done | (this branch) |
-| B2.5 | Split MemoryCapsule write-gate into named helpers | done | (this branch) |
+| B2.3 | Alias SuperReasoningArtifactContract → zyal_core::ArtifactContract | done | 0c8a9c5f5 |
+| B2.4 | Alias ReasoningArtifactKind → zyal_core::ArtifactKind (+8 super-agent variants available) | done | 6a4bdeead |
+| B2.5 | Split MemoryCapsule write-gate into named helpers | done | d06c90d35 |
 | B2.6 | LaneId/RunId/ArtifactRef newtypes | scaffolded in B1; first usage lands in Phase F | — |
-| C1 | Scaffold zyal-key-pool crate (pool / balancer / budget) | done | (this branch) |
-| C2 | Wire zyal-key-pool into jnoccio-fusion + jankurai-runner | pending | — |
-| C3 | Create this MASTER_PLAN.md (closes `missing-agent-readable-docs` cap) | done | (this branch) |
-| D | Parallel + tool-enabled reasoning lanes with reducer fence | pending | — |
-| E1 | Structured memory + promotion lifecycle | pending | — |
-| E2 | Semantic retrieval via embeddings | pending | — |
-| F | Compile → Seed → Execute super-agent kernel (12-stage blueprint) | pending; adoption plan ready at `tips/ZYAL/helper/` | — |
-| G | Live observability + auto-remediation (Watcher, WorkerLease + quarantine) | pending | — |
-| H | Live execution against MiniRedis (smoke + heavy + chaos + audit) | pending | — |
+| C1 | Scaffold zyal-key-pool crate (pool / balancer / budget) | done | b288ca619 |
+| C2 | Wire zyal-key-pool into jnoccio-fusion + jankurai-runner (UsersPool fanout + PolicyHook gate) | done | (next hash) |
+| C3 | Create this MASTER_PLAN.md (closes `missing-agent-readable-docs` cap) | done | f081adf28 |
+| D1 | ToolMode { Off, ReadOnly, Full } policy + per-role mapping | done | 830c1ee15 |
+| D2 | Lift hardcoded JEKKO_RUN_DISABLE_TOOLS, add JEKKO_RUN_TOOL_ALLOWLIST | done | 830c1ee15 (same commit as D1) |
+| D3-D5 | Parallel brainstorm via JoinSet + reducer fence + tests | deferred (needs complete_structured refactor for Send-safety) | — |
+| E1 | Structured memory + promotion lifecycle (memory_kind, promotion_status, claim_text, approved_by_role) | pending | — |
+| E2 | Semantic retrieval via embeddings (depends on E1) | pending | — |
+| F1 | jekko-runtime daemon: SuperReasoningPlan registration API | in flight (subagent) | — |
+| F2 | jankurai-runner: SuperReasoningConfig + draft module | pending | — |
+| F3 | 12-stage blueprint + super_reasoning_stage_blueprint() | pending | — |
+| F4 | New zyal-supervisor crate with SQLite schema | pending | — |
+| F5 | zyalc Profile::SuperWorkflow + ambitious-superworkflow.zyal example | pending | — |
+| G1 | Watcher metrics + remediation engine + 5 new EventKind variants | done | (next hash) |
+| G2 | Ratatui dashboard surface | pending | — |
+| G3 | jekko-cli watch subcommand + notify-based tail loop | pending | — |
+| G4 | jnoccio-fusion /metrics Prometheus endpoint | pending | — |
+| H | Live execution against MiniRedis (smoke + heavy + chaos + audit) | pending; requires F1-F5 land first | — |
 
 ### Naming conventions
 
