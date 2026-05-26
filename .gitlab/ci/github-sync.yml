@@ -36,14 +36,25 @@ github-sync:pr-on-main:
   variables:
     GIT_DEPTH: "0"
   before_script:
-    - export DEBIAN_FRONTEND=noninteractive
-    - apt-get update -qq
-    - apt-get install -y -qq --no-install-recommends bash ca-certificates curl git gh
+    # Avoid apt-get install gh — the runner image's ca-certificates dpkg
+    # postinst fails on a bind-mount conflict. Instead, pull a static gh
+    # binary from the official releases tarball; ubuntu:24.04 already
+    # ships curl + git + ca-certificates configured.
     - |
       if [ -z "${GITHUB_TOKEN:-}" ]; then
         echo "GITHUB_TOKEN must be set in CI/CD vars for github-sync to push" >&2
-        exit 78  # neutral exit code so the pipeline doesn't fail when secret is absent
+        exit 78  # neutral; allow_failure: true means this won't fail the pipeline
       fi
+    - export DEBIAN_FRONTEND=noninteractive
+    - command -v git >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq --no-install-recommends git)
+    - |
+      if ! command -v gh >/dev/null 2>&1; then
+        GH_VER="2.62.0"
+        curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_amd64.tar.gz" -o /tmp/gh.tgz
+        tar -xzf /tmp/gh.tgz -C /tmp
+        install -m 0755 "/tmp/gh_${GH_VER}_linux_amd64/bin/gh" /usr/local/bin/gh
+      fi
+    - gh --version
     - echo "$GITHUB_TOKEN" | gh auth login --hostname github.com --with-token
     - gh auth status --hostname github.com
   script:
@@ -87,10 +98,4 @@ github-sync:pr-on-main:
         --head "$SYNC_BRANCH" \
         --title "jeryu-sync: $SHORT_SHA ($UTC_DATE)" \
         --body-file /tmp/pr-body.md
-  artifacts:
-    name: "github-sync-${CI_JOB_ID}"
-    when: always
-    expire_in: 30 days
-    paths:
-      - "/tmp/pr-body.md"
   allow_failure: true  # don't block the pipeline if the GitHub PR fails
