@@ -3,33 +3,26 @@
 //! Split out of [`crate::agent`] so the static lookup tables for catalog
 //! entries, base URLs, and provider adapters live in one place.
 
-use std::collections::BTreeMap;
 use std::env;
-use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
 
 use jekko_provider::adapter::ProviderCredential;
-use jekko_provider::key_pool::KeyPool;
 use jekko_provider::providers::jnoccio::JNOCCIO_DEFAULT_API_KEY;
-use jekko_provider::providers::{
-    AnthropicAdapter, JNoccioAdapter, JekkoAdapter, LiteLlmAdapter, OpenAiAdapter,
-    OpenRouterAdapter,
-};
 use jekko_provider::routing::recommended_model_id;
-use jekko_provider::setup::{
-    catalog_entry, choose_active_provider, EnvValue, ModelKeySource, CATALOG,
-};
+use jekko_provider::setup::{catalog_entry, choose_active_provider};
 
 use crate::error::{RuntimeError, RuntimeResult};
 use crate::key_balancer::KeyBalancer;
-use jekko_core::provider::{
-    Model, ModelStatus, ProviderApiInfo, ProviderCapabilities, ProviderCost, ProviderId,
-    ProviderInterleaved, ProviderLimit, ProviderModalities,
-};
-use tokio::time::sleep;
 
 use super::types::AgentTurnRequest;
+
+mod env_snapshot;
+mod jnoccio;
+mod model;
+
+pub(super) use env_snapshot::env_snapshot_for;
+pub(super) use jnoccio::ensure_jnoccio_ready;
+pub(super) use model::{build_model, provider_adapter, select_base_url};
 
 // Canonical CredentialSourcePolicy lives in `zyal-core`. Re-exported here so
 // existing `super::provider::CredentialSourcePolicy::from_env()` call sites in
@@ -47,71 +40,12 @@ pub(super) fn select_provider_id(request: &AgentTurnRequest) -> RuntimeResult<St
     let snapshot = env_snapshot_for(credential_policy);
     let developer_unlocked =
         credential_policy.users_only() || jekko_jnoccio_boot::unlock::is_unlocked();
-    let runtime_snapshot = supported_runtime_snapshot(&snapshot);
+    let runtime_snapshot = env_snapshot::supported_runtime_snapshot(&snapshot);
     let selection = choose_active_provider(&runtime_snapshot, developer_unlocked);
     match selection.active_provider_id {
         Some(id) => Ok(id),
         None => Err(RuntimeError::invalid(NO_PROVIDER_CONFIGURED_MSG)),
     }
-}
-
-static JNOCCIO_READY_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-fn jnoccio_ready_guard() -> &'static tokio::sync::Mutex<()> {
-    JNOCCIO_READY_GUARD.get_or_init(|| tokio::sync::Mutex::new(()))
-}
-
-fn jnoccio_extra_port() -> Option<u16> {
-    std::env::var("JNOCCIO_EXTRA_PORT")
-        .ok()
-        .and_then(|value| value.trim().parse::<u16>().ok())
-}
-
-pub(super) async fn ensure_jnoccio_ready(start: &Path) -> RuntimeResult<()> {
-    let _guard = jnoccio_ready_guard().lock().await;
-    let extra_port = jnoccio_extra_port();
-    let initial = tokio::task::spawn_blocking(move || {
-        jekko_jnoccio_boot::health::probe_health_combined(extra_port)
-    })
-    .await
-    .map_err(|err| RuntimeError::other(format!("jnoccio health probe failed: {err}")))?;
-    if initial.reachable {
-        return Ok(());
-    }
-
-    if !jekko_jnoccio_boot::unlock::is_unlocked() {
-        return Err(RuntimeError::other(
-            "jnoccio-fusion is not unlocked on this machine",
-        ));
-    }
-
-    let Some(fusion_root) = jekko_jnoccio_boot::unlock::find_jnoccio_fusion_root_from(start) else {
-        return Err(RuntimeError::other(
-            "jnoccio-fusion checkout not found for runtime auto-boot",
-        ));
-    };
-
-    tokio::task::spawn_blocking(move || jekko_jnoccio_boot::spawn::ensure_and_spawn(&fusion_root))
-        .await
-        .map_err(|err| RuntimeError::other(format!("jnoccio spawn failed: {err}")))?
-        .map_err(|err| RuntimeError::other(format!("jnoccio spawn failed: {err}")))?;
-
-    for _ in 0..6 {
-        sleep(Duration::from_millis(1350)).await;
-        let extra_port = jnoccio_extra_port();
-        let result = tokio::task::spawn_blocking(move || {
-            jekko_jnoccio_boot::health::probe_health_combined(extra_port)
-        })
-        .await
-        .map_err(|err| RuntimeError::other(format!("jnoccio health probe failed: {err}")))?;
-        if result.reachable {
-            return Ok(());
-        }
-    }
-
-    Err(RuntimeError::other(
-        "jnoccio-fusion did not become reachable after restart",
-    ))
 }
 
 /// Error message used when no provider can be resolved from the env snapshot.
@@ -258,206 +192,9 @@ pub(super) fn record_credential_failure(
     }
 }
 
-pub(super) fn select_base_url(provider_id: &str) -> Option<String> {
-    if let Ok(value) = env::var("JEKKO_PROVIDER_BASE_URL") {
-        if !value.trim().is_empty() {
-            return Some(value);
-        }
-    }
-    match provider_id {
-        "litellm" | "llmgateway" => env::var("LITELLM_BASE_URL")
-            .ok()
-            .filter(|v| !v.trim().is_empty()),
-        _ => None,
-    }
-}
-
-pub(super) fn build_model(provider_id: &str, model_id: &str) -> RuntimeResult<Model> {
-    let (api_npm, api_url) = match provider_id {
-        "anthropic" => ("@ai-sdk/anthropic", "https://api.anthropic.com"),
-        "openai" => ("@ai-sdk/openai", "https://api.openai.com"),
-        "openrouter" => ("@openrouter/ai-sdk-provider", "https://openrouter.ai/api"),
-        "jekko" => ("@ai-sdk/openai-compatible", "https://api.jekko.ai"),
-        "jnoccio" => ("@ai-sdk/openai", "http://127.0.0.1:4317"),
-        "litellm" | "llmgateway" => ("@ai-sdk/openai-compatible", "http://127.0.0.1:4000"),
-        other => {
-            return Err(RuntimeError::invalid(format!(
-                "unsupported provider `{other}`"
-            )))
-        }
-    };
-    Ok(Model {
-        id: jekko_core::provider::ModelId::new(format!("{provider_id}/{model_id}")),
-        provider_id: ProviderId::new(provider_id),
-        api: ProviderApiInfo {
-            id: model_id.to_string(),
-            url: api_url.to_string(),
-            npm: api_npm.to_string(),
-        },
-        name: model_id.to_string(),
-        family: None,
-        capabilities: ProviderCapabilities {
-            temperature: true,
-            reasoning: false,
-            attachment: true,
-            toolcall: true,
-            input: ProviderModalities {
-                text: true,
-                audio: false,
-                image: true,
-                video: false,
-                pdf: true,
-            },
-            output: ProviderModalities::default(),
-            interleaved: ProviderInterleaved::Bool(false),
-        },
-        cost: ProviderCost {
-            input: 0.0,
-            output: 0.0,
-            cache: Default::default(),
-            experimental_over_200k: None,
-        },
-        limit: ProviderLimit {
-            context: 200_000.0,
-            input: None,
-            output: 8192.0,
-        },
-        status: ModelStatus::Active,
-        options: Default::default(),
-        headers: Default::default(),
-        release_date: "2025-01-01".into(),
-        variants: None,
-    })
-}
-
-pub(super) fn provider_adapter(
-    provider_id: &str,
-) -> RuntimeResult<Arc<dyn jekko_provider::ProviderAdapter>> {
-    match provider_id {
-        "anthropic" => Ok(Arc::new(AnthropicAdapter::new())),
-        "jekko" => Ok(Arc::new(JekkoAdapter::new())),
-        "openai" => Ok(Arc::new(OpenAiAdapter::new())),
-        "openrouter" => Ok(Arc::new(OpenRouterAdapter::new())),
-        "jnoccio" => Ok(Arc::new(JNoccioAdapter::new())),
-        "litellm" | "llmgateway" => Ok(Arc::new(LiteLlmAdapter::new())),
-        other => Err(RuntimeError::invalid(format!(
-            "unsupported provider `{other}`"
-        ))),
-    }
-}
-
-#[cfg(test)]
-fn env_snapshot() -> BTreeMap<String, EnvValue> {
-    env_snapshot_for(CredentialSourcePolicy::from_env())
-}
-
-fn env_snapshot_for(credential_policy: CredentialSourcePolicy) -> BTreeMap<String, EnvValue> {
-    let mut values = BTreeMap::new();
-    if !credential_policy.users_only() {
-        for entry in CATALOG {
-            for env_name in entry.env_names {
-                let value = env::var(env_name).ok().filter(|v| !v.trim().is_empty());
-                values.insert(
-                    (*env_name).to_string(),
-                    EnvValue {
-                        value,
-                        source: Some(ModelKeySource::ProcessEnv),
-                    },
-                );
-            }
-            if let Some(companion) = entry.companion_env_names {
-                for env_name in companion {
-                    let value = env::var(env_name).ok().filter(|v| !v.trim().is_empty());
-                    values.insert(
-                        (*env_name).to_string(),
-                        EnvValue {
-                            value,
-                            source: Some(ModelKeySource::ProcessEnv),
-                        },
-                    );
-                }
-            }
-        }
-    }
-    merge_key_pool_snapshot(&mut values, true);
-    if !credential_policy.users_only()
-        && values
-            .get("JNOCCIO_DEVELOPER_KEY")
-            .and_then(|v| v.value.as_ref())
-            .is_none()
-    {
-        if let Some(value) = jekko_jnoccio_boot::unlock::developer_key() {
-            values.insert(
-                "JNOCCIO_DEVELOPER_KEY".to_string(),
-                EnvValue {
-                    value: Some(value),
-                    source: None,
-                },
-            );
-        }
-    }
-    values
-}
-
-fn merge_key_pool_snapshot(values: &mut BTreeMap<String, EnvValue>, developer_unlocked: bool) {
-    let Some(mut pool) = KeyPool::new(developer_unlocked) else {
-        return;
-    };
-    for entry in CATALOG {
-        if !is_supported_runtime_provider(entry.provider_id) {
-            continue;
-        }
-        if pool.candidates(entry.provider_id).is_empty() {
-            continue;
-        }
-        for env_name in entry.env_names {
-            values
-                .entry((*env_name).to_string())
-                .and_modify(|value| {
-                    if value.value.is_none() {
-                        value.value = Some("present".to_string());
-                        value.source = Some(ModelKeySource::UserLlmEnv);
-                    }
-                })
-                .or_insert_with(|| EnvValue {
-                    value: Some("present".to_string()),
-                    source: Some(ModelKeySource::UserLlmEnv),
-                });
-        }
-    }
-}
-
-fn supported_runtime_snapshot(values: &BTreeMap<String, EnvValue>) -> BTreeMap<String, EnvValue> {
-    let mut filtered = BTreeMap::new();
-    for entry in CATALOG {
-        if !is_supported_runtime_provider(entry.provider_id) {
-            continue;
-        }
-        for env_name in entry.env_names {
-            if let Some(value) = values.get(*env_name) {
-                filtered.insert((*env_name).to_string(), value.clone());
-            }
-        }
-        if let Some(companion) = entry.companion_env_names {
-            for env_name in companion {
-                if let Some(value) = values.get(*env_name) {
-                    filtered.insert((*env_name).to_string(), value.clone());
-                }
-            }
-        }
-    }
-    filtered
-}
-
-fn is_supported_runtime_provider(provider_id: &str) -> bool {
-    matches!(
-        provider_id,
-        "anthropic" | "jekko" | "openai" | "openrouter" | "jnoccio" | "litellm" | "llmgateway"
-    )
-}
-
 #[cfg(test)]
 mod tests {
+    use super::env_snapshot::{env_snapshot, supported_runtime_snapshot};
     use super::*;
     use std::fs;
     use std::sync::Mutex;
