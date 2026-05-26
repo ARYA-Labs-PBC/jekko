@@ -59,9 +59,14 @@ main_pipeline_status() {
 }
 
 ensure_deploy_clone() {
+  local token="$1"
   if [ ! -d "${DEPLOY_REPO}/.git" ]; then
     log "initial clone to ${DEPLOY_REPO}"
-    git clone "${JERYU_BASE}/root/jekko.git" "${DEPLOY_REPO}" 2>&1 | tee -a "${LOG_FILE}"
+    # Pass the OAuth bearer via http.extraheader so the token never lands
+    # in the URL or in .git/config (jankurai HLT-035 / "credential-url"
+    # detector flags inline token URLs).
+    git -c "http.extraheader=Authorization: Bearer ${token}" \
+      clone "${JERYU_BASE}/root/jekko.git" "${DEPLOY_REPO}" 2>&1 | tee -a "${LOG_FILE}"
   fi
 }
 
@@ -82,15 +87,21 @@ deploy_one() {
   local pipe_status
   pipe_status="$(main_pipeline_status "${token}" "${current_sha}")"
 
+  # Post-merge main pipelines typically end in status `manual` (not `success`)
+  # because the deploy stage's `jankurai:audit` + `jankurai:sandbox-backends`
+  # are intentionally `when: manual` opt-in lanes — they don't block the
+  # required-pass invariants of the static + test stages. Treat `manual` as
+  # deployable: it means the required jobs all succeeded and only optional
+  # manual jobs are unplayed.
   case "${pipe_status}" in
-    success)
-      log "main advanced to ${current_sha:0:8} with green pipeline — deploying"
+    success|manual)
+      log "main advanced to ${current_sha:0:8} with pipeline=${pipe_status} — deploying"
       ;;
     "")
       log "main at ${current_sha:0:8} has no pipeline yet — skipping"
       return 0
       ;;
-    running|pending|manual|created)
+    running|pending|created)
       log "main at ${current_sha:0:8} pipeline=${pipe_status} — waiting"
       return 0
       ;;
@@ -104,12 +115,14 @@ deploy_one() {
       ;;
   esac
 
-  ensure_deploy_clone
+  ensure_deploy_clone "${token}"
 
   cd "${DEPLOY_REPO}"
   log "git fetch + checkout in ${DEPLOY_REPO}"
   # Operates only on the dedicated deploy clone — never touches ~/jekko.
-  git fetch origin main 2>&1 | tee -a "${LOG_FILE}"
+  # `http.extraheader` keeps the bearer token out of the URL + .git/config.
+  git -c "http.extraheader=Authorization: Bearer ${token}" \
+    fetch origin main 2>&1 | tee -a "${LOG_FILE}"
   git checkout --force "${current_sha}" 2>&1 | tee -a "${LOG_FILE}"
 
   log "cargo install --path crates/jekko-cli --root ${INSTALL_ROOT} --locked --force"
