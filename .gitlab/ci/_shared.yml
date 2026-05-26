@@ -1,0 +1,149 @@
+# Shared anchors + extends bases used across translated workflows.
+#
+# Rationale:
+#   - GitLab CI has no first-class "composite action" like GitHub. We replace
+#     `.github/actions/setup-git-committer` with the `.git_committer` snippet
+#     here, included into jobs via `before_script:`.
+#   - We keep image/tags consistent so `runs-on: ubuntu-latest` becomes
+#     `image: ubuntu:24.04` + `tags: [linux, docker]`. Override per-runner
+#     mapping in your GitLab Runner setup; the `blacksmith-4vcpu-ubuntu-2404`
+#     custom runners map to `tags: [blacksmith]`.
+#   - The `.rust_setup` block installs the dtolnay/rust-toolchain@stable
+#     equivalent (`rustup default stable`) and primes a workspace-level cargo
+#     cache (Swatinem/rust-cache equivalent).
+
+# ---------- Image / runner mapping --------------------------------------
+
+# `runs-on: ubuntu-latest` → standard linux docker runner
+.runs_on_ubuntu_latest: &runs_on_ubuntu_latest
+  image: ubuntu:24.04
+  tags: [linux]
+
+# `runs-on: blacksmith-4vcpu-ubuntu-2404` → custom blacksmith runner (tag-based)
+.runs_on_blacksmith: &runs_on_blacksmith
+  image: ubuntu:24.04
+  tags: [blacksmith]
+
+# `runs-on: blacksmith-4vcpu-ubuntu-2404-arm` → ARM blacksmith runner
+.runs_on_blacksmith_arm: &runs_on_blacksmith_arm
+  image: ubuntu:24.04
+  tags: [blacksmith, arm64]
+
+# `runs-on: macos-latest` → shared MacOS runner
+.runs_on_macos_latest: &runs_on_macos_latest
+  tags: [macos]
+
+# `runs-on: macos-15-intel` → MacOS Intel runner
+.runs_on_macos_intel: &runs_on_macos_intel
+  tags: [macos, intel]
+
+# ---------- Common rule blocks (used by multiple workflows) -------------
+
+# GitHub `on: pull_request`
+.rules_pull_request: &rules_pull_request
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# GitHub `on: push: branches: [main]`
+.rules_push_main: &rules_push_main
+  - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+
+# GitHub `on: push: branches: [dev]`
+.rules_push_dev: &rules_push_dev
+  - if: $CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"
+
+# GitHub `on: push: branches: [main, dev]`
+.rules_push_main_or_dev: &rules_push_main_or_dev
+  - if: ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev") && $CI_PIPELINE_SOURCE == "push"
+
+# GitHub `on: workflow_dispatch`
+.rules_workflow_dispatch: &rules_workflow_dispatch
+  - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"
+
+# GitHub `on: schedule`
+.rules_schedule: &rules_schedule
+  - if: $CI_PIPELINE_SOURCE == "schedule"
+
+# GitHub `on: release`
+.rules_release: &rules_release
+  - if: $CI_COMMIT_TAG
+
+# ---------- Bash-only requirement ---------------------------------------
+
+# Most ops/ci/*.sh scripts assume bash; ubuntu:24.04 ships dash as /bin/sh.
+# Install bash + minimal git so the GitLab clone + script lines work.
+.os_prep: &os_prep
+  - export DEBIAN_FRONTEND=noninteractive
+  - apt-get update -qq
+  - apt-get install -y -qq --no-install-recommends bash ca-certificates curl git build-essential pkg-config libssl-dev
+
+# ---------- Rust toolchain setup (dtolnay/rust-toolchain@stable) --------
+
+.rust_setup: &rust_setup
+  - *os_prep
+  # Match the dtolnay/rust-toolchain@stable pin used by GitHub workflows
+  - if ! command -v rustup >/dev/null 2>&1; then
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal;
+    fi
+  - export PATH="$HOME/.cargo/bin:$PATH"
+  - rustup default stable
+  - rustc --version && cargo --version
+
+# Add clippy + rustfmt for jobs that need them (parity.yml rust-parity-gates).
+.rust_setup_full: &rust_setup_full
+  - *rust_setup
+  - rustup component add clippy rustfmt
+
+# ---------- Swatinem/rust-cache equivalent (workspace cargo cache) ------
+
+.cargo_cache: &cargo_cache
+  key:
+    files:
+      - Cargo.lock
+      - rust-toolchain.toml
+  paths:
+    - .cargo/
+    - target/
+  policy: pull-push
+
+# ---------- Composite action: setup-git-committer ----------------------
+# Mirrors .github/actions/setup-git-committer (creates a bot token via the
+# GitHub App, configures git committer, sets remote URL). GitLab side uses
+# `JEKKO_APP_ID` (variable) + `JEKKO_APP_SECRET` (masked variable) — set in
+# Settings -> CI/CD -> Variables.
+
+.git_committer: &git_committer
+  - apt-get install -y -qq --no-install-recommends jq python3 python3-cryptography
+  # Generate a JWT, exchange for an installation token. The script below is the
+  # GitLab-side equivalent of actions/create-github-app-token@v2.
+  - |
+    if [ -z "${JEKKO_APP_ID:-}" ] || [ -z "${JEKKO_APP_SECRET:-}" ]; then
+      echo "JEKKO_APP_ID + JEKKO_APP_SECRET must be set in GitLab CI/CD vars" >&2
+      exit 1
+    fi
+  - bash ops/ci/setup-git-committer.sh
+
+# ---------- Hidden anchor jobs for shared structure ---------------------
+
+# Hidden base for any Rust-stable Linux job that uses ops/ci scripts.
+.rust_linux_base:
+  <<: *runs_on_ubuntu_latest
+  before_script:
+    - *rust_setup
+  cache:
+    <<: *cargo_cache
+
+# Hidden base for Rust-stable Linux jobs that need full toolchain (clippy/rustfmt).
+.rust_linux_base_full:
+  <<: *runs_on_ubuntu_latest
+  before_script:
+    - *rust_setup_full
+  cache:
+    <<: *cargo_cache
+
+# Hidden base for blacksmith-runner Rust jobs.
+.rust_blacksmith_base:
+  <<: *runs_on_blacksmith
+  before_script:
+    - *rust_setup
+  cache:
+    <<: *cargo_cache
