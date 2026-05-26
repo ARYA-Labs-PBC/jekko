@@ -2,13 +2,30 @@
 #   .github/workflows/typecheck.yml         (1 job, triggers: push main/dev + PR)
 #   .github/workflows/check-encrypted-paths.yml (1 job, triggers: push main/dev + PR)
 
-# ---- typecheck.yml -----------------------------------------------------
+# ---- typecheck (split into 3 parallel lanes for jeryu's 3 runners) ----
+#
+# The original GitHub workflow's `typecheck` ran a single
+# `cargo check --workspace --locked`. On jeryu's 3 online runners
+# (jeryu-default + jeryu-build + jeryu-untrusted, all run_untagged=true),
+# that fits exactly into 3 parallel lanes — each targeting a different
+# subtree of the workspace. The combined wall-clock is bounded by the
+# slowest lane (jekko-cli, which drags in the most deps), so this cuts
+# typecheck from ~10 min serial to ~5-7 min wall.
+#
+# Lane allocation chosen so each lane's transitive dep graph is roughly
+# balanced. cargo deduplicates per-runner via the shared cargo cache
+# (.cargo/registry/{index,cache} + target/) keyed on Cargo.lock.
 
 typecheck:
   stage: static
   extends: .rust_linux_base
   timeout: 30m
-  resource_group: "typecheck-$CI_COMMIT_REF_NAME"
+  parallel:
+    matrix:
+      - LANE: "jekko-cli"        # pulls jekko-* runtime + tui + server
+      - LANE: "jankurai-runner"  # pulls jankurai + agent-search + reasoning
+      - LANE: "zyal-supervisor"  # pulls zyal-* + zyalc
+  resource_group: "typecheck-${LANE}-$CI_COMMIT_REF_NAME"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
@@ -16,7 +33,7 @@ typecheck:
     - if: ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev") && $CI_PIPELINE_SOURCE == "push"
     - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"
   script:
-    - bash ops/ci/typecheck.sh
+    - cargo check -p "$LANE" --locked --tests
 
 # ---- check-encrypted-paths.yml ----------------------------------------
 

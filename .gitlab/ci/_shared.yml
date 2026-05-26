@@ -78,16 +78,45 @@
   - rustup component add clippy rustfmt
 
 # ---------- Swatinem/rust-cache equivalent (workspace cargo cache) ------
+#
+# Two-tier cache so the first job in a pipeline writes the registry +
+# target cache, and subsequent parallel jobs in the same pipeline (and
+# the next pipeline on the same ref) pull from it. The cargo registry
+# index is the biggest re-download win (~100 MB), target/ is the biggest
+# compile win.
+#
+# Cache key includes Cargo.lock so dependency-graph changes invalidate
+# the cache automatically. Per-branch slug suffix avoids cross-branch
+# poisoning.
 
 .cargo_cache: &cargo_cache
   key:
     files:
       - Cargo.lock
       - rust-toolchain.toml
+    prefix: "cargo-$CI_COMMIT_REF_SLUG"
   paths:
-    - .cargo/
+    - .cargo/registry/index/
+    - .cargo/registry/cache/
+    - .cargo/git/db/
     - target/
   policy: pull-push
+
+# Read-only cache variant for downstream jobs that consume cache but
+# should NOT overwrite (avoids cache-write churn when many parallel jobs
+# would all try to upload identical caches at end-of-job).
+.cargo_cache_ro: &cargo_cache_ro
+  key:
+    files:
+      - Cargo.lock
+      - rust-toolchain.toml
+    prefix: "cargo-$CI_COMMIT_REF_SLUG"
+  paths:
+    - .cargo/registry/index/
+    - .cargo/registry/cache/
+    - .cargo/git/db/
+    - target/
+  policy: pull
 
 # ---------- Composite action: setup-git-committer ----------------------
 # Mirrors .github/actions/setup-git-committer (creates a bot token via the
