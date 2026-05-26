@@ -345,12 +345,7 @@ fn adapt_zyalc_emission(value: &JsonValue, source: &Path) -> Result<SuperWorkflo
         let phase_id = raw
             .get("id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                anyhow!(
-                    "phase #{idx} at {} is missing `id`",
-                    source.display()
-                )
-            })?
+            .ok_or_else(|| anyhow!("phase #{idx} at {} is missing `id`", source.display()))?
             .to_string();
         let phase_name = raw
             .get("name")
@@ -459,8 +454,10 @@ fn run_status(args: &PortRunArgs, run_id: &str) -> Result<()> {
     let phase_rows = phase_stmt
         .query_map([run_id], |row| {
             let depends_json: String = row.get(3)?;
-            let depends_on: Vec<String> =
-                serde_json::from_str(&depends_json).unwrap_or_default();
+            let depends_on: Vec<String> = match serde_json::from_str::<Vec<String>>(&depends_json) {
+                Ok(parsed) => parsed,
+                Err(_) => Vec::new(),
+            };
             Ok(PhaseStatusRow {
                 phase_id: row.get(0)?,
                 name: row.get(1)?,
@@ -649,9 +646,9 @@ fn walk_waves(
                 .with_context(|| format!("mark phase `{phase_id}` running"))?;
 
             let outcome = if args.live {
-                let phase = phase_lookup.get(phase_id.as_str()).ok_or_else(|| {
-                    anyhow!("phase `{phase_id}` not present in manifest lookup")
-                })?;
+                let phase = phase_lookup
+                    .get(phase_id.as_str())
+                    .ok_or_else(|| anyhow!("phase `{phase_id}` not present in manifest lookup"))?;
                 invoke_live_phase(phase, args)
             } else {
                 // Non-live path records the phase as completed with a
