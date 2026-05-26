@@ -162,8 +162,7 @@ fn superworkflow_dependencies_are_acyclic(phases: &[serde_yaml::Value]) -> Resul
         if let Some(depends_on) = lookup(phase, "depends_on") {
             // Dedupe before counting — see zyal-supervisor planner for the
             // same fix rationale (false-cycle on duplicate dep entries).
-            let mut seen: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
+            let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
             for dep in depends_on.as_sequence().cloned().unwrap_or_default() {
                 let dep = dep
                     .as_str()
