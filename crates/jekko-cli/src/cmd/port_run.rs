@@ -362,15 +362,13 @@ fn adapt_zyalc_emission(value: &JsonValue, source: &Path) -> Result<SuperWorkflo
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let depends_on: Vec<String> = raw
-            .get("depends_on")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|s| s.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let depends_on: Vec<String> = match raw.get("depends_on").and_then(|v| v.as_array()) {
+            Some(arr) => arr
+                .iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect(),
+            None => Vec::new(),
+        };
         phases.push(Phase {
             id: phase_id,
             name: phase_name,
