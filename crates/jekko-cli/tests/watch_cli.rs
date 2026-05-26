@@ -183,41 +183,110 @@ fn watch_no_follow_short_circuits_after_drain() {
 }
 
 #[test]
-fn watch_tui_falls_back_to_plain_with_notice() {
+fn watch_tui_renders_snapshot_to_test_backend() {
+    // Phase G2: `--format tui --tui-once-snapshot` should render a real
+    // Ratatui dashboard into a `TestBackend` and dump the rendered text to
+    // stdout. The output must include each pane title from the spec.
     let tmp = tempfile::tempdir().unwrap();
-    let run_id = "g3-tui-fallback";
+    let run_id = "g2-tui-snapshot";
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap();
     seed_events(
         tmp.path(),
         run_id,
-        &[serde_json::json!({
-            "ts": 1,
-            "kind": "run_started",
-            "run_id": run_id,
-            "data": {}
-        })],
+        &[
+            serde_json::json!({
+                "ts": now - 5,
+                "kind": "run_started",
+                "run_id": run_id,
+                "data": {"pool_size": 4}
+            }),
+            serde_json::json!({
+                "ts": now - 4,
+                "kind": "reasoning_lane",
+                "run_id": run_id,
+                "data": {"id": "lane-1", "status": "started"}
+            }),
+            serde_json::json!({
+                "ts": now - 3,
+                "kind": "reasoning_lane",
+                "run_id": run_id,
+                "data": {"id": "lane-1", "status": "complete"}
+            }),
+            serde_json::json!({
+                "ts": now - 2,
+                "kind": "audit_result",
+                "run_id": run_id,
+                "data": {"score": 93, "hard_findings": 0}
+            }),
+        ],
     );
     let mut cmd = Command::cargo_bin("jekko").expect("jekko binary");
     let output = cmd
         .args([
             "watch",
             run_id,
-            "--once",
             "--format",
             "tui",
+            "--tui-once-snapshot",
             "--repo-root",
         ])
         .arg(tmp.path())
         .output()
         .expect("watch invocation");
-    assert!(output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("tui mode not yet implemented"),
-        "expected tui notice on stderr, got: {stderr}"
+        output.status.success(),
+        "watch tui snapshot failed: status={} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // Each pane title must appear, plus the run id and Jankurai score.
+    for needle in [
+        "Lanes",
+        "Parity",
+        "Model",
+        "Active rules",
+        "Jankurai",
+        "ZYAL Watcher",
+        run_id,
+    ] {
+        assert!(
+            stdout.contains(needle),
+            "tui snapshot missing {needle:?}; got:\n{stdout}"
+        );
+    }
+}
+
+#[test]
+fn watch_tui_once_snapshot_works_without_existing_events_file() {
+    // Empty / missing event stream should still render a sensible frame
+    // (zeros across the board, no panic) and exit 0.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("jekko").expect("jekko binary");
+    let output = cmd
+        .args([
+            "watch",
+            "g2-empty",
+            "--format",
+            "tui",
+            "--tui-once-snapshot",
+            "--repo-root",
+        ])
+        .arg(tmp.path())
+        .output()
+        .expect("watch invocation");
     assert!(
-        stdout.contains("run_started"),
-        "expected plain output on stdout, got: {stdout}"
+        output.status.success(),
+        "watch tui (empty) failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Lanes"), "missing Lanes pane: {stdout}");
+    assert!(
+        stdout.contains("none firing"),
+        "expected empty rules placeholder, got: {stdout}"
     );
 }

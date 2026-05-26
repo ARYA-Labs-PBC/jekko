@@ -8,11 +8,17 @@
 //!     -> [`SupervisorStore`] persists per-phase state
 //!     -> this command walks the waves, marking phases complete.
 //!
-//! The per-phase body is intentionally a STUB for now (it marks the phase
-//! `Running` then immediately `Complete`). The real per-phase invocation
-//! lands when `jankurai-runner` is wired in as a follow-up; replacing the
-//! inner `mark_complete` block with the real worker spawn is the next big
-//! integration step.
+//! Two per-phase modes:
+//!
+//! - **Stub mode (default).** Each phase is marked `Running` then immediately
+//!   `Complete` with a synthetic summary. Useful for exercising the schema
+//!   and the dependency walk without burning model tokens.
+//! - **Live mode (`--live`).** Each phase spawns
+//!   `jekko run --ephemeral --json --agent plan --cwd <repo> <prompt>` as a
+//!   subprocess via `tokio::process::Command`. The captured stdout becomes
+//!   the phase `summary`. Live mode refuses to run unless `JEKKO_ZYAL_LIVE=1`
+//!   is set and `CI` is not `true`, so it is opt-in for interactive
+//!   operators only.
 //!
 //! Modes:
 //! - `--super <PATH>` -> compile + persist + walk waves.
@@ -25,6 +31,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcCommand;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
@@ -74,20 +81,42 @@ pub struct PortRunArgs {
     #[arg(long, value_name = "RUN_ID")]
     pub status: Option<String>,
 
-    /// Informational cap on stages; passed through to the plan JSON for
-    /// downstream tools. The scaffold does not enforce it.
+    /// Hard cap on stages: stop after `N` phases reach `Complete` and mark
+    /// the rest `Blocked` with summary `"stopped at max_stages"`. The cap
+    /// is also surfaced in the dry-run plan JSON for downstream tools.
     #[arg(long = "max-stages", value_name = "N")]
     pub max_stages: Option<u32>,
 
-    /// Informational time budget in hours; recorded so observers can
-    /// reason about run scope. The scaffold does not enforce it.
+    /// Wall-clock budget in hours: when the cumulative wall time exceeds
+    /// this value the orchestrator stops before starting the next wave and
+    /// marks remaining phases `Blocked` with summary
+    /// `"stopped at time_budget"`. Also surfaced in the dry-run plan JSON.
     #[arg(long = "time-budget-hours", value_name = "H")]
     pub time_budget_hours: Option<f64>,
+
+    /// Live mode: invoke `jekko run --ephemeral --json --agent plan` per
+    /// phase via a `tokio::process::Command` subprocess. Refuses to run
+    /// unless `JEKKO_ZYAL_LIVE=1` is set and `CI` is not `true`. Default
+    /// off (stays in stub mode).
+    #[arg(long)]
+    pub live: bool,
+
+    /// Per-phase subprocess timeout in seconds for `--live` mode. The
+    /// subprocess is killed and the phase is marked `Failed` once the
+    /// timeout fires. Defaults to 300 seconds.
+    #[arg(long = "per-phase-timeout-secs", value_name = "N", default_value_t = 300)]
+    pub per_phase_timeout_secs: u64,
 }
 
 /// Entry point invoked from `main.rs`.
 pub fn run(_global: &GlobalOpts, args: &PortRunArgs) -> Result<()> {
     validate_arg_combination(args)?;
+    // Live-mode gating happens up front so accidental invocations fail fast,
+    // before any persistent state is opened. `--status` is purely read-only,
+    // so we let it through without forcing operators to set the live env.
+    if args.live && args.status.is_none() {
+        gate_live_mode()?;
+    }
 
     if let Some(run_id) = args.status.as_deref() {
         return run_status(args, run_id);
@@ -110,7 +139,34 @@ pub fn run(_global: &GlobalOpts, args: &PortRunArgs) -> Result<()> {
 
     let store = open_store(args, /* in_memory */ false)?;
     let run_id = init_or_use_run_id(&store, &manifest, args.run_id.as_deref())?;
-    walk_waves(&store, &manifest, &run_id)
+    walk_waves(&store, &manifest, &run_id, args)
+}
+
+/// Validate `--live` preconditions. Refuses CI environments and requires the
+/// `JEKKO_ZYAL_LIVE=1` opt-in so accidental invocations from automation can
+/// not spend tokens. Called only when `args.live` is set.
+fn gate_live_mode() -> Result<()> {
+    if env_is_truthy("CI") {
+        bail!(
+            "--live refuses to run when CI=true; unset CI or run interactively to use live mode"
+        );
+    }
+    if !env_is_truthy("JEKKO_ZYAL_LIVE") {
+        bail!(
+            "--live requires JEKKO_ZYAL_LIVE=1 (opt-in guard against accidental live runs)"
+        );
+    }
+    Ok(())
+}
+
+fn env_is_truthy(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        }
+        Err(_) => false,
+    }
 }
 
 fn validate_arg_combination(args: &PortRunArgs) -> Result<()> {
@@ -496,17 +552,31 @@ fn run_resume(args: &PortRunArgs, run_id: &str) -> Result<()> {
     )
     .context("reset Running phases to Pending on resume")?;
 
-    walk_waves(&store, &manifest, run_id)
+    walk_waves(&store, &manifest, run_id, args)
 }
 
 /// Walk the manifest's execution layers serially. Within each layer, mark
-/// every phase `Running` then immediately `Complete`.
+/// every phase `Running` then either:
 ///
-/// STUB: the inner `record_phase_status(..., Complete, ...)` call is where
-/// a real `jankurai-runner` invocation belongs. The scaffold persists the
-/// transition so dashboards + `--status` look real, but no model work
-/// happens here. Replacing this body is the next follow-up.
-fn walk_waves(store: &SupervisorStore, manifest: &SuperWorkflow, run_id: &str) -> Result<()> {
+/// - **stub mode** (default): immediately `Complete` with a synthetic
+///   summary. Useful for exercising the schema + dependency walk.
+/// - **live mode** (`args.live == true`): drive a single
+///   `jekko run --ephemeral --json --agent plan` subprocess for the phase
+///   and store its stdout as the phase summary.
+///
+/// `args.max_stages` caps the total number of phases that may complete in
+/// this invocation; anything past the cap is recorded `Blocked` with the
+/// summary `"stopped at max_stages"`. `args.time_budget_hours` enforces a
+/// wall-clock ceiling: when the elapsed time exceeds the budget the
+/// remaining phases are recorded `Blocked` with the summary
+/// `"stopped at time_budget"`. A `Failed` phase halts advancement; the
+/// caller resumes via `--resume <run_id>`.
+fn walk_waves(
+    store: &SupervisorStore,
+    manifest: &SuperWorkflow,
+    run_id: &str,
+    args: &PortRunArgs,
+) -> Result<()> {
     let waves = execution_layers(manifest)
         .map_err(|err| anyhow!("plan execution layers failed: {err}"))?;
     let completed_already: BTreeSet<String> = store
@@ -515,29 +585,91 @@ fn walk_waves(store: &SupervisorStore, manifest: &SuperWorkflow, run_id: &str) -
         .into_iter()
         .collect();
     let total_waves = waves.len();
-    for (i, wave) in waves.into_iter().enumerate() {
+
+    // Build a fast lookup so live mode can recover the prompt material from
+    // a bare phase id.
+    let phase_lookup: std::collections::BTreeMap<&str, &Phase> = manifest
+        .phases
+        .iter()
+        .map(|p| (p.id.as_str(), p))
+        .collect();
+
+    let start = Instant::now();
+    let time_budget = args
+        .time_budget_hours
+        .map(|h| Duration::from_secs_f64(h * 3600.0));
+    let mut stages_done: u32 = completed_already.len() as u32;
+    let max_stages = args.max_stages;
+    let mut halted: Option<HaltReason> = None;
+
+    for (i, wave) in waves.iter().enumerate() {
+        // Time-budget check happens BEFORE starting the wave so phases that
+        // were going to run in this wave land in the Blocked bucket with a
+        // clear reason.
+        if let Some(budget) = time_budget {
+            if start.elapsed() > budget {
+                halted = Some(HaltReason::TimeBudget);
+                block_remaining_from(store, run_id, i, &waves, &completed_already, "stopped at time_budget")?;
+                break;
+            }
+        }
+
         let mut newly_completed = 0usize;
-        for phase_id in &wave {
+        let mut wave_failed = false;
+        for phase_id in wave {
             if completed_already.contains(phase_id) {
                 continue;
             }
+            // Honor --max-stages: stop scheduling new work once the cap is
+            // hit. Remaining phases (this wave + downstream waves) become
+            // Blocked below.
+            if let Some(cap) = max_stages {
+                if stages_done >= cap {
+                    halted = Some(HaltReason::MaxStages);
+                    break;
+                }
+            }
+            // If an earlier phase in this wave failed, do not start new ones;
+            // leave the rest for a future --resume pass.
+            if wave_failed {
+                continue;
+            }
+
             store
                 .record_phase_status(run_id, phase_id, PhaseStatus::Running, "")
                 .with_context(|| format!("mark phase `{phase_id}` running"))?;
-            // STUB: real per-phase work (jankurai-runner role lanes,
-            // worktree spawn, reducer fence, sign-off gate) lands when the
-            // next follow-up wires `super_agent_runner` in. For Phase H
-            // scaffold we immediately mark complete so the DB schema +
-            // wave traversal are exercised end-to-end.
-            store
-                .record_phase_status(
-                    run_id,
-                    phase_id,
-                    PhaseStatus::Complete,
-                    "stub: real per-phase work lands when jankurai-runner is wired in",
-                )
-                .with_context(|| format!("mark phase `{phase_id}` complete"))?;
-            newly_completed += 1;
+
+            let outcome = if args.live {
+                let phase = phase_lookup.get(phase_id.as_str()).ok_or_else(|| {
+                    anyhow!("phase `{phase_id}` not present in manifest lookup")
+                })?;
+                invoke_live_phase(phase, args)
+            } else {
+                Ok("stub: real per-phase work lands when jankurai-runner is wired in".to_string())
+            };
+
+            match outcome {
+                Ok(summary) => {
+                    let summary = if summary.is_empty() {
+                        "live phase produced empty stdout".to_string()
+                    } else {
+                        summary
+                    };
+                    store
+                        .record_phase_status(run_id, phase_id, PhaseStatus::Complete, &summary)
+                        .with_context(|| format!("mark phase `{phase_id}` complete"))?;
+                    newly_completed += 1;
+                    stages_done += 1;
+                }
+                Err(err) => {
+                    let summary = format!("live phase failed: {err}");
+                    store
+                        .record_phase_status(run_id, phase_id, PhaseStatus::Failed, &summary)
+                        .with_context(|| format!("mark phase `{phase_id}` failed"))?;
+                    wave_failed = true;
+                    halted = Some(HaltReason::PhaseFailed(phase_id.clone()));
+                }
+            }
         }
         println!(
             "wave {}/{} complete, {} phases marked complete",
@@ -545,9 +677,139 @@ fn walk_waves(store: &SupervisorStore, manifest: &SuperWorkflow, run_id: &str) -
             total_waves,
             newly_completed
         );
+
+        // Halt conditions discovered during the wave: stop advancing and
+        // block whatever is left over so --status shows the reason.
+        if let Some(reason) = &halted {
+            let summary = match reason {
+                HaltReason::MaxStages => "stopped at max_stages",
+                HaltReason::TimeBudget => "stopped at time_budget",
+                HaltReason::PhaseFailed(_) => "halted after upstream phase failed",
+            };
+            block_remaining_from(store, run_id, i, &waves, &completed_already, summary)?;
+            break;
+        }
     }
-    println!("run `{run_id}` complete (stub bodies)");
+
+    match halted {
+        Some(HaltReason::MaxStages) => println!("run `{run_id}` halted at --max-stages"),
+        Some(HaltReason::TimeBudget) => println!("run `{run_id}` halted at --time-budget-hours"),
+        Some(HaltReason::PhaseFailed(id)) => {
+            println!("run `{run_id}` halted after phase `{id}` failed; --resume to retry")
+        }
+        None => {
+            let mode = if args.live { "live" } else { "stub bodies" };
+            println!("run `{run_id}` complete ({mode})");
+        }
+    }
     Ok(())
+}
+
+#[derive(Debug)]
+enum HaltReason {
+    MaxStages,
+    TimeBudget,
+    PhaseFailed(String),
+}
+
+/// Mark every yet-unfinished phase from wave `start_wave` onward as
+/// `Blocked` with `reason` as the summary. Phases already in
+/// `completed_already` are skipped so we never demote a real Complete row.
+/// Phases that already moved to a terminal state during this walk (e.g. a
+/// `Failed` phase that triggered the halt) are also skipped to preserve
+/// their failure context.
+fn block_remaining_from(
+    store: &SupervisorStore,
+    run_id: &str,
+    start_wave: usize,
+    waves: &[Vec<String>],
+    completed_already: &BTreeSet<String>,
+    reason: &str,
+) -> Result<()> {
+    for wave in waves.iter().skip(start_wave) {
+        for phase_id in wave {
+            if completed_already.contains(phase_id) {
+                continue;
+            }
+            // Skip phases that already reached a terminal status during this
+            // walk: Complete (just promoted) or Failed (the halt trigger).
+            let current = store
+                .phase_status(run_id, phase_id)
+                .with_context(|| format!("read phase status for `{phase_id}`"))?;
+            if matches!(
+                current,
+                Some(PhaseStatus::Complete) | Some(PhaseStatus::Failed)
+            ) {
+                continue;
+            }
+            store
+                .record_phase_status(run_id, phase_id, PhaseStatus::Blocked, reason)
+                .with_context(|| format!("block phase `{phase_id}` ({reason})"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Spawn `jekko run --ephemeral --json --agent plan --cwd <repo> <prompt>`
+/// as a child process and return its captured stdout. Honors `JEKKO_BIN`
+/// (default `jekko` on PATH) and `JEKKO_KEY_SOURCE_POLICY` (default
+/// `users-only`). Aborts after `args.per_phase_timeout_secs` seconds.
+fn invoke_live_phase(phase: &Phase, args: &PortRunArgs) -> Result<String> {
+    let bin = std::env::var("JEKKO_BIN").unwrap_or_else(|_| "jekko".to_string());
+    let key_policy = std::env::var("JEKKO_KEY_SOURCE_POLICY")
+        .unwrap_or_else(|_| "users-only".to_string());
+    let cwd = std::env::current_dir().context("resolve cwd for live phase invocation")?;
+    let prompt = format!("{}: {}", phase.name, phase.objective);
+    let timeout = Duration::from_secs(args.per_phase_timeout_secs);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for live phase invocation")?;
+
+    rt.block_on(async move {
+        let mut cmd = tokio::process::Command::new(&bin);
+        cmd.arg("run")
+            .arg("--ephemeral")
+            .arg("--json")
+            .arg("--agent")
+            .arg("plan")
+            .arg("--cwd")
+            .arg(&cwd)
+            .arg(&prompt)
+            .env("JEKKO_KEY_SOURCE_POLICY", &key_policy)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        let child = cmd
+            .spawn()
+            .with_context(|| format!("spawn `{bin} run --ephemeral --json --agent plan`"))?;
+
+        let wait = child.wait_with_output();
+        let output = match tokio::time::timeout(timeout, wait).await {
+            Ok(res) => res.context("await live phase subprocess")?,
+            Err(_) => {
+                bail!(
+                    "live phase `{}` exceeded per-phase timeout of {}s",
+                    phase.id,
+                    args.per_phase_timeout_secs
+                );
+            }
+        };
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            bail!(
+                "live phase `{}` exited with status {:?}: {}",
+                phase.id,
+                output.status.code(),
+                if stderr.is_empty() { "<no stderr>".to_string() } else { stderr }
+            );
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(stdout)
+    })
 }
 
 /// Local RFC3339 timestamp without pulling chrono into this crate's public

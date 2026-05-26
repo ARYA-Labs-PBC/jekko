@@ -286,3 +286,146 @@ fn validate_rejects_cycle_manifest() {
     // Sanity: predicates form of the same check, for the test report.
     let _ = contains("cycle");
 }
+
+#[test]
+fn live_flag_requires_jekko_zyal_live() {
+    // Without `JEKKO_ZYAL_LIVE=1`, `--live` must refuse to run with a clear
+    // diagnostic on stderr.
+    let manifest = canonical_manifest();
+    let tmpdir = tempfile::tempdir().expect("tmpdir");
+    let db_path = tmpdir.path().join("supervisor.sqlite");
+
+    let mut cmd = Command::cargo_bin("jekko").expect("jekko binary");
+    let output = cmd
+        .arg("port-run")
+        .arg("--super")
+        .arg(&manifest)
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--live")
+        .env_remove("JEKKO_ZYAL_LIVE")
+        .env_remove("CI")
+        .output()
+        .expect("port-run --live without opt-in");
+    assert!(
+        !output.status.success(),
+        "--live without JEKKO_ZYAL_LIVE must fail: stdout=\n{}\nstderr=\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("JEKKO_ZYAL_LIVE"),
+        "expected JEKKO_ZYAL_LIVE in stderr, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn live_flag_refuses_ci_env() {
+    // With `CI=true`, `--live` must refuse even when JEKKO_ZYAL_LIVE is set.
+    let manifest = canonical_manifest();
+    let tmpdir = tempfile::tempdir().expect("tmpdir");
+    let db_path = tmpdir.path().join("supervisor.sqlite");
+
+    let mut cmd = Command::cargo_bin("jekko").expect("jekko binary");
+    let output = cmd
+        .arg("port-run")
+        .arg("--super")
+        .arg(&manifest)
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--live")
+        .env("CI", "true")
+        .env("JEKKO_ZYAL_LIVE", "1")
+        .output()
+        .expect("port-run --live under CI=true");
+    assert!(
+        !output.status.success(),
+        "--live with CI=true must fail: stdout=\n{}\nstderr=\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("CI"),
+        "expected `CI` in stderr, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn max_stages_blocks_remaining_phases() {
+    // With `--max-stages 3`, only the first three phases reach `complete`;
+    // every other phase is recorded `blocked` with the cap reason.
+    let manifest = canonical_manifest();
+    let tmpdir = tempfile::tempdir().expect("tmpdir");
+    let db_path = tmpdir.path().join("supervisor.sqlite");
+
+    let mut cmd = Command::cargo_bin("jekko").expect("jekko binary");
+    let output = cmd
+        .arg("port-run")
+        .arg("--super")
+        .arg(&manifest)
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--max-stages")
+        .arg("3")
+        .output()
+        .expect("port-run --max-stages 3");
+    assert!(
+        output.status.success(),
+        "walk failed: status={:?} stderr=\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let conn = rusqlite::Connection::open(&db_path).expect("open supervisor db");
+    let run_id: String = conn
+        .query_row(
+            "SELECT run_id FROM zyal_super_runs LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query run id");
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT phase_id, status, summary FROM zyal_super_phases \
+             WHERE run_id = ?1 ORDER BY phase_id",
+        )
+        .expect("prepare phase query");
+    let rows: Vec<(String, String, String)> = stmt
+        .query_map([&run_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .expect("query phases")
+        .map(|r| r.expect("row"))
+        .collect();
+
+    assert_eq!(rows.len(), 12, "expected 12 phase rows, got {}", rows.len());
+    let complete_count = rows.iter().filter(|(_, s, _)| s == "complete").count();
+    let blocked_count = rows.iter().filter(|(_, s, _)| s == "blocked").count();
+    assert_eq!(
+        complete_count, 3,
+        "expected exactly 3 complete phases with --max-stages 3, got {complete_count}"
+    );
+    assert_eq!(
+        complete_count + blocked_count,
+        12,
+        "every phase should be complete or blocked, saw {complete_count} complete + {blocked_count} blocked"
+    );
+    let any_blocked_with_reason = rows
+        .iter()
+        .filter(|(_, s, _)| s == "blocked")
+        .any(|(_, _, summary)| summary.contains("max_stages"));
+    assert!(
+        any_blocked_with_reason,
+        "expected blocked phases to carry `max_stages` summary, got rows: {:?}",
+        rows.iter()
+            .filter(|(_, s, _)| s == "blocked")
+            .collect::<Vec<_>>()
+    );
+}
