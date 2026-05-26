@@ -47,8 +47,43 @@ pub(super) fn emit_superworkflow(raw: &str) -> Result<String> {
         std::path::Path::new("<memory>"),
         &parsed,
     )?;
-    let rendered = serde_json::to_string_pretty(&parsed).context("render SuperWorkflow JSON")?;
+    // Convert YAML → JSON Value so we can prepend the generated-header
+    // object (jankurai's HLT-002-GENERATED-MUTATION rule expects every
+    // generated zone file to declare its source + regeneration command;
+    // pure JSON has no comment syntax so we surface that header as a
+    // top-level `_generated` object instead).
+    let json_value = serde_json::to_value(&parsed).context("YAML → JSON for SuperWorkflow")?;
+    let stamped = stamp_generated_header(json_value);
+    let rendered =
+        serde_json::to_string_pretty(&stamped).context("render SuperWorkflow JSON")?;
     Ok(format!("{rendered}\n"))
+}
+
+/// Prepend a `_generated` top-level object to the rendered JSON so the
+/// generated-zone audit (`HLT-002-GENERATED-MUTATION`) can detect that the
+/// file is a tool output rather than hand-authored. Preserves all other
+/// keys in their original serde-defined order.
+fn stamp_generated_header(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::{Map, Value};
+    let stamp = serde_json::json!({
+        "by": "zyalc",
+        "schema": "zyal/superworkflow@1",
+        "do_not_edit_by_hand": true,
+        "regenerate": "cargo run -p zyalc -- compile <source.zyal>",
+    });
+    match value {
+        Value::Object(orig) => {
+            let mut out = Map::with_capacity(orig.len() + 1);
+            out.insert("_generated".to_string(), stamp);
+            for (k, v) in orig {
+                out.insert(k, v);
+            }
+            Value::Object(out)
+        }
+        // Non-object root: leave untouched (the validator would have
+        // rejected this shape upstream, so we shouldn't see it here).
+        other => other,
+    }
 }
 
 pub(super) fn strip_pragmas(raw: &str) -> String {

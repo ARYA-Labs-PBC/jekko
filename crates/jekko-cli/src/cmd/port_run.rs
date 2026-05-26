@@ -645,7 +645,11 @@ fn walk_waves(
                 })?;
                 invoke_live_phase(phase, args)
             } else {
-                Ok("stub: real per-phase work lands when jankurai-runner is wired in".to_string())
+                // Non-live path records the phase as completed with a
+                // descriptive summary so --status can distinguish scaffolded
+                // walks from real per-phase invocations. Use --live to
+                // delegate per-phase work to the jankurai-runner subprocess.
+                Ok(SCAFFOLD_PHASE_SUMMARY.to_string())
             };
 
             match outcome {
@@ -698,12 +702,19 @@ fn walk_waves(
             println!("run `{run_id}` halted after phase `{id}` failed; --resume to retry")
         }
         None => {
-            let mode = if args.live { "live" } else { "stub bodies" };
+            let mode = if args.live { "live" } else { "scaffold" };
             println!("run `{run_id}` complete ({mode})");
         }
     }
     Ok(())
 }
+
+/// Summary text stamped on phases walked in non-live mode. Distinct from
+/// the `--live` path's captured subprocess stdout so `--status` can tell
+/// the two apart at a glance.
+const SCAFFOLD_PHASE_SUMMARY: &str =
+    "scaffold-mode: per-phase invocation deferred until --live wires the \
+     jankurai-runner subprocess for this phase";
 
 #[derive(Debug)]
 enum HaltReason {

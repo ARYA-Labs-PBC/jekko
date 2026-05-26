@@ -85,7 +85,10 @@ impl Embedder for OpenAICompatibleEmbedder {
             .with_context(|| format!("POST {}", self.endpoint))?;
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = match response.text().await {
+                Ok(text) => text,
+                Err(read_err) => format!("<unable to read body: {read_err}>"),
+            };
             anyhow::bail!(
                 "embeddings endpoint {} returned HTTP {status}: {body}",
                 self.endpoint
