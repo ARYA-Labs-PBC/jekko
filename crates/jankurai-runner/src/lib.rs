@@ -28,6 +28,7 @@ pub(crate) mod hero_judge_runner_helpers;
 pub mod hero_judge_search;
 pub mod jankurai_gate;
 pub mod locks;
+pub mod memory;
 pub mod model_client;
 pub mod model_policy;
 pub mod parity_lab;
