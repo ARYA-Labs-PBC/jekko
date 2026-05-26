@@ -109,6 +109,11 @@ pub fn persist_memory_capsule(db: &Db, run_id: &str, capsule: &MemoryCapsule) ->
                 .to_string(),
             claim_text: capsule.claim_text.clone(),
             approved_by_role: capsule.approved_by_role.clone(),
+            // E2 embedding is computed by an Embedder pass over the capsule
+            // summary/claim; the persist path stays embedding-agnostic so the
+            // jankurai-runner orchestrator can either pre-embed (Phase E2) or
+            // skip (E2 stub / cold-start runs).
+            embedding: None,
         },
     )?;
     Ok(())

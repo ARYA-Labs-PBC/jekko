@@ -120,6 +120,12 @@ pub struct MemoryCapsuleRow {
     /// `None` until signoff lands.
     #[serde(default)]
     pub approved_by_role: Option<String>,
+    /// Optional embedding for Phase E2 semantic retrieval. Stored as a
+    /// little-endian f32 byte blob (e.g. 1536 dims × 4 bytes = 6144 bytes
+    /// for `text-embedding-3-small`). `None` for capsules written before
+    /// E2 substrate landed or by callers that don't run an embedder.
+    #[serde(default)]
+    pub embedding: Option<Vec<u8>>,
 }
 
 fn default_memory_kind() -> String {

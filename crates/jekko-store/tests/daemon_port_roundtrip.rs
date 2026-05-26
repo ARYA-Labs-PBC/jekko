@@ -508,6 +508,7 @@ fn port_workflow_tables_round_trip() {
             promotion_status: "scratch".into(),
             claim_text: String::new(),
             approved_by_role: None,
+            embedding: None,
         },
     )
     .unwrap();
