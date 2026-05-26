@@ -26,7 +26,7 @@ install_cargo_audit
 install_zizmor
 
 mkdir -p "${JANKURAI_ARTIFACT_ROOT}/security"
-if ! cargo run -p xtask --locked -- security-lane --profile ci --out "${JANKURAI_ARTIFACT_ROOT}/security"; then
+if ! cargo run -p xtask --locked -- security-lane --profile ci-rust --out "${JANKURAI_ARTIFACT_ROOT}/security"; then
   if [[ -f "${JANKURAI_ARTIFACT_ROOT}/security/evidence.json" ]]; then
     jq . "${JANKURAI_ARTIFACT_ROOT}/security/evidence.json" || cat "${JANKURAI_ARTIFACT_ROOT}/security/evidence.json"
   fi

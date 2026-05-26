@@ -9,8 +9,17 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SecurityProfile {
+    /// All tools required (gitleaks + cargo-audit + zizmor; syft optional).
+    /// Used by `just security` for full local audits.
     Local,
+    /// Cargo-audit + zizmor + syft all required. Original monolithic CI
+    /// profile — used when one CI job ran every security tool serially.
     Ci,
+    /// Rust-only subset for the `.gitlab/ci/security.yml::security:rust-tools`
+    /// lane after MR !23's parallel split: cargo-audit + zizmor required,
+    /// gitleaks + syft NOT required (those live in security:trufflehog and
+    /// security:syft-grype sibling lanes).
+    CiRust,
 }
 
 impl SecurityProfile {
@@ -18,6 +27,7 @@ impl SecurityProfile {
         match self {
             Self::Local => "local",
             Self::Ci => "ci",
+            Self::CiRust => "ci-rust",
         }
     }
 
