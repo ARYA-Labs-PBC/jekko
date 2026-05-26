@@ -104,6 +104,30 @@ pub struct MemoryCapsuleRow {
     pub time_created: i64,
     /// Last-update timestamp.
     pub time_updated: i64,
+    /// Memory subfamily (episodic/semantic/procedural/negative). Mirrors
+    /// `zyal_core::MemoryKind`. Default `"semantic"`.
+    #[serde(default = "default_memory_kind")]
+    pub memory_kind: String,
+    /// Promotion lifecycle stage (scratch/run_only/project_only/global).
+    /// Mirrors `zyal_core::MemoryPromotionStatus`. Default `"scratch"`.
+    #[serde(default = "default_promotion_status")]
+    pub promotion_status: String,
+    /// Human-readable claim text the Memory Curator writes alongside the
+    /// payload — keeps retrievals auditable.
+    #[serde(default)]
+    pub claim_text: String,
+    /// Role that approved promotion (e.g. `"verifier"`, `"reducer"`).
+    /// `None` until signoff lands.
+    #[serde(default)]
+    pub approved_by_role: Option<String>,
+}
+
+fn default_memory_kind() -> String {
+    "semantic".to_string()
+}
+
+fn default_promotion_status() -> String {
+    "scratch".to_string()
 }
 
 /// Row in `daemon_model_reliability`.

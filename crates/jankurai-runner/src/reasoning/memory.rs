@@ -1,5 +1,7 @@
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use zyal_core::{MemoryKind, MemoryPromotionStatus};
 
 use super::EvidenceLevel;
 
@@ -27,6 +29,24 @@ pub struct MemoryCapsule {
     pub payload_json: Value,
     /// Stable content hash.
     pub content_hash: String,
+    /// Memory subfamily — Episodic / Semantic / Procedural / Negative.
+    /// Defaults to `Semantic` for new capsules; the Memory Curator picks the
+    /// right kind based on what the capsule encodes.
+    #[serde(default)]
+    pub memory_kind: MemoryKind,
+    /// Promotion lifecycle stage. Capsules start `Scratch` and must be
+    /// promoted by the Verifier / Reducer via [`Self::promote`].
+    #[serde(default)]
+    pub promotion_status: MemoryPromotionStatus,
+    /// Human-readable claim — what this capsule actually asserts. Distinct
+    /// from `summary` (free-form narrative) and `payload_json` (structured
+    /// evidence). Phase E2's retrieval injects `claim_text` into prompts.
+    #[serde(default)]
+    pub claim_text: String,
+    /// Role that approved promotion (`"verifier"` or `"reducer"`). `None`
+    /// until [`Self::promote`] succeeds.
+    #[serde(default)]
+    pub approved_by_role: Option<String>,
 }
 
 impl MemoryCapsule {
@@ -56,6 +76,47 @@ impl MemoryCapsule {
             && self.has_grounded_evidence()
             && self.has_nonempty_provenance()
     }
+
+    /// Advance the promotion lifecycle by exactly one step. Enforces:
+    ///   Scratch → RunOnly → ProjectOnly → Global
+    /// Returns an error on regression or any skip. Stamps `approved_by_role`
+    /// so audits can see who promoted the capsule.
+    ///
+    /// Scratch → RunOnly additionally requires [`Self::can_write_permanent`]
+    /// (verifier signoff + grounded evidence + provenance).
+    pub fn promote(&mut self, target: MemoryPromotionStatus, by_role: &str) -> Result<()> {
+        let by_role = by_role.trim();
+        if by_role.is_empty() {
+            bail!("promote: by_role must be non-empty (e.g. \"verifier\" / \"reducer\")");
+        }
+        use MemoryPromotionStatus::*;
+        let next_after = |current: MemoryPromotionStatus| match current {
+            Scratch => Some(RunOnly),
+            RunOnly => Some(ProjectOnly),
+            ProjectOnly => Some(Global),
+            Global => None,
+        };
+        let expected = next_after(self.promotion_status).ok_or_else(|| {
+            anyhow::anyhow!("promote: capsule already at Global, no further promotion")
+        })?;
+        if target != expected {
+            bail!(
+                "promote: illegal transition {:?} → {:?} (only {:?} is allowed)",
+                self.promotion_status,
+                target,
+                expected
+            );
+        }
+        if self.promotion_status == Scratch && !self.can_write_permanent() {
+            bail!(
+                "promote: Scratch → RunOnly requires verifier signoff (status verified/rejected, \
+                 evidence_level >= ExternalGrounding, non-empty artifact_id)"
+            );
+        }
+        self.promotion_status = target;
+        self.approved_by_role = Some(by_role.to_string());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -74,7 +135,71 @@ mod memory_helpers_tests {
             confidence: 0.5,
             payload_json: Value::Null,
             content_hash: String::new(),
+            memory_kind: MemoryKind::Semantic,
+            promotion_status: MemoryPromotionStatus::Scratch,
+            claim_text: String::new(),
+            approved_by_role: None,
         }
+    }
+
+    #[test]
+    fn promote_walks_the_lifecycle_in_order() {
+        let mut c = capsule("verified", EvidenceLevel::ExternalGrounding, "a1");
+        c.promote(MemoryPromotionStatus::RunOnly, "verifier").unwrap();
+        assert_eq!(c.promotion_status, MemoryPromotionStatus::RunOnly);
+        assert_eq!(c.approved_by_role.as_deref(), Some("verifier"));
+        c.promote(MemoryPromotionStatus::ProjectOnly, "reducer").unwrap();
+        assert_eq!(c.promotion_status, MemoryPromotionStatus::ProjectOnly);
+        c.promote(MemoryPromotionStatus::Global, "verifier").unwrap();
+        assert_eq!(c.promotion_status, MemoryPromotionStatus::Global);
+    }
+
+    #[test]
+    fn promote_rejects_regression() {
+        let mut c = capsule("verified", EvidenceLevel::ExternalGrounding, "a1");
+        c.promote(MemoryPromotionStatus::RunOnly, "verifier").unwrap();
+        let err = c.promote(MemoryPromotionStatus::Scratch, "verifier").unwrap_err();
+        assert!(err.to_string().contains("illegal transition"));
+    }
+
+    #[test]
+    fn promote_rejects_skipping_steps() {
+        let mut c = capsule("verified", EvidenceLevel::ExternalGrounding, "a1");
+        let err = c
+            .promote(MemoryPromotionStatus::Global, "verifier")
+            .unwrap_err();
+        assert!(err.to_string().contains("illegal transition"));
+    }
+
+    #[test]
+    fn promote_scratch_to_runonly_requires_write_gate() {
+        // Status candidate => can_write_permanent false => Scratch can't advance.
+        let mut c = capsule("candidate", EvidenceLevel::ExternalGrounding, "a1");
+        let err = c.promote(MemoryPromotionStatus::RunOnly, "verifier").unwrap_err();
+        assert!(err.to_string().contains("verifier signoff"));
+    }
+
+    #[test]
+    fn promote_at_global_returns_error() {
+        let mut c = capsule("verified", EvidenceLevel::ExternalGrounding, "a1");
+        for next in [
+            MemoryPromotionStatus::RunOnly,
+            MemoryPromotionStatus::ProjectOnly,
+            MemoryPromotionStatus::Global,
+        ] {
+            c.promote(next, "verifier").unwrap();
+        }
+        let err = c
+            .promote(MemoryPromotionStatus::Global, "verifier")
+            .unwrap_err();
+        assert!(err.to_string().contains("already at Global"));
+    }
+
+    #[test]
+    fn promote_requires_nonempty_by_role() {
+        let mut c = capsule("verified", EvidenceLevel::ExternalGrounding, "a1");
+        let err = c.promote(MemoryPromotionStatus::RunOnly, "  ").unwrap_err();
+        assert!(err.to_string().contains("by_role must be non-empty"));
     }
 
     #[test]
