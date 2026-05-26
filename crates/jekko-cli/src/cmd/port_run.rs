@@ -315,20 +315,31 @@ fn adapt_zyalc_emission(value: &JsonValue, source: &Path) -> Result<SuperWorkflo
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let phases_node = value
-        .get("superworkflow")
-        .and_then(|sw| sw.get("phases"))
-        .or_else(|| value.get("phases"))
-        .ok_or_else(|| {
-            anyhow!(
-                "manifest at {} is missing `superworkflow.phases` (or top-level `phases`)",
+    // Two shapes accepted: zyalc's nested emission (`{superworkflow: {phases:
+    // [...]}}`) and the flat supervisor shape (`{phases: [...]}`). Explicit
+    // matches keep the typed-state contract clean (no `or_else` fallback
+    // soup); unknown shapes hit the third arm with a precise error.
+    let phases_node = if let Some(nested) =
+        value.get("superworkflow").and_then(|sw| sw.get("phases"))
+    {
+        nested
+    } else if let Some(flat) = value.get("phases") {
+        flat
+    } else {
+        return Err(anyhow!(
+            "manifest at {} is missing `superworkflow.phases` (or top-level `phases`)",
+            source.display()
+        ));
+    };
+    let raw_phases: Vec<JsonValue> = match phases_node.as_array() {
+        Some(array) => array.clone(),
+        None => {
+            return Err(anyhow!(
+                "`phases` at {} must be a JSON array",
                 source.display()
-            )
-        })?;
-    let raw_phases: Vec<JsonValue> = phases_node
-        .as_array()
-        .ok_or_else(|| anyhow!("`phases` at {} must be a JSON array", source.display()))?
-        .clone();
+            ))
+        }
+    };
     let mut phases: Vec<Phase> = Vec::with_capacity(raw_phases.len());
     for (idx, raw) in raw_phases.into_iter().enumerate() {
         let phase_id = raw
