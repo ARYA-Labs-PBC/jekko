@@ -364,7 +364,12 @@ impl SuperReasoningPlan {
             ids.iter().map(|id| (id.clone(), 0)).collect();
         let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for phase in &self.phases {
-            for dep in &phase.depends_on {
+            // Dedupe deps per phase — a duplicate entry (e.g. `depends_on:
+            // ["p01", "p01"]`) would inflate indegree past what the topo
+            // walk can decrement, falsely reporting a cycle.
+            let unique_deps: std::collections::BTreeSet<&String> =
+                phase.depends_on.iter().collect();
+            for dep in unique_deps {
                 if !ids.contains(dep) {
                     return Err(RuntimeError::invalid(format!(
                         "phase '{}' depends on unknown phase '{}'",

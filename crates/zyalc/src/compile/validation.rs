@@ -160,11 +160,18 @@ fn superworkflow_dependencies_are_acyclic(phases: &[serde_yaml::Value]) -> Resul
             .to_string();
         indegree.entry(id.clone()).or_insert(0);
         if let Some(depends_on) = lookup(phase, "depends_on") {
+            // Dedupe before counting — see zyal-supervisor planner for the
+            // same fix rationale (false-cycle on duplicate dep entries).
+            let mut seen: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
             for dep in depends_on.as_sequence().cloned().unwrap_or_default() {
                 let dep = dep
                     .as_str()
                     .ok_or_else(|| anyhow!("phase dependency must be string"))?
                     .to_string();
+                if !seen.insert(dep.clone()) {
+                    continue;
+                }
                 outgoing.entry(dep).or_default().push(id.clone());
                 *indegree.entry(id.clone()).or_insert(0) += 1;
             }

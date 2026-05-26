@@ -95,7 +95,12 @@ pub fn execution_layers(manifest: &SuperWorkflow) -> Result<Vec<Vec<String>>, Va
 
     for phase in phases {
         indegree.entry(phase.id.clone()).or_insert(0);
-        for dep in &phase.depends_on {
+        // Dedupe before counting so a phase declaring the same dep twice
+        // (e.g. depends_on: ["p01", "p01"]) doesn't inflate the indegree
+        // beyond what `outgoing` can ever decrement, which would falsely
+        // strand the phase and look like a cycle.
+        let unique_deps: BTreeSet<&String> = phase.depends_on.iter().collect();
+        for dep in unique_deps {
             if !id_set.contains(dep.as_str()) {
                 return Err(ValidationError::UnknownDependency {
                     phase: phase.id.clone(),
