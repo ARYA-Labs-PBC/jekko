@@ -3,22 +3,24 @@
 //! Glues together the textarea, slash + mention popups, paste buffer, history,
 //! frecency and per-route stash. Exposes the small set of public methods the
 //! TUI loop drives (`handle_key`, `handle_paste`, `submit`, …).
+//!
+//! Key handling lives in [`keys`] and the `Widget` render impl in [`render`];
+//! both are sibling modules so this file stays under the per-file LOC budget.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::{Style, Stylize};
-use ratatui::widgets::Widget;
-use tui_textarea::{CursorMove, Input, Key, TextArea};
+use ratatui::style::Style;
+use tui_textarea::TextArea;
 
 use super::frecency::Frecency;
 use super::history::PromptHistory;
 use super::mentions::{MentionCandidate, MentionPopup};
-use super::paste::{PasteBuffer, PasteRecord};
+use super::paste::PasteBuffer;
 use super::slash::{SlashCommand, SlashPopup};
-use super::stash::{PromptStash, RouteKey};
+use super::stash::PromptStash;
 use crate::glyph_set;
-use crate::theme::codex::BLUE_PATH;
+
+mod buffer;
+mod keys;
+mod render;
 
 /// The `›` glyph (U+203A) painted at column 0 of the composer's first row.
 /// Single source of truth so tests can reference the same constant.
@@ -96,17 +98,17 @@ pub struct PromptSnapshot {
 
 /// Composite prompt widget.
 pub struct Prompt {
-    textarea: TextArea<'static>,
-    history: PromptHistory,
-    frecency: Frecency,
-    stash: PromptStash,
-    slash: SlashPopup,
-    mention: MentionPopup,
-    paste: PasteBuffer,
+    pub(super) textarea: TextArea<'static>,
+    pub(super) history: PromptHistory,
+    pub(super) frecency: Frecency,
+    pub(super) stash: PromptStash,
+    pub(super) slash: SlashPopup,
+    pub(super) mention: MentionPopup,
+    pub(super) paste: PasteBuffer,
     /// Optional hint shown when the buffer is empty.
-    empty_hint: String,
+    pub(super) empty_hint: String,
     /// Right-aligned label (e.g. model name).
-    model_label: Option<String>,
+    pub(super) model_label: Option<String>,
 }
 
 impl std::fmt::Debug for Prompt {
@@ -258,367 +260,6 @@ impl Prompt {
             expanded,
         }
     }
-
-    /// Clear the buffer and reset every popup.
-    pub fn clear(&mut self) {
-        self.textarea = TextArea::default();
-        self.textarea.set_cursor_line_style(Style::default());
-        self.textarea.set_placeholder_text(self.empty_hint.clone());
-        self.slash.close();
-        self.mention.close();
-        self.paste.clear();
-        self.history.reset_cursor();
-    }
-
-    /// Save the current buffer to the per-route stash.
-    pub fn save_stash(&mut self, route: impl Into<RouteKey>) {
-        let text = self.buffer_string();
-        self.stash.save(route, text);
-    }
-
-    /// Restore a draft saved with [`Self::save_stash`].
-    pub fn restore_stash(&mut self, route: impl Into<RouteKey>) -> bool {
-        if let Some(text) = self.stash.restore(route) {
-            self.replace_buffer(&text);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Replace the entire buffer with `text`.
-    pub fn replace_buffer(&mut self, text: &str) {
-        let lines: Vec<String> = if text.is_empty() {
-            vec![String::new()]
-        } else {
-            text.split('\n').map(str::to_string).collect()
-        };
-        self.textarea = TextArea::new(lines);
-        self.textarea.set_cursor_line_style(Style::default());
-        self.textarea.set_placeholder_text(self.empty_hint.clone());
-        self.refresh_popups();
-    }
-
-    /// Handle a pasted block of text (bracketed paste).
-    pub fn handle_paste(&mut self, text: String) -> PromptOutcome {
-        if text.is_empty() {
-            return PromptOutcome::Consumed;
-        }
-        if PasteBuffer::should_collapse(&text) {
-            let record: PasteRecord = self.paste.stash(text);
-            let chip = record.summary();
-            self.textarea.insert_str(chip);
-        } else {
-            // Insert verbatim, splitting on '\n' so each line lands on its own
-            // row in the textarea.
-            for (i, line) in text.split('\n').enumerate() {
-                if i > 0 {
-                    self.textarea.insert_newline();
-                }
-                if !line.is_empty() {
-                    self.textarea.insert_str(line);
-                }
-            }
-        }
-        self.refresh_popups();
-        PromptOutcome::Consumed
-    }
-
-    /// Submit the current buffer and return the expanded payload.
-    pub fn submit(&mut self) -> Option<String> {
-        let visible = self.buffer_string();
-        if visible.trim().is_empty() {
-            return None;
-        }
-        let expanded = self.paste.expand(&visible);
-        self.history.push(visible);
-        self.clear();
-        Some(expanded)
-    }
-
-    /// Dispatch one key event. Returns what the host should do.
-    pub fn handle_key(&mut self, key: KeyEvent) -> PromptOutcome {
-        if key.kind == KeyEventKind::Release {
-            return PromptOutcome::Passthrough;
-        }
-
-        // Popup-first routing.
-        if self.slash.is_open() {
-            if let Some(outcome) = self.handle_slash_key(key) {
-                return outcome;
-            }
-        }
-        if self.mention.is_open() {
-            if let Some(outcome) = self.handle_mention_key(key) {
-                return outcome;
-            }
-        }
-
-        match (key.code, key.modifiers) {
-            (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
-                self.clear();
-                return PromptOutcome::ClearRequested;
-            }
-            (KeyCode::Char('v'), m) if m.contains(KeyModifiers::CONTROL) => {
-                return PromptOutcome::PasteRequested;
-            }
-            (KeyCode::Enter, m)
-                if m.contains(KeyModifiers::SHIFT)
-                    || m.contains(KeyModifiers::ALT)
-                    || m.contains(KeyModifiers::CONTROL) =>
-            {
-                self.textarea.insert_newline();
-                self.refresh_popups();
-                return PromptOutcome::Consumed;
-            }
-            (KeyCode::Enter, _) => {
-                return PromptOutcome::Submit;
-            }
-            (KeyCode::Char('a'), m) if m == KeyModifiers::CONTROL => {
-                self.textarea.move_cursor(CursorMove::Head);
-                return PromptOutcome::Consumed;
-            }
-            (KeyCode::Char('e'), m) if m == KeyModifiers::CONTROL => {
-                self.textarea.move_cursor(CursorMove::End);
-                return PromptOutcome::Consumed;
-            }
-            (KeyCode::Up, _) => {
-                if self.should_history_nav() {
-                    if let Some(prev) = self.history.nav_up() {
-                        let prev = prev.to_string();
-                        self.replace_buffer(&prev);
-                        return PromptOutcome::Consumed;
-                    }
-                }
-                self.textarea.move_cursor(CursorMove::Up);
-                return PromptOutcome::Consumed;
-            }
-            (KeyCode::Down, _) => {
-                if self.should_history_nav() {
-                    match self.history.nav_down() {
-                        Some(next) => {
-                            let next = next.to_string();
-                            self.replace_buffer(&next);
-                        }
-                        None => self.replace_buffer(""),
-                    }
-                    return PromptOutcome::Consumed;
-                }
-                self.textarea.move_cursor(CursorMove::Down);
-                return PromptOutcome::Consumed;
-            }
-            _ => {}
-        }
-
-        // Fall through to tui-textarea for normal editing keys.
-        let consumed = self.textarea.input(crossterm_to_input(key));
-        self.refresh_popups();
-        if consumed {
-            PromptOutcome::Consumed
-        } else {
-            PromptOutcome::Passthrough
-        }
-    }
-
-    fn handle_slash_key(&mut self, key: KeyEvent) -> Option<PromptOutcome> {
-        match (key.code, key.modifiers) {
-            (KeyCode::Esc, _) => {
-                self.slash.close();
-                Some(PromptOutcome::PopupCancelled)
-            }
-            (KeyCode::Up, _) => {
-                self.slash.move_cursor(-1);
-                Some(PromptOutcome::Consumed)
-            }
-            (KeyCode::Down, _) => {
-                self.slash.move_cursor(1);
-                Some(PromptOutcome::Consumed)
-            }
-            (KeyCode::Enter, m) if m.is_empty() => {
-                let selected = self.slash.selected();
-                if let Some(cmd) = selected {
-                    // Wipe the trigger from the buffer so the host inserts the
-                    // canonical command via the returned outcome.
-                    self.replace_buffer("");
-                    self.slash.close();
-                    Some(PromptOutcome::SlashSelected(cmd))
-                } else {
-                    Some(PromptOutcome::Consumed)
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn handle_mention_key(&mut self, key: KeyEvent) -> Option<PromptOutcome> {
-        match (key.code, key.modifiers) {
-            (KeyCode::Esc, _) => {
-                self.mention.close();
-                Some(PromptOutcome::PopupCancelled)
-            }
-            (KeyCode::Up, _) => {
-                self.mention.move_cursor(-1);
-                Some(PromptOutcome::Consumed)
-            }
-            (KeyCode::Down, _) => {
-                self.mention.move_cursor(1);
-                Some(PromptOutcome::Consumed)
-            }
-            (KeyCode::Enter, m) if m.is_empty() => {
-                let selected = self.mention.selected();
-                if let Some(candidate) = selected {
-                    self.mention.close();
-                    Some(PromptOutcome::MentionSelected(candidate))
-                } else {
-                    Some(PromptOutcome::Consumed)
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn should_history_nav(&self) -> bool {
-        // Walk history whenever the buffer is empty *or* the cursor is already
-        // inside a recalled entry, *or* the buffer is single-line (so the user
-        // can browse without committing to "open editor" mode).
-        if self.history.current().is_some() {
-            return true;
-        }
-        let lines = self.textarea.lines();
-        lines.len() <= 1
-    }
-
-    fn refresh_popups(&mut self) {
-        let buffer = self.buffer_string();
-
-        // Slash popup driven by the first column of the first line.
-        let first_line = buffer.split('\n').next().unwrap_or("");
-        if super::slash::buffer_triggers_slash(first_line) {
-            if !self.slash.is_open() {
-                self.slash.open();
-            }
-            self.slash
-                .set_query(super::slash::query_from_buffer(first_line));
-        } else if self.slash.is_open() {
-            self.slash.close();
-        }
-
-        // Mention popup driven by the most recent `@…` token (no whitespace
-        // after the `@`).
-        if let Some(off) = buffer.rfind('@') {
-            let tail = &buffer[off + 1..];
-            if !tail.contains(char::is_whitespace) {
-                if !self.mention.is_open() {
-                    self.mention.open(off);
-                }
-                self.mention.set_query(tail);
-            } else if self.mention.is_open() {
-                self.mention.close();
-            }
-        } else if self.mention.is_open() {
-            self.mention.close();
-        }
-    }
-}
-
-fn crossterm_to_input(key: KeyEvent) -> Input {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    let k = match key.code {
-        KeyCode::Char(c) => Key::Char(c),
-        KeyCode::Backspace => Key::Backspace,
-        KeyCode::Enter => Key::Enter,
-        KeyCode::Left => Key::Left,
-        KeyCode::Right => Key::Right,
-        KeyCode::Up => Key::Up,
-        KeyCode::Down => Key::Down,
-        KeyCode::Tab => Key::Tab,
-        KeyCode::Delete => Key::Delete,
-        KeyCode::Home => Key::Home,
-        KeyCode::End => Key::End,
-        KeyCode::PageUp => Key::PageUp,
-        KeyCode::PageDown => Key::PageDown,
-        KeyCode::Esc => Key::Esc,
-        KeyCode::F(n) => Key::F(n),
-        _ => Key::Null,
-    };
-    Input {
-        key: k,
-        ctrl,
-        alt,
-        shift,
-    }
-}
-
-impl Widget for &Prompt {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        // Paint the `›` prefix gutter (column 0) + space (column 1) on every
-        // text row. The first row gets the blue `›` glyph; continuation rows
-        // get blank columns so wrapped/multi-line text aligns under the first
-        // body character.
-        //
-        // We only paint into the gutter if the area is wide enough to leave
-        // at least one body column. Below that, fall back to the legacy
-        // gutter-less render so we don't lose all editable space on a 1-col
-        // sliver.
-        if area.width <= PROMPT_PREFIX_WIDTH {
-            Widget::render(&self.textarea, area, buf);
-            self.render_model_label(area, buf);
-            return;
-        }
-
-        let prefix_style = Style::default().fg(BLUE_PATH);
-        let blank_style = Style::default();
-        let glyph = prompt_glyph();
-        for row_offset in 0..area.height {
-            let y = area.y + row_offset;
-            if row_offset == 0 {
-                buf.set_string(area.x, y, glyph, prefix_style);
-                buf.set_string(area.x + 1, y, " ", blank_style);
-            } else {
-                buf.set_string(area.x, y, "  ", blank_style);
-            }
-        }
-
-        // Render the textarea into the inner area (shifted right by the
-        // prefix width). `tui_textarea` owns its own viewport and cursor
-        // placement; because we shifted `area.x`, the cursor it emits will
-        // also land in the shifted region automatically.
-        let inner = Rect {
-            x: area.x + PROMPT_PREFIX_WIDTH,
-            y: area.y,
-            width: area.width - PROMPT_PREFIX_WIDTH,
-            height: area.height,
-        };
-        Widget::render(&self.textarea, inner, buf);
-
-        self.render_model_label(area, buf);
-    }
-}
-
-impl Prompt {
-    /// Paint the optional right-aligned model label (e.g. `claude-opus-4-7`).
-    ///
-    /// Drawn on the first row of the prompt area, right-justified inside the
-    /// full render rect (not the post-prefix inner rect) so the label hugs the
-    /// far right column regardless of prefix width.
-    fn render_model_label(&self, area: Rect, buf: &mut Buffer) {
-        let Some(label) = &self.model_label else {
-            return;
-        };
-        let label_width = label.chars().count() as u16;
-        if label_width == 0 || label_width >= area.width {
-            return;
-        }
-        let x = area.x + area.width - label_width;
-        // Dim the label so it doesn't compete with the active composer text.
-        buf.set_string(x, area.y, label, Style::default().dim());
-    }
 }
 
 #[cfg(test)]
@@ -626,7 +267,12 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Widget;
     use ratatui::Terminal;
+
+    use crate::theme::codex::BLUE_PATH;
 
     fn render_to_string(prompt: &Prompt, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
