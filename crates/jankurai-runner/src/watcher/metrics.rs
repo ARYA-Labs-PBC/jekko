@@ -260,8 +260,10 @@ mod tests {
 
     #[test]
     fn lanes_per_minute_computes_throughput() {
-        let mut snap = WatcherSnapshot::default();
-        snap.lanes_finished = 6;
+        let mut snap = WatcherSnapshot {
+            lanes_finished: 6,
+            ..Default::default()
+        };
         // 6 lanes in 120s = 3 / min
         assert!((snap.lanes_per_minute(Some(0), 120) - 3.0).abs() < 1e-9);
         // 0 lanes => 0/min

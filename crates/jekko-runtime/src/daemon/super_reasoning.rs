@@ -227,7 +227,8 @@ impl SuperReasoningPlan {
         let (mut indegree, mut children) = self.dependency_maps()?;
         let mut queue: VecDeque<String> = indegree
             .iter()
-            .filter_map(|(id, degree)| (*degree == 0).then(|| id.clone()))
+            .filter(|&(_id, degree)| *degree == 0)
+            .map(|(id, _degree)| id.clone())
             .collect();
         let mut out = Vec::with_capacity(self.phases.len());
         while let Some(id) = queue.pop_front() {
@@ -279,7 +280,8 @@ impl SuperReasoningPlan {
         while !remaining.is_empty() {
             let wave: Vec<String> = remaining
                 .iter()
-                .filter_map(|(id, deps)| deps.is_empty().then(|| id.clone()))
+                .filter(|&(_id, deps)| deps.is_empty())
+                .map(|(id, _deps)| id.clone())
                 .collect();
             if wave.is_empty() {
                 return Err(RuntimeError::invalid(
@@ -351,6 +353,11 @@ impl SuperReasoningPlan {
         blocks
     }
 
+    // `(indegree-by-phase-id, children-by-phase-id)`. clippy::type_complexity
+    // suggests a type alias; we keep the tuple inline because it's used only
+    // by the immediate caller (`validate`) and aliasing would obscure intent
+    // for the (correct) reading "topo data, separated by direction."
+    #[allow(clippy::type_complexity)]
     fn dependency_maps(
         &self,
     ) -> RuntimeResult<(BTreeMap<String, usize>, BTreeMap<String, Vec<String>>)> {
@@ -519,6 +526,13 @@ fn canonical_phases() -> Vec<MacroPhase> {
     ]
 }
 
+// Builder for canonical phase rows. clippy::too_many_arguments fires at 8
+// vs the default 7; introducing a config struct just shifts the noise
+// (every call site would still pass the same 8 fields). The arity is the
+// minimum for the canonical-phases catalog; merging fields would create
+// false correlations (e.g. WriteScope and PhaseSignoffMode aren't paired
+// 1:1 across the 12 phases).
+#[allow(clippy::too_many_arguments)]
 fn phase(
     id: &str,
     name: &str,

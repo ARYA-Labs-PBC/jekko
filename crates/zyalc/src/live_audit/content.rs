@@ -26,7 +26,11 @@ pub(crate) fn audit_forbidden_content(
     packet: Option<&Value>,
     report: &mut LiveAuditReport,
 ) {
-    let mut forbidden = match packet
+    // .unwrap_or_default() is OK here — agent/jankurai-gate-overrides.toml
+    // explicitly waives `unwrap_or_default` evidence on HLT-001:vibe (it's
+    // the canonical Rust idiom and clippy's manual_unwrap_or_default lint
+    // actively requires it). The two contracts agree on this case.
+    let mut forbidden = packet
         .and_then(|packet| packet.pointer("/artifact_contract/forbidden_content"))
         .and_then(Value::as_array)
         .map(|items| {
@@ -35,10 +39,8 @@ pub(crate) fn audit_forbidden_content(
                 .filter_map(Value::as_str)
                 .map(str::to_string)
                 .collect::<Vec<_>>()
-        }) {
-        Some(items) => items,
-        None => Vec::new(),
-    };
+        })
+        .unwrap_or_default();
     forbidden.extend(
         FORBIDDEN_CREDENTIAL_MARKERS
             .iter()
