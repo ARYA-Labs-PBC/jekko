@@ -292,9 +292,10 @@ Status legend: 🟢 landed, 🟡 deferred, 🔴 known issue.
 | FIX-E | 🟢 landed | MODEL_QUALITY_BAND end-to-end | this session |
 | FIX-F | 🟢 landed | GOD-level SUMMARY.json + backfill | this session |
 | FIX-CAND-M | 🟢 landed | manifest→runner→jekko-run quality_band plumbing (heavy MiniRedis unblocker) | this session, `179388e16` |
-| FIX-CAND-N | 🟡 deferred | echo `quality_band` in `model_attempt_outcome.data` so `SUMMARY.json.by_quality_band` populates | ~10 LOC, runtime.rs + reasoning_io.rs |
-| FIX-CAND-O | 🟡 deferred | the post-CAND-M heavy MiniRedis halt at `finalize_master_plan` may benefit from `top10` on the role that drives finalize | investigation needed |
-| FIX-CAND-P | 🟡 deferred | bump `live_call_budget.max_calls` from 12 to ~16 in heavy MiniRedis manifest to exercise deeper progress | 1-line manifest edit |
+| FIX-CAND-N | 🟢 landed | echo `quality_band` in receipt + outcome event; verified `by_quality_band: {top10:3, top20:2}` populates on heavy-mini-qb-R run | this session |
+| FIX-CAND-O | 🟢 resolved | finalize_master_plan uses `ModelTaskKind::StageReduce` → `power` role (already top20); post-band runs show finalize completing with `phase_finalized` event (stage_count=4, task_count=4) | no separate fix needed |
+| FIX-CAND-P | 🟡 deferred | bump `live_call_budget.max_calls` from 12 to ~16 in heavy MiniRedis manifest to exercise deeper progress past verifier | 1-line manifest edit |
+| FIX-CAND-Q | 🟡 new | heavy MiniRedis verifier-stage parse failures (3 retryable_failures, all content but non-JSON). Possibly needs prompt schema tightening OR `top10` band already addresses it (verifier IS top10 today). | investigation |
 | FIX-CAND-L | 🟡 deferred | wire jankurai-runner per phase in port-run --super --live | Future feature |
 | 12-stage walker scaffold | 🔴 known | `port-run --super` doesn't drive real LLM work yet | Tracked by FIX-CAND-L |
 
