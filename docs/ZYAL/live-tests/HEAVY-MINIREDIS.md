@@ -179,3 +179,109 @@ Confirmed: the 12-stage SuperWorkflow walker in its current form is a **plan/sto
 - **FIX-CAND-L:** wire jankurai-runner subprocess per phase in `port-run --super --live`. Feature work.
 
 These join the consolidated queue in `BATCH-zyal-testing-phase2.md`.
+
+---
+
+## Phase H validation (GOD-logging session, 2026-05-27)
+
+After FIX-1..7 + Phase A–F of the move-forward plan landed, this section
+records a real live run that exercises the FULL chain — `users_pool`
+fusion gateway → user_1+user_2 rotation → FIX-1's classifier →
+empty-response tracker → auto-generated SUMMARY.json.
+
+**Run:** `phaseh-live-1779917407` (OpenQG superreasoning,
+`just zyal-superreasoning-live-local`).
+
+**Why OpenQG, not heavy MiniRedis here?** The fusion-side
+`quality_band` filter landed in Phase E (commit `c16933da0`), but the
+**MANIFEST → jankurai-runner → jekko-run → request.extra** plumbing
+that lets a ZYAL stage author *declare* a band per stage is a separate
+sub-feature (the manifest currently has an empty `model_policy.routine: {}`
+stanza — no field is yet parsed). Without that plumbing landed, the
+heavy MiniRedis stage_brainstorm cannot escalate via quality_band on
+its own. The OpenQG recipe was chosen as the Phase H driver because it
+exercises the **same** live chain (users_pool fan-out, FIX-1 classifier,
+empty-response tracker, SUMMARY.json auto-gen) on a pipeline that
+*does* reach end-to-end completion. Once the manifest→runner plumbing
+lands, heavy MiniRedis re-runs become a one-liner.
+
+### Live evidence
+
+| Metric | Value |
+|---|---|
+| `terminal_status` | **`run_finished`** ✅ (auto-emitted via the FIX-1-post finalize hook) |
+| `halt_reason` | **`null`** ✅ |
+| `duration_seconds` | 164 s |
+| Model attempts | 22 |
+| Parsed outcomes | 14 (63.6 % parse rate) |
+| Retryable failures | 8 |
+| Empty responses | **7** (no streak — they were spread across stages, so no halt) |
+| User rotation | **`user_1: 11, user_2: 11`** — perfect 50/50 split |
+| By kind | `hero_generate: 6, verifier: 5, red_team: 4, literature_synthesis: 3, judge_patch: 2, meta_judge: 1, knowledge_curate: 1` |
+| Verifier score | 0.35 → promotion_decision (promoted=false, weighted score 0.732) |
+| Quality index | overall=0.577, frontier=0.577, theory=0.618, rubric=0.725, question=0.839 |
+| **Gateway delta** | +71 requests, +67 success, +4 failures (94.4 % success rate during the run) |
+| **Balancer cursor** | 285 → 307 (+22, exactly matching the attempt count) |
+
+### What this proves about the GOD-logging chain
+
+1. **users_pool fan-out is active and balanced.** Both `user_1` and `user_2` saw 11 attempts each — fusion's per-user round-robin works under load.
+2. **FIX-1 holds at scale.** Of 22 attempts, 14 were classified `parsed` (success), 8 were `retryable_failure`. Zero false-positive `model_failure` classifications — the prior session's misclassification bug stays fixed.
+3. **Empty-response tracker behaves correctly.** 7 attempts had `response_bytes: 0`, but none formed a 3-streak at the same stage, so `EmptyResponseStreak` did NOT fire. The tracker only triggers on the dangerous pattern (consecutive empties at one stage), not noise.
+4. **SUMMARY.json auto-generates at finalize.** The post-FIX-F hook in `hero_judge_runner_finalize::finalize_run` wrote `summary.{json,md}` next to `events.jsonl` automatically — no manual `--summarize` invocation needed.
+5. **Provider-side recovery works.** 4 fusion failures occurred during the run; none halted the pipeline. The cooldown/retry logic in `jnoccio-fusion/src/limits.rs::cooldown_for` continues to do its job under live load.
+
+### Auto-generated `summary.md` excerpt
+
+```
+# Run summary — `phaseh-live-1779917407`
+
+**Schema:** `zyal.run_summary.v1`
+**Pipeline:** `zyal_hero_judge`
+**Terminal status:** `run_finished`
+**Duration:** 164 s
+
+## Model calls
+
+- total_attempts: 22 / parsed: 14 / retryable_failures: 8 / final_blocks: 0 / empty_responses: 7
+- latency p50: 3803 ms, p95: 20217 ms
+- by_user: user_1=11, user_2=11
+- by_provider: jnoccio=22
+- by_kind: hero_generate=6, judge_patch=2, knowledge_curate=1, literature_synthesis=3, meta_judge=1, red_team=4, verifier=5
+- by_state: parsed=14, retryable_failure=8
+
+## Signals
+
+| id | name | count |
+| `judge_patch` | `judge_patch` | 2 |
+| `promotion_decision` | `promotion_decision` | 1 |
+```
+
+The full SUMMARY.json + .md live at `target/zyal/runs/phaseh-live-1779917407/`.
+
+### Heavy MiniRedis follow-up (one more step needed)
+
+To exercise the same chain on the actual heavy MiniRedis brainstorm halt,
+the next session needs to add the manifest-to-request plumbing:
+
+1. `crates/jankurai-runner/src/model_policy.rs` (or similar): parse the
+   `quality_band` value from each stage's `model_policy.<role>` entry.
+2. `crates/jankurai-runner/src/model_client/runtime.rs`: forward the
+   parsed band to the `jekko run` subprocess via env var
+   (e.g. `JEKKO_RUN_QUALITY_BAND=top20`).
+3. `crates/jekko-cli/src/cmd/run.rs` (or `cmd/run/`): read the env var
+   and inject `{"quality_band": "<band>"}` into the OpenAI request's
+   `extra` map.
+
+Estimated size: 30–50 LOC across 2 files. Once landed, the heavy
+MiniRedis manifest can declare:
+
+```yaml
+model_policy:
+  routine: { quality_band: top50 }
+  power:   { quality_band: top20 }   # stage_brainstorm uses this role
+  critic:  { quality_band: top10 }
+```
+
+…and Phase H of THIS plan can be re-run on the MiniRedis pipeline to
+prove the unblock. Tracked as FIX-CAND-M.
