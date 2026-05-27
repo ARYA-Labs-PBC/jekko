@@ -69,11 +69,19 @@ impl McpServerConfig {
     pub const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
     /// Resolve env vars with `${VAR}` / `${VAR:-default}` interpolation.
-    /// Unset vars without defaults become empty strings (with a `warn` log).
+    ///
+    /// Lookup order for each `${VAR}` reference:
+    /// 1. The parent process environment (`std::env::var`).
+    /// 2. The canonical user's `~/.jekko/users/user/llm.env` keys file —
+    ///    so values stored via `jekko keys set` are picked up without
+    ///    requiring the user to also export them into their shell.
+    /// 3. The `:-default` literal from the TOML, if any.
+    /// 4. Empty string, with a `warn` log.
     pub fn resolved_env(&self) -> BTreeMap<String, String> {
+        let keys_fallback = load_keys_fallback();
         self.env
             .iter()
-            .map(|(k, v)| (k.clone(), interpolate_env(v)))
+            .map(|(k, v)| (k.clone(), interpolate_env(v, &keys_fallback)))
             .collect()
     }
 
@@ -108,8 +116,11 @@ pub fn validate_server_name(name: &str) -> McpResult<()> {
     Ok(())
 }
 
-/// Substitute `${VAR}` and `${VAR:-default}` from the parent process env.
-fn interpolate_env(value: &str) -> String {
+/// Substitute `${VAR}` and `${VAR:-default}` from the parent process env,
+/// falling back to jekko's per-user keys file when the parent env doesn't
+/// have the var set. See [`McpServerConfig::resolved_env`] for the full
+/// lookup order.
+fn interpolate_env(value: &str, keys_fallback: &BTreeMap<String, String>) -> String {
     let mut out = String::with_capacity(value.len());
     let bytes = value.as_bytes();
     let mut i = 0;
@@ -123,14 +134,17 @@ fn interpolate_env(value: &str) -> String {
                 };
                 match std::env::var(name) {
                     Ok(v) => out.push_str(&v),
-                    Err(_) => match default {
-                        Some(d) => out.push_str(d),
-                        None => {
-                            tracing::warn!(
-                                var = name,
-                                "mcp config references unset env var; substituting empty string"
-                            );
-                        }
+                    Err(_) => match keys_fallback.get(name) {
+                        Some(v) => out.push_str(v),
+                        None => match default {
+                            Some(d) => out.push_str(d),
+                            None => {
+                                tracing::warn!(
+                                    var = name,
+                                    "mcp config references unset env var; substituting empty string"
+                                );
+                            }
+                        },
                     },
                 }
                 i += 2 + end + 1;
@@ -141,6 +155,44 @@ fn interpolate_env(value: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// Resolve `~/.jekko/` honoring `JEKKO_HOME` (for tests / isolated installs).
+///
+/// Returns `None` only when neither `JEKKO_HOME` nor `HOME` is set — callers
+/// should treat that as "no keys configured", not a hard error.
+fn jekko_home() -> Option<PathBuf> {
+    if let Some(jh) = std::env::var_os("JEKKO_HOME").filter(|s| !s.is_empty()) {
+        return Some(PathBuf::from(jh));
+    }
+    std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .map(|h| PathBuf::from(h).join(".jekko"))
+}
+
+/// Read the canonical user's `llm.env` and return its `KEY=VALUE` pairs.
+///
+/// Returns an empty map when the file is missing, unreadable, or empty —
+/// that's the legitimate "no keys configured yet" state and should not be
+/// surfaced as an error. Comments (`#`) and blank lines are skipped.
+fn load_keys_fallback() -> BTreeMap<String, String> {
+    let Some(home) = jekko_home() else {
+        return BTreeMap::new();
+    };
+    let path = home.join("users").join("user").join("llm.env");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return BTreeMap::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (k, v) = line.split_once('=')?;
+            Some((k.trim().to_string(), v.trim().to_string()))
+        })
+        .collect()
 }
 
 /// Load a config file from disk. Returns an empty config (no servers) when
@@ -408,7 +460,7 @@ mod tests {
     #[test]
     fn interpolate_env_substitutes_set_vars() {
         std::env::set_var("MCP_TEST_VAR_SET", "hello");
-        let out = interpolate_env("prefix-${MCP_TEST_VAR_SET}-suffix");
+        let out = interpolate_env("prefix-${MCP_TEST_VAR_SET}-suffix", &BTreeMap::new());
         assert_eq!(out, "prefix-hello-suffix");
         std::env::remove_var("MCP_TEST_VAR_SET");
     }
@@ -416,15 +468,52 @@ mod tests {
     #[test]
     fn interpolate_env_uses_default_when_unset() {
         std::env::remove_var("MCP_TEST_VAR_UNSET");
-        let out = interpolate_env("v=${MCP_TEST_VAR_UNSET:-fallback}");
+        let out = interpolate_env("v=${MCP_TEST_VAR_UNSET:-fallback}", &BTreeMap::new());
         assert_eq!(out, "v=fallback");
     }
 
     #[test]
     fn interpolate_env_emits_empty_when_unset_no_default() {
         std::env::remove_var("MCP_TEST_VAR_UNSET2");
-        let out = interpolate_env("v=${MCP_TEST_VAR_UNSET2}");
+        let out = interpolate_env("v=${MCP_TEST_VAR_UNSET2}", &BTreeMap::new());
         assert_eq!(out, "v=");
+    }
+
+    #[test]
+    fn interpolate_env_falls_back_to_keys_file_when_process_env_unset() {
+        // Process env has nothing for this var, but the keys-file fallback
+        // does — interpolation should pick up the keys-file value rather
+        // than the `:-default` literal or the empty-string warn path.
+        std::env::remove_var("MCP_TEST_KEYSFILE_ONLY");
+        let keys = BTreeMap::from([(
+            "MCP_TEST_KEYSFILE_ONLY".to_string(),
+            "from-keys".to_string(),
+        )]);
+        let out = interpolate_env("v=${MCP_TEST_KEYSFILE_ONLY}", &keys);
+        assert_eq!(out, "v=from-keys");
+    }
+
+    #[test]
+    fn interpolate_env_process_env_wins_over_keys_file() {
+        // When both sources have the var, the process env takes precedence —
+        // matches the documented lookup order in `resolved_env`.
+        std::env::set_var("MCP_TEST_PRECEDENCE", "from-process-env");
+        let keys = BTreeMap::from([(
+            "MCP_TEST_PRECEDENCE".to_string(),
+            "from-keys-file".to_string(),
+        )]);
+        let out = interpolate_env("v=${MCP_TEST_PRECEDENCE}", &keys);
+        assert_eq!(out, "v=from-process-env");
+        std::env::remove_var("MCP_TEST_PRECEDENCE");
+    }
+
+    #[test]
+    fn interpolate_env_default_used_when_neither_process_nor_keys_file_has_var() {
+        // Both empty; the `:-default` literal still wins over the empty-warn
+        // path. Confirms the new fallback didn't reorder the documented chain.
+        std::env::remove_var("MCP_TEST_NEITHER");
+        let out = interpolate_env("v=${MCP_TEST_NEITHER:-from-default}", &BTreeMap::new());
+        assert_eq!(out, "v=from-default");
     }
 
     #[test]
@@ -440,6 +529,73 @@ mod tests {
         let resolved = cfg.resolved_env();
         assert_eq!(resolved.get("TOK").unwrap(), "xyz");
         std::env::remove_var("MCP_TEST_TOKEN");
+    }
+
+    #[test]
+    fn resolved_env_picks_up_keys_file_when_process_env_unset() {
+        // Stand up a tiny fake `~/.jekko/users/user/llm.env` via `JEKKO_HOME`,
+        // make sure the resolver actually reads it when spawning would call
+        // `resolved_env()`. This is the real-world `jekko mcp status` path:
+        // a fresh shell without `.env` sourced should still resolve tokens
+        // the user already set via `jekko keys set`.
+        let tmp = TempDir::new().unwrap();
+        let user_dir = tmp.path().join("users").join("user");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(
+            user_dir.join("llm.env"),
+            "# example llm.env\nMCP_TEST_KEYSFILE_RESOLVED=from-keys-file\n",
+        )
+        .unwrap();
+        std::env::remove_var("MCP_TEST_KEYSFILE_RESOLVED");
+        std::env::set_var("JEKKO_HOME", tmp.path());
+
+        let cfg = McpServerConfig {
+            transport: "stdio".into(),
+            command: "echo".into(),
+            args: vec![],
+            env: BTreeMap::from([(
+                "TOK".into(),
+                "${MCP_TEST_KEYSFILE_RESOLVED}".into(),
+            )]),
+            timeouts: BTreeMap::new(),
+        };
+        let resolved = cfg.resolved_env();
+
+        std::env::remove_var("JEKKO_HOME");
+        assert_eq!(resolved.get("TOK").unwrap(), "from-keys-file");
+    }
+
+    #[test]
+    fn load_keys_fallback_skips_comments_and_blank_lines() {
+        let tmp = TempDir::new().unwrap();
+        let user_dir = tmp.path().join("users").join("user");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(
+            user_dir.join("llm.env"),
+            "# header comment\n\nHF_TOKEN=hf_xxx\n   # indented comment\nLINEAR_API_KEY=lin_yyy\n",
+        )
+        .unwrap();
+        std::env::set_var("JEKKO_HOME", tmp.path());
+        let keys = load_keys_fallback();
+        std::env::remove_var("JEKKO_HOME");
+        assert_eq!(keys.get("HF_TOKEN").map(|s| s.as_str()), Some("hf_xxx"));
+        assert_eq!(
+            keys.get("LINEAR_API_KEY").map(|s| s.as_str()),
+            Some("lin_yyy")
+        );
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[test]
+    fn load_keys_fallback_empty_when_file_missing() {
+        // Point JEKKO_HOME at a directory with no users/user/llm.env. Should
+        // return empty rather than erroring — matches the documented
+        // "no keys configured yet" state.
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("JEKKO_HOME", tmp.path());
+        let keys = load_keys_fallback();
+        std::env::remove_var("JEKKO_HOME");
+        assert!(keys.is_empty());
     }
 
     #[test]
