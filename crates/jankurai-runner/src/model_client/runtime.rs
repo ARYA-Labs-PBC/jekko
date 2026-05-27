@@ -66,6 +66,7 @@ impl JekkoRuntimeModelClient {
         ModelRouteRecord {
             provider: self.provider.clone().or(policy_route.provider),
             model: self.model_override.clone().or(policy_route.model),
+            quality_band: policy_route.quality_band,
         }
     }
 
@@ -147,6 +148,20 @@ impl ModelClient for JekkoRuntimeModelClient {
         }
         if let Some(selected_model) = route.model.as_deref() {
             command.arg("--model").arg(selected_model);
+        }
+        // Forward the per-stage quality band, if declared on the active
+        // model_policy role. `jekko run` reads this env var and injects
+        // {"quality_band": "<band>"} into the OpenAI request's extra map,
+        // which fusion's RequestProfile::from_request lifts into the
+        // routing filter. End-to-end chain:
+        //   manifest.model_policy.<role>.quality_band
+        //     → ModelRouteRecord.quality_band
+        //     → JEKKO_RUN_QUALITY_BAND env on jekko run subprocess
+        //     → request.extra.quality_band on the OpenAI call
+        //     → RequestProfile.quality_band in jnoccio-fusion
+        //     → select_without_replacement filter pass.
+        if let Some(band) = route.quality_band.as_deref() {
+            command.env("JEKKO_RUN_QUALITY_BAND", band);
         }
         command.arg(prompt);
         let result = output_with_timeout(command, model_call_timeout());

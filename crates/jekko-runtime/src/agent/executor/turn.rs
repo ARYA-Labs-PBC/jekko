@@ -109,7 +109,7 @@ impl AgentExecutor for ProviderAgentExecutor {
             json!({ "role": "system", "content": system }),
             json!({ "role": "user", "content": request.parsed_prompt.text }),
         ];
-        let provider_options = transform_provider_options(
+        let mut provider_options = transform_provider_options(
             &model,
             transform_options(OptionsInput {
                 model: &model,
@@ -117,6 +117,17 @@ impl AgentExecutor for ProviderAgentExecutor {
                 provider_options: None,
             }),
         );
+        // ZYAL `quality_band` opt-in: jankurai-runner sets the env var
+        // per stage from the active model_policy.<role>.quality_band.
+        // Flow it through provider_options as a top-level key; the
+        // OpenAI body builder copies it into the request body, and
+        // fusion's RequestProfile reads it from `extra`.
+        if let Ok(band) = std::env::var("JEKKO_RUN_QUALITY_BAND") {
+            let trimmed = band.trim();
+            if !trimmed.is_empty() {
+                provider_options.insert("quality_band".into(), json!(trimmed));
+            }
+        }
 
         let mut round = 0usize;
         let mut final_result = AgentTurnResult {
