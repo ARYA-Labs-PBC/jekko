@@ -223,10 +223,18 @@ RUN_EXIT=0
 
 run_r0() {
   log "r0: cargo test --workspace --locked --no-fail-fast"
-  /usr/bin/time -v -o "$BATCH_ABS/runs/r0-smoke.time" \
-    cargo test --workspace --locked --no-fail-fast \
-      > "$BATCH_ABS/runs/r0-smoke.stdout" \
-      2> "$BATCH_ABS/runs/r0-smoke.stderr"
+  # JEKKO_BIN is exported for the live recipes (r1+); but it also triggers
+  # the tuiwright baseline_matrix.rs capture suite which drives the
+  # reference binary across 5 terminal sizes and runs for minutes — not
+  # what a no-LLM smoke lane is meant to do. The header comment in that
+  # test reads: "When unset the tests skip silently." Honor it here.
+  (
+    unset JEKKO_BIN
+    /usr/bin/time -v -o "$BATCH_ABS/runs/r0-smoke.time" \
+      cargo test --workspace --locked --no-fail-fast \
+        > "$BATCH_ABS/runs/r0-smoke.stdout" \
+        2> "$BATCH_ABS/runs/r0-smoke.stderr"
+  )
   RUN_EXIT=$?
 }
 
