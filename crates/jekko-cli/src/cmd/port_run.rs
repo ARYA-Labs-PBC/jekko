@@ -286,8 +286,21 @@ fn run_status(args: &PortRunArgs, run_id: &str) -> Result<()> {
     let phase_rows = phase_stmt
         .query_map([run_id], |row| {
             let depends_json: String = row.get(3)?;
-            let depends_on: Vec<String> =
-                serde_json::from_str::<Vec<String>>(&depends_json).unwrap_or_default();
+            // A persisted phase row should always carry a valid JSON array
+            // for `depends_on`. If parse fails, treat it as a corruption
+            // signal (empty depends list = "no dependencies") and surface
+            // it via stderr rather than silently default. Strict typed
+            // state, no fallback-soup.
+            let depends_on: Vec<String> = match serde_json::from_str::<Vec<String>>(&depends_json) {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!(
+                        "port-run --status: phase {phase} has malformed depends_on JSON: {err}",
+                        phase = row.get::<_, String>(0).unwrap_or_else(|_| "?".to_string()),
+                    );
+                    Vec::new()
+                }
+            };
             Ok(PhaseStatusRow {
                 phase_id: row.get(0)?,
                 name: row.get(1)?,

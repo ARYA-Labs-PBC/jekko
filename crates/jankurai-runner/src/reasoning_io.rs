@@ -300,8 +300,6 @@ fn model_event_payload(
         Some(retry_count) => retry_count,
         None => attempt.saturating_sub(1),
     };
-    let budget_used = receipt.budget_used.unwrap_or_default();
-    let budget_remaining = receipt.budget_remaining.unwrap_or_default();
     json!({
         "kind": receipt.kind,
         "provider": receipt.provider,
@@ -315,8 +313,8 @@ fn model_event_payload(
         "selected_credential_user_id": receipt.selected_credential_user_id,
         "credential_user_id": receipt.credential_user_id,
         "retry_count": retry_count,
-        "budget_used": budget_used,
-        "budget_remaining": budget_remaining,
+        "budget_used": receipt.budget_used,
+        "budget_remaining": receipt.budget_remaining,
         "quality_band": receipt.quality_band,
     })
 }

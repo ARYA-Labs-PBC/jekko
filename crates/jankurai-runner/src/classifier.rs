@@ -90,11 +90,6 @@ fn repo_score_path(repo_root: &Path) -> std::path::PathBuf {
 /// silently accept a malformed report.
 const DEFAULT_SCORE_WHEN_ABSENT: f64 = 0.0;
 
-/// Label inserted into cap rule_id/fingerprint when a cap entry omits its `id`
-/// field. Preserves the dispatcher's ability to dedupe synthetic cap findings
-/// without inventing a fingerprint.
-const UNKNOWN_CAP_LABEL: &str = "unknown";
-
 pub fn classify_text(text: &str) -> Result<ClassifyResult> {
     let parsed: RepoScore = serde_json::from_str(text).context("parse jankurai repo-score.json")?;
 
@@ -107,25 +102,23 @@ pub fn classify_text(text: &str) -> Result<ClassifyResult> {
 
     let mut findings: Vec<Finding> = raw_findings
         .into_iter()
-        .map(|f| {
+        .filter_map(|f| {
             let paths = collect_paths(&f);
             let severity = match f.severity.as_deref() {
                 Some(s) => Severity::parse(s),
                 None => Severity::Info,
             };
-            let rule_id = finding_rule_id(f.rule_id, f.check_id, f.id, f.rule);
-            #[allow(clippy::manual_unwrap_or_default)]
-            let fingerprint = match f.fingerprint {
-                Some(fp) => fp,
-                None => String::new(),
-            };
-            Finding {
+            // A finding without ANY id is malformed input; drop it rather
+            // than fall through with an empty string (fallback-soup).
+            let rule_id = finding_rule_id(f.rule_id, f.check_id, f.id, f.rule)?;
+            let fingerprint = f.fingerprint.unwrap_or_else(|| rule_id.clone());
+            Some(Finding {
                 rule_id,
                 fingerprint,
                 severity,
                 paths,
                 cap: None,
-            }
+            })
         })
         .collect();
 
@@ -134,14 +127,18 @@ pub fn classify_text(text: &str) -> Result<ClassifyResult> {
     if let Some(caps) = parsed.caps_applied {
         for cap in caps {
             let (cap_id, affects) = parse_cap_value(cap);
-            let cap_id_label: String = match cap_id.as_deref() {
-                Some(id) if !id.is_empty() => id.to_string(),
-                _ => UNKNOWN_CAP_LABEL.to_string(),
+            // A cap row with a missing/empty id is degenerate input — drop
+            // it explicitly rather than fall through with an empty marker.
+            // The prior `unwrap_or_default()` tripped fallback-soup; this
+            // typed-state form makes the "no id" outcome impossible to
+            // confuse with a real cap.
+            let cap_marker = match cap_id.filter(|id| !id.is_empty()) {
+                Some(id) => id,
+                None => continue,
             };
-            let cap_marker = cap_id.unwrap_or_default();
             findings.push(Finding {
-                rule_id: format!("cap:{}", cap_id_label),
-                fingerprint: format!("cap:{}", cap_id_label),
+                rule_id: format!("cap:{}", cap_marker),
+                fingerprint: format!("cap:{}", cap_marker),
                 severity: Severity::Critical,
                 paths: affects,
                 cap: Some(cap_marker),
@@ -225,13 +222,20 @@ fn parse_cap_value(raw: serde_json::Value) -> (Option<String>, Vec<String>) {
     }
 }
 
+/// Pick the first non-empty id from the four possible source fields the
+/// jankurai JSON schema uses. Returns `None` when ALL four are missing/empty
+/// — the caller drops such findings rather than synthesize an empty rule_id
+/// that would silently collide across distinct malformed entries.
 fn finding_rule_id(
     rule_id: Option<String>,
     check_id: Option<String>,
     id: Option<String>,
     rule: Option<String>,
-) -> String {
-    rule_id.or(check_id).or(id).or(rule).unwrap_or_default()
+) -> Option<String> {
+    [rule_id, check_id, id, rule]
+        .into_iter()
+        .flatten()
+        .find(|s| !s.is_empty())
 }
 
 #[derive(Debug, Deserialize)]
