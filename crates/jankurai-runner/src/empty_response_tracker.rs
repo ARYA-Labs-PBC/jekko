@@ -148,6 +148,7 @@ mod tests {
             selected_credential_user_id: Some(user.into()),
             credential_user_id: Some(user.into()),
             retry_count: Some(0),
+            quality_band: None,
         }
     }
 

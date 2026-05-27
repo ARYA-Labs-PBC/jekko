@@ -262,6 +262,10 @@ impl ModelClient for JekkoRuntimeModelClient {
                         .and_then(serde_json::Value::as_u64)
                         .map(|value| value as usize)
                         .or(Some(0)),
+                    // Echo the declared band back so the outcome event payload
+                    // carries it; SUMMARY.json.model_calls.by_quality_band
+                    // aggregates over this field.
+                    quality_band: route.quality_band.clone(),
                 })
             }
             Ok(None) => Ok(ModelCallReceipt {
@@ -285,6 +289,7 @@ impl ModelClient for JekkoRuntimeModelClient {
                 selected_credential_user_id: None,
                 credential_user_id: None,
                 retry_count: Some(0),
+            quality_band: None,
             }),
             Err(err) => Ok(ModelCallReceipt {
                 id: receipt_id("live"),
@@ -304,6 +309,7 @@ impl ModelClient for JekkoRuntimeModelClient {
                 selected_credential_user_id: None,
                 credential_user_id: None,
                 retry_count: Some(0),
+            quality_band: None,
             }),
         }
     }

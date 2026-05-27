@@ -140,6 +140,7 @@ fn model_outcome_payload(
         "retry_count": receipt.retry_count,
         "budget_used": receipt.budget_used,
         "budget_remaining": receipt.budget_remaining,
+        "quality_band": receipt.quality_band,
     })
 }
 

@@ -317,6 +317,7 @@ fn model_event_payload(
         "retry_count": retry_count,
         "budget_used": budget_used,
         "budget_remaining": budget_remaining,
+        "quality_band": receipt.quality_band,
     })
 }
 
