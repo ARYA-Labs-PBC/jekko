@@ -39,6 +39,7 @@ pub mod reasoning;
 pub mod reasoning_benchmark;
 pub mod reasoning_io;
 pub mod reasoning_runner;
+pub mod run_summary;
 pub mod receipts;
 pub mod repo_graph;
 pub mod rollback;

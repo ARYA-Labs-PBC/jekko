@@ -110,6 +110,14 @@ pub struct PortRunArgs {
         default_value_t = 300
     )]
     pub per_phase_timeout_secs: u64,
+
+    /// Backfill `summary.json` + `summary.md` for an existing run directory
+    /// without touching the supervisor store or any live state. Reads
+    /// `target/zyal/runs/<RUN_ID>/events.jsonl` and adjacent artifacts and
+    /// writes the GOD-level run summary in place. Mutually exclusive with
+    /// `--super`/`--resume`/`--status`.
+    #[arg(long = "summarize", value_name = "RUN_ID")]
+    pub summarize: Option<String>,
 }
 
 /// Entry point invoked from `main.rs`.
@@ -120,6 +128,10 @@ pub fn run(_global: &GlobalOpts, args: &PortRunArgs) -> Result<()> {
     // so we let it through without forcing operators to set the live env.
     if args.live && args.status.is_none() {
         gate_live_mode()?;
+    }
+
+    if let Some(run_id) = args.summarize.as_deref() {
+        return run_summarize(args, run_id);
     }
 
     if let Some(run_id) = args.status.as_deref() {
@@ -174,22 +186,48 @@ fn validate_arg_combination(args: &PortRunArgs) -> Result<()> {
         args.super_manifest.is_some(),
         args.resume.is_some(),
         args.status.is_some(),
+        args.summarize.is_some(),
     ]
     .iter()
     .filter(|x| **x)
     .count();
     if mode_count == 0 {
-        bail!("provide one of --super <MANIFEST>, --resume <RUN_ID>, or --status <RUN_ID>");
+        bail!(
+            "provide one of --super <MANIFEST>, --resume <RUN_ID>, --status <RUN_ID>, or --summarize <RUN_ID>"
+        );
     }
     if mode_count > 1 {
-        bail!("--super, --resume, and --status are mutually exclusive");
+        bail!("--super, --resume, --status, and --summarize are mutually exclusive");
     }
-    if args.dry_run && args.resume.is_some() {
-        bail!("--dry-run is mutually exclusive with --resume");
+    if args.dry_run && (args.resume.is_some() || args.status.is_some() || args.summarize.is_some()) {
+        bail!("--dry-run is only valid with --super");
     }
-    if args.dry_run && args.status.is_some() {
-        bail!("--dry-run is mutually exclusive with --status");
+    Ok(())
+}
+
+/// Backfill summary.{json,md} for an existing run dir. Read-only against
+/// the supervisor store; reads only events.jsonl + adjacent artifacts and
+/// writes summary.json/summary.md in-place.
+fn run_summarize(_args: &PortRunArgs, run_id: &str) -> Result<()> {
+    use std::path::PathBuf;
+    let run_dir: PathBuf = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("target/zyal/runs")
+        .join(run_id);
+    if !run_dir.exists() {
+        bail!(
+            "run dir not found: {}. Did you mean a different run id?",
+            run_dir.display()
+        );
     }
+    let summary = jankurai_runner::run_summary::build_and_write(&run_dir)?;
+    println!(
+        "{{\"run_id\":\"{}\",\"terminal_status\":\"{}\",\"summary_json\":\"{}\",\"summary_md\":\"{}\"}}",
+        summary.run_id,
+        summary.terminal_status,
+        run_dir.join("summary.json").display(),
+        run_dir.join("summary.md").display(),
+    );
     Ok(())
 }
 
