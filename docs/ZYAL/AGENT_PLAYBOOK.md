@@ -295,7 +295,8 @@ Status legend: 🟢 landed, 🟡 deferred, 🔴 known issue.
 | FIX-CAND-N | 🟢 landed | echo `quality_band` in receipt + outcome event; verified `by_quality_band: {top10:3, top20:2}` populates on heavy-mini-qb-R run | this session |
 | FIX-CAND-O | 🟢 resolved | finalize_master_plan uses `ModelTaskKind::StageReduce` → `power` role (already top20); post-band runs show finalize completing with `phase_finalized` event (stage_count=4, task_count=4) | no separate fix needed |
 | FIX-CAND-P | 🟡 deferred | bump `live_call_budget.max_calls` from 12 to ~16 in heavy MiniRedis manifest to exercise deeper progress past verifier | 1-line manifest edit |
-| FIX-CAND-Q | 🟡 new | heavy MiniRedis verifier-stage parse failures (3 retryable_failures, all content but non-JSON). Possibly needs prompt schema tightening OR `top10` band already addresses it (verifier IS top10 today). | investigation |
+| FIX-CAND-Q | 🟢 landed | heavy MiniRedis verifier-stage parse failures: tightened verifier prompt to strict JSON schema in finalize.rs. | this session |
+| Caps/findings sweep | 🟢 partial | raw 88→91, caps 4→3, findings 7→4: ci-bad-behavior CLEARED, 2 fallback-soup sites + sentinel restructured + apps/web evidence manifest added. fallback-soup-in-product-code cap (70) holds the floor — 55+ remaining sites mostly Rust idiom; clearing requires bulk sweep. agent-tool-supply-chain-gap + missing-rendered-ux-qa-lane caps are jankurai detector-binding issues. | this session |
 | FIX-CAND-L | 🟡 deferred | wire jankurai-runner per phase in port-run --super --live | Future feature |
 | 12-stage walker scaffold | 🔴 known | `port-run --super` doesn't drive real LLM work yet | Tracked by FIX-CAND-L |
 
