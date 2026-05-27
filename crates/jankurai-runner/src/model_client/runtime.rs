@@ -156,12 +156,25 @@ impl ModelClient for JekkoRuntimeModelClient {
                 let value = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
+                let json_success = value
+                    .as_ref()
+                    .and_then(|value| value.get("success"))
+                    .and_then(serde_json::Value::as_bool);
                 let error_text = value
                     .as_ref()
                     .and_then(|value| value.get("error"))
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string)
                     .or_else(|| {
+                        // The inner `jekko run --json` subprocess emits a structured
+                        // payload with an explicit `"success": true` field on healthy
+                        // completions. Successful runs may still write log lines to
+                        // stderr (tracing init, session boot, zyalc compile chatter).
+                        // Honor the self-report instead of treating any stderr line
+                        // as evidence of failure.
+                        if json_success == Some(true) {
+                            return None;
+                        }
                         let trimmed = if stderr.trim().is_empty() {
                             stdout.trim()
                         } else {
