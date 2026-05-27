@@ -189,7 +189,7 @@ mod tests {
     fn init_run_persists_manifest() {
         let store = SupervisorStore::open_in_memory().unwrap();
         let manifest = sample_manifest();
-        let run_id = store.init_run(&manifest).expect("init_run");
+        let run_id = store.init_run(&manifest, None).expect("init_run");
         assert!(run_id.starts_with("wf-store-test-"));
 
         // Every phase is seeded pending.
@@ -216,10 +216,29 @@ mod tests {
     }
 
     #[test]
+    fn init_run_honors_requested_id() {
+        let store = SupervisorStore::open_in_memory().unwrap();
+        let manifest = sample_manifest();
+        let run_id = store
+            .init_run(&manifest, Some("my-explicit-rid"))
+            .expect("init_run with requested id");
+        assert_eq!(run_id, "my-explicit-rid");
+
+        // Phases still seeded under the requested id.
+        for phase in &manifest.phases {
+            let status = store
+                .phase_status(&run_id, &phase.id)
+                .expect("query phase status")
+                .expect("phase row must exist");
+            assert_eq!(status, PhaseStatus::Pending);
+        }
+    }
+
+    #[test]
     fn record_phase_status_roundtrips() {
         let store = SupervisorStore::open_in_memory().unwrap();
         let manifest = sample_manifest();
-        let run_id = store.init_run(&manifest).unwrap();
+        let run_id = store.init_run(&manifest, None).unwrap();
 
         store
             .record_phase_status(&run_id, "p00", PhaseStatus::Running, "kicked off")
@@ -289,7 +308,7 @@ mod tests {
     fn completed_phase_ids_returns_correct_set() {
         let store = SupervisorStore::open_in_memory().unwrap();
         let manifest = sample_manifest();
-        let run_id = store.init_run(&manifest).unwrap();
+        let run_id = store.init_run(&manifest, None).unwrap();
 
         // Nothing complete or blocked yet.
         assert!(store.completed_phase_ids(&run_id).unwrap().is_empty());

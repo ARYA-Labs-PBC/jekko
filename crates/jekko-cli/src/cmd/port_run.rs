@@ -193,28 +193,16 @@ fn validate_arg_combination(args: &PortRunArgs) -> Result<()> {
     Ok(())
 }
 
-/// Initialize a fresh run row from `manifest`. If `requested` is `Some`, the
-/// caller supplied an explicit run id; we still let the store synthesize the
-/// derived id and only log the requested value as a tag in `summary`.
-/// Honoring an explicit `--run-id` end-to-end requires `store::init_run` to
-/// accept an override — a follow-up. The scaffold returns the store's id so
-/// the durable schema invariants stay intact.
+/// Initialize a fresh run row from `manifest`. Honors an explicit `--run-id`
+/// when supplied; otherwise the store derives `{manifest.id}-{millis}`.
 fn init_or_use_run_id(
     store: &SupervisorStore,
     manifest: &SuperWorkflow,
     requested: Option<&str>,
 ) -> Result<String> {
-    let run_id = store
-        .init_run(manifest)
-        .context("init supervisor run row")?;
-    if let Some(req) = requested {
-        if req != run_id {
-            eprintln!(
-                "jekko port-run: requested run id `{req}` not honored; using store-derived `{run_id}`"
-            );
-        }
-    }
-    Ok(run_id)
+    store
+        .init_run(manifest, requested)
+        .context("init supervisor run row")
 }
 
 fn emit_dry_run_plan(manifest: &SuperWorkflow, args: &PortRunArgs) -> Result<()> {
