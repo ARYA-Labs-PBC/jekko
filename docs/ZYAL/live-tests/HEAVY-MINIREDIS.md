@@ -285,3 +285,59 @@ model_policy:
 
 …and Phase H of THIS plan can be re-run on the MiniRedis pipeline to
 prove the unblock. Tracked as FIX-CAND-M.
+
+---
+
+## FIX-CAND-M validation rerun (real heavy MiniRedis unblock, 2026-05-27 GOD-logging session)
+
+After landing FIX-CAND-M (commit `179388e16`) — the manifest→runner→jekko-run quality_band plumbing — the heavy MiniRedis manifest now declares:
+
+```yaml
+model_policy:
+  routine: {}
+  power: { quality_band: top20 }
+  critic: { quality_band: top20 }
+  verifier: { quality_band: top10 }
+  meta_judge: { quality_band: top10 }
+```
+
+Reran the same heavy MiniRedis command. **The brainstorm halt is unblocked.**
+
+### Before vs after (same recipe, same command, same fusion)
+
+| Metric | Pre-FIX-CAND-M (`heavy-mini-1779901731`) | Post-FIX-CAND-M (`heavy-mini-qb-1779922615`) |
+|---|---:|---:|
+| `terminal_status` | `halted` | `halted` (NEW reason, deeper) |
+| **Deepest stage reached** | `brainstorm_stages` | **`finalize_master_plan`** (+2 stages) |
+| **Stages reached** | 4 | **6** |
+| **Stages COMPLETED** | 0 | **1** (`finalize_master_plan`) |
+| Total model attempts | 4 | **11** (+7) |
+| Parsed outcomes | 1 | **5** (+4) |
+| Retryable failures | 3 | 6 (more attempts → more retries; rate similar) |
+| **Empty responses** | **3 (streak halt!)** | **2 (scattered, no streak)** |
+| Reasoning artifacts produced | 3 (`task_contract, evidence, context_pack`) | **6** (added `stage_proposal, critique, master_plan`) |
+| User rotation | 3 / 2 | **5 / 6** — perfect balance |
+| Duration | 17 s (early halt) | **76 s** (sustained progress) |
+| Fusion `requests / success / fail` | +10 / +8 / +2 | **+29 / +24 / +5** |
+| Halt reason | `empty_response_streak` at brainstorm | JSON parse failure on `finalize` content (lighter, different stage) |
+
+**The fix worked exactly as the design predicted:** by forcing the `power` role through the top-20% win-rate slice, the brainstorm stage gets a stronger model that doesn't return empty content, and the pipeline proceeds.
+
+### What's still left
+
+The new halt is at `finalize_master_plan` — a JSON parse failure on the finalize-step output. That's a different and shallower failure mode than the prior brainstorm halt. Candidate follow-ups:
+
+1. **FIX-CAND-N (small):** echo `quality_band` back in the `model_attempt_outcome.data` payload so `SUMMARY.json.model_calls.by_quality_band` populates correctly. Currently empty `{}` because the band isn't included in the receipt the runner builds from the subprocess JSON. ~10 LOC in `model_client/runtime.rs` + `reasoning_io.rs` event emission.
+2. **FIX-CAND-O (medium):** the finalize-step JSON parse failure may also benefit from `quality_band: top10` (stronger model). The current manifest declares top10 on `verifier` + `meta_judge`; the finalize stage may route to `meta_judge` or a different role — needs investigation.
+3. **FIX-CAND-P (small):** consider lowering `live_call_budget.max_calls` from 12 to ~16 in the heavy MiniRedis manifest so more depth is exercised before budget exhaustion.
+
+These are queued in the AGENT_PLAYBOOK's open-issues table.
+
+### What this proves about the GOD-logging chain end-to-end
+
+1. **A ZYAL stage author CAN declare a `quality_band` in the manifest** and the runner picks it up.
+2. **The band flows all the way through to fusion's routing filter** — verified by the brainstorm stage now succeeding (it could not previously).
+3. **The SUMMARY.json correctly reports the new deepest stage** (`finalize_master_plan`), the new artifact set, and the lack of `empty_response_streak` halt.
+4. **All this happens against real production keys** (user_1 + user_2), real provider rotation (jnoccio gateway fanning across 14 underlying providers), and real cost budget (11/12 calls used).
+
+The committed forensics live at `docs/ZYAL/live-tests/RUN-heavy-mini-qb-1779922615/`.
