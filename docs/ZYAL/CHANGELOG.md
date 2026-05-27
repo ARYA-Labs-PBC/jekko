@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+### 2026-05-27 - zyal-testing campaign + GOD-level logging follow-up
+
+Live-test campaign on the `zyal-testing` branch validated that ZYAL
+pipelines (advanced-reasoning, OpenQG superreasoning, MiniRedis port,
+12-stage SuperWorkflow plan-walk) run end-to-end through `jnoccio-fusion`
+with `user_1`+`user_2` rotation and recover from upstream failures.
+Seven surgical fixes landed; jankurai score floor `70/88/4/7` held
+across every commit.
+
+**Fixes (FIX-1..7):**
+
+- **FIX-1** `jankurai-runner/src/model_client/runtime.rs`: honor inner
+  `jekko run` JSON `"success": true` flag. Stops misclassifying every
+  live model call as failed because stderr was non-empty.
+- **FIX-2** `scripts/zyal-live-batch.sh`: default fusion to
+  `JNOCCIO_UPSTREAM_KEY_SOURCE=users_pool` when starting. Prior batches
+  silently ran the legacy single-pool path.
+- **FIX-3** `zyalc::live_audit`: accept `receipts >= outcomes` (failed
+  retries write a receipt but no `model_outcome` event). The prior
+  `==` invariant was pre-FIX-1.
+- **FIX-4** `zyalc::compile`: status messages to stderr, not stdout.
+  Stops chatter leaking into JSON consumers downstream of
+  `jekko port-run --dry-run`.
+- **FIX-5** `scripts/zyal-live-batch.sh::run_r0`: `unset JEKKO_BIN`
+  for the cargo smoke lane. Workaround for the tuiwright matrix tests
+  hijacking workspace smoke — proper fix in the follow-up session.
+- **FIX-6** `scripts/zyal-live-report.sh`: balancer-no-rotation signal
+  distinguishes plan-walk no-op (0 events) from real cursor stall.
+- **FIX-7** **BREAKING** —
+  `zyal-supervisor::SupervisorStore::init_run` now takes
+  `requested_id: Option<&str>` so `jekko port-run --super --run-id <foo>`
+  honors `<foo>` end-to-end. External vendors must update.
+
+**Validation:**
+
+- `super-r3-serial` reached `promotion_decision` + `RUN_FINISHED` with
+  `verify-replay` passing 5/5 gates.
+- Confirmatory rerun (post-FIX-1..7) produced 14 parsed model outcomes
+  from 15 attempts (93% parse rate); requested run id honored
+  end-to-end.
+- 14 distinct upstream providers exercised in `users_pool` mode;
+  ~87% aggregate gateway success rate.
+- 2 `fusion_model_win_total` increments captured (nvidia, groq) —
+  competitive evidence collecting at `routing.fusion_sample_rate: 0.1`.
+
+**Deferred:**
+
+- `MODEL_QUALITY_BAND` (design at `docs/ZYAL/MODEL_QUALITY_BAND.md`)
+  — request-side knob to constrain selection by win-rate percentile.
+  Heavy MiniRedis halts on empty `stage_brainstorm` responses; the
+  band feature is the load-bearing unblocker.
+- 12-stage SuperWorkflow walker per-phase LLM work (currently scaffold
+  via `port-run --super`).
+
 ### 2026-05-26 - Super-Agent operator surfaces (Phase H wave)
 
 - `jekko port-run --super <manifest>` integration wrapper: compiles a
