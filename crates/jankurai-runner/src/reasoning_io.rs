@@ -56,6 +56,7 @@ pub(crate) async fn complete_structured_model_only(
     let mut queued_events: Vec<(EventKind, serde_json::Value)> = Vec::new();
     let mut intermediate_receipts: Vec<ModelCallReceipt> = Vec::new();
     let mut last_error: Option<String> = None;
+    let mut empty_tracker = crate::empty_response_tracker::EmptyResponseTracker::new(crate::model_client::kind_label(kind));
     for attempt in 1..=3 {
         queued_events.push((
             EventKind::ModelAttempt,
@@ -65,6 +66,7 @@ pub(crate) async fn complete_structured_model_only(
             }),
         ));
         let receipt = model_client.complete(kind, &prompt, &repo).await?;
+        empty_tracker.record_into_queue(&receipt, &mut queued_events);
         if receipt.budget_used.is_some() || receipt.budget_remaining.is_some() {
             queued_events.push((
                 EventKind::LiveBudget,
