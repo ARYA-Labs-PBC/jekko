@@ -88,7 +88,18 @@ if ls "$BATCH_ABS"/balancer/before-*.sql >/dev/null 2>&1; then
     [[ -z "$before_cursor" ]] && before_cursor="—"
     [[ -z "$after_cursor" ]] && after_cursor="—"
     moved="moved"
-    [[ "$before_cursor" = "$after_cursor" ]] && moved="STALLED"
+    if [[ "$before_cursor" = "$after_cursor" ]]; then
+      # If the run produced zero events (e.g. r6 plan-walk / no-LLM
+      # scaffold), the cursor SHOULD stay put — no model attempts means
+      # no cursor advance is expected. Distinguish that legitimate
+      # no-op from a real balancer stall.
+      ev_file="$BATCH_ABS/runs/$rid.events.jsonl"
+      if [[ -s "$ev_file" ]]; then
+        moved="STALLED"
+      else
+        moved="no-op (0 events)"
+      fi
+    fi
     slot_rows+="| $rid | \`$before_cursor\` | \`$after_cursor\` | $moved |"$'\n'
   done < <(ls -1 "$BATCH_ABS"/balancer/before-*.sql 2>/dev/null)
 fi
