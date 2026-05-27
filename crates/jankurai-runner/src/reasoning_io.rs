@@ -1,9 +1,14 @@
 //! I/O helpers for advanced reasoning runs.
+//!
+//! This module owns the model-call retry loop (`complete_structured*`) and
+//! the related event-payload helpers. Artifact construction + persistence
+//! live in [`crate::reasoning_artifacts`]; JSON extraction lives in
+//! [`crate::reasoning_parse`]. Re-exported here so existing call sites
+//! that imported from `reasoning_io::*` keep compiling unchanged.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use jekko_store::db::Db;
 use serde_json::json;
 
@@ -11,11 +16,13 @@ use crate::daemon_store;
 use crate::events::{EventKind, EventSink};
 use crate::model_client::{ModelCallReceipt, ModelClient};
 use crate::model_policy::ModelTaskKind;
-use crate::reasoning::{
-    AdvancedReasoningConfig, EvidenceLevel, MemoryCapsule, ReasoningArtifact,
-    ReasoningArtifactKind, ReasoningEdge, ReasoningLane, ReasoningRole,
+
+pub(crate) use crate::reasoning_artifacts::{
+    artifact, emit_state, export_reasoning_graph, persist_artifact, persist_edge,
+    synthetic_structured_value,
 };
-use crate::repo_graph::RepoGraph;
+pub(crate) use crate::reasoning_artifacts::mark_blocked_for_parse_error;
+pub(crate) use crate::reasoning_parse::parse_structured_model_json;
 
 /// Outcome of the pure model-call half of [`complete_structured`].
 ///
@@ -319,179 +326,3 @@ fn model_event_payload(
     })
 }
 
-pub(crate) fn parse_structured_model_json(text: &str) -> serde_json::Result<serde_json::Value> {
-    match serde_json::from_str::<serde_json::Value>(text) {
-        Ok(value) => Ok(value),
-        Err(primary) => {
-            for (start, ch) in text.char_indices() {
-                if !matches!(ch, '{' | '[') {
-                    continue;
-                }
-                let Some(end) = find_balanced_json_end(text, start) else {
-                    continue;
-                };
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text[start..=end]) {
-                    return Ok(value);
-                }
-            }
-            Err(primary)
-        }
-    }
-}
-
-fn find_balanced_json_end(text: &str, start: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (offset, ch) in text[start..].char_indices() {
-        let idx = start + offset;
-        if in_string {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            match ch {
-                '\\' => escaped = true,
-                '"' => in_string = false,
-                _ => {}
-            }
-            continue;
-        }
-        match ch {
-            '"' => in_string = true,
-            '{' | '[' => depth += 1,
-            '}' | ']' => {
-                if depth == 0 {
-                    return None;
-                }
-                depth -= 1;
-                if depth == 0 {
-                    return Some(idx);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn artifact(
-    id: impl Into<String>,
-    run_id: &str,
-    role: ReasoningRole,
-    kind: ReasoningArtifactKind,
-    title: impl Into<String>,
-    summary: impl Into<String>,
-    evidence_level: EvidenceLevel,
-    confidence: f64,
-    payload_json: serde_json::Value,
-    config: &AdvancedReasoningConfig,
-) -> ReasoningArtifact {
-    let mut artifact = ReasoningArtifact::new(
-        id,
-        run_id,
-        role,
-        kind,
-        title,
-        summary,
-        evidence_level,
-        confidence,
-        payload_json,
-    );
-    artifact.prepare_for_storage(config);
-    artifact
-}
-
-pub(crate) fn persist_artifact(
-    db: &Db,
-    run_id: &str,
-    sink: &EventSink,
-    artifact: ReasoningArtifact,
-) -> Result<ReasoningArtifact> {
-    daemon_store::persist_reasoning_artifact(db, run_id, &artifact)?;
-    sink.emit(
-        EventKind::ReasoningArtifact,
-        json!({"id": artifact.id, "kind": artifact.kind, "status": artifact.status}),
-    )?;
-    Ok(artifact)
-}
-
-pub(crate) fn persist_edge(
-    db: &Db,
-    run_id: &str,
-    src: &str,
-    dst: &str,
-    kind: &str,
-) -> Result<ReasoningEdge> {
-    let edge = ReasoningEdge {
-        run_id: run_id.to_string(),
-        src_artifact_id: src.to_string(),
-        dst_artifact_id: dst.to_string(),
-        kind: kind.to_string(),
-        weight: Some(1.0),
-        payload_json: json!({}),
-    };
-    daemon_store::persist_reasoning_edge(db, run_id, &edge)?;
-    Ok(edge)
-}
-
-pub(crate) fn export_reasoning_graph(
-    repo: &Path,
-    run_id: &str,
-    repo_graph: &RepoGraph,
-    artifacts: &[ReasoningArtifact],
-    edges: &[ReasoningEdge],
-    lanes: &[ReasoningLane],
-    memory_capsules: &[MemoryCapsule],
-) -> Result<PathBuf> {
-    let path = repo
-        .join("target/zyal/reasoning")
-        .join(run_id)
-        .join("reasoning-graph.json");
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
-    }
-    let payload = json!({
-        "schema_version": "zyal.reasoning.graph.v1",
-        "run_id": run_id,
-        "repo_graph_summary": repo_graph.summary(),
-        "artifacts": artifacts,
-        "edges": edges,
-        "lanes": lanes,
-        "memory_capsules": memory_capsules,
-    });
-    fs::write(&path, serde_json::to_string_pretty(&payload)?)
-        .with_context(|| format!("write {}", path.display()))?;
-    Ok(path)
-}
-
-pub(crate) fn emit_state(sink: &EventSink, state: &str) -> Result<()> {
-    sink.emit(EventKind::ReasoningState, json!({"state": state}))
-}
-
-fn synthetic_structured_value(kind: ModelTaskKind) -> serde_json::Value {
-    json!({
-        "kind": format!("{kind:?}"),
-        "summary": "deterministic fake structured response",
-    })
-}
-
-fn mark_blocked_for_parse_error(db: &Db, run_id: &str, error: &str) -> Result<()> {
-    daemon_store::mark_daemon_run(db, run_id, "blocked", "model_json_parse", Some(error))?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_structured_model_json;
-
-    #[test]
-    fn parse_structured_model_json_accepts_wrapped_object() {
-        let text =
-            "Here is the JSON: {\"answer\":true,\"count\":2}\nExtra notes: ignore this {not json}";
-        let value = parse_structured_model_json(text).expect("wrapped JSON should parse");
-        assert_eq!(value["answer"], true);
-        assert_eq!(value["count"], 2);
-    }
-}
