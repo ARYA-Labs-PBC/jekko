@@ -1,7 +1,48 @@
-# Model Quality Band — design (jnoccio-fusion routing extension)
+# Model Quality Band — jnoccio-fusion routing extension
 
-**Status:** design proposal, not implemented.
+**Status:** **landed** (2026-05-27 GOD-logging session).
+**Implementation:** `jnoccio-fusion/src/quality_band.rs` + filter pass in `jnoccio-fusion/src/routing.rs::select_without_replacement`. Five module-level tests + three integration tests under `mod tests` in routing.rs.
 **Origin:** zyal-testing session, 2026-05-27. User request: "ZYAL should be able to request a stronger model for a task. We don't want to always pick the best model, but for some elements in ZYAL being able to require a top 10% or top 20% model could be a very powerful concept if it is leveraging our local win rate data."
+
+## How to use
+
+Pass `quality_band` as a field of the OpenAI request's `extra` map. Recognised values: `any` (default), `top10`, `top20`, `top50`, `bottom20`. Unknown strings fall back to `any` silently.
+
+```jsonc
+{
+  "model": "jnoccio/jnoccio-router",
+  "messages": [...],
+  "extra": { "quality_band": "top20" }
+}
+```
+
+ZYAL stage authors declare the band on a per-stage `model_policy` in their `.zyal` manifest. The runner forwards it through the OpenAI-shape request when invoking fusion, and fusion's `RequestProfile::from_request` lifts the value into the routing plan.
+
+## Behavior
+
+- **`Any`** (default): no filter — existing behavior, no path change.
+- **`Top10` / `Top20` / `Top50`**: only models in the top N% of observed win-rate are considered. Unranked models (those with fewer than `DEFAULT_MIN_CALLS_FOR_RANKING = 20` calls) are **admitted** alongside ranked top-tier models so exploration keeps refreshing the evidence base.
+- **`Bottom20`**: only models in the bottom 20% of observed win-rate. Unranked models are **rejected** (we don't blindly send to fresh models that may not work). Useful for non-critical work where the explicit goal is to use weaker models.
+- **Soft-fallback**: if a band filter produces an empty candidate set, fusion logs `quality_band yielded zero candidates; falling back to full eligible set` (target `jnoccio_fusion::quality_band`, level `warn`) and proceeds with the unfiltered eligible pool. The band is a hint, not a hard gate — refusing the request would be worse than serving a weaker model.
+
+## Data source
+
+`model_metrics.win_count / call_count` from the persistent state DB. Already collected by the fusion-sample mechanism at `routing.fusion_sample_rate: 0.1` (server.json) — sampled calls fan out to a backup model in parallel and the winner increments `win_count`.
+
+`RoutingModelInput` (the in-memory routing snapshot) carries `win_count` and `call_count` directly so the filter is per-request O(N log N) on the eligible-set size.
+
+## Where this matters operationally
+
+The heavy MiniRedis port-run halts at `stage_brainstorm` because the routed model returns `response_bytes: 0` three times in a row across both `user_1` and `user_2`. Declaring `quality_band: top20` on the brainstorm stage's `model_policy` should escalate that stage to a higher-win-rate model class and unblock the pipeline. The Phase H verification in the GOD-logging session exercises exactly this path.
+
+## File layout
+
+| File | LOC | Role |
+|---|---:|---|
+| `jnoccio-fusion/src/quality_band.rs` | 243 | `QualityBand` enum + `compute_percentiles` + `passes_band` + 5 unit tests |
+| `jnoccio-fusion/src/routing.rs` | 950 | `RequestProfile.quality_band` field, parse from `extra`, filter pass in `select_without_replacement`, soft-fallback log + `win_count`/`call_count` on `RoutingModelInput`. 3 integration tests. |
+| `jnoccio-fusion/src/fusion.rs` | 3500+ | (single-site) wires `win_count`/`call_count` into `RoutingModelInput` from `model_metrics`. |
+| `jnoccio-fusion/src/lib.rs` | 17 | registers the `quality_band` module |
 
 ## Why this is feasible with the existing setup
 
