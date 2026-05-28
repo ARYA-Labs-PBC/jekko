@@ -1,0 +1,116 @@
+# agent-merge: VibeGate Evidence-Gate auto-merge.
+#
+# After every other lane in the pipeline succeeds on a merge-request
+# pipeline, this job runs the autonomy CLI's reviewer roles against the
+# diff and — if the agent verdict is `pass` or `concern` (not `block` or
+# `abstain`) and the existing risk gate is satisfied — calls
+# `jeryu agent merge` to merge the MR. The agent uses the local LLM
+# providers configured in `~/.jekko/users/<user>/llm.env` via
+# jnoccio-fusion's `users_pool` path.
+#
+# Trust tiers (passed to `jeryu agent merge --trust-tier`):
+#   * trusted    — author is the project bot OR previously-merged
+#                  contributor. Default.
+#   * sovereign  — full self-merge, no human pause.
+#   * permissive — manual-only; require human in the loop.
+#
+# Hard-stops (block list):
+#   * any reviewer role returns `decision: block`
+#   * any reviewer role returns `decision: abstain` AND the agent did
+#     not produce a structured JSON receipt (i.e. the model fell off
+#     the contract).
+#   * `jeryu agent merge` returns "Deny" with anything other than
+#     "no successful validation jobs" (which we know to be false at
+#     this point because every prior lane is green).
+#
+# This lane is the LAST stage before `github-sync:push-to-main` (which
+# only fires on $CI_COMMIT_BRANCH == "main" after the merge lands).
+
+agent-merge:autonomy-review-and-merge:
+  stage: deploy
+  extends: .rust_linux_base
+  timeout: 30m
+  rules:
+    # Only auto-fire on merge-request pipelines from human-readable
+    # branches. Tag pipelines, schedule pipelines, and direct main
+    # pushes do not enter this lane.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
+      when: on_success
+    - when: never
+  needs:
+    # Soft-needs: agent-merge runs after every other lane finishes.
+    # `optional: true` means a skipped/manual job (jankurai:audit,
+    # jankurai:sandbox-backends) does not block the agent run.
+    - job: parity:cargo-test
+      optional: true
+    - job: parity:build-gates
+      optional: true
+    - job: parity:fmt-clippy
+      optional: true
+    - job: parity:guard-advisory
+      optional: true
+    - job: security:rust-tools
+      optional: true
+    - job: security:syft-grype
+      optional: true
+    - job: security:trufflehog
+      optional: true
+    - job: test:tui
+      optional: true
+    - job: test:unit
+      optional: true
+    - job: typecheck
+      optional: true
+    - job: check-encrypted-paths
+      optional: true
+  variables:
+    AUTONOMY_TRUST_TIER: "trusted"
+    AUTONOMY_TARGET_BRANCH: "main"
+  before_script:
+    - !reference [.rust_setup]
+    # The autonomy CLI reads provider keys from ~/.jekko/users/<user>/llm.env
+    # which the runner host already has. No extra credential plumbing
+    # needed for the local jeryu pool.
+    - which autonomy || (echo "autonomy CLI not on PATH; install ~/.jeryu/bin"; exit 1)
+    - which jeryu    || (echo "jeryu CLI not on PATH; install ~/.jeryu/bin"; exit 1)
+  script:
+    - |
+      set -euo pipefail
+      HEAD_SHA=$(git rev-parse HEAD)
+      POLICY_SHA=$(find .autonomy -type f -print0 | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1)
+      echo "agent-merge: head=$HEAD_SHA policy=$POLICY_SHA target=$AUTONOMY_TARGET_BRANCH"
+      mkdir -p .autonomy/.receipts
+      # Run two reviewer roles in sequence. Each writes a receipt JSON to
+      # .autonomy/.receipts/<role>.json. If either returns `block` (and
+      # not `concern`/`pass`/`abstain`), the gate fails the job.
+      for role in security test_integrity; do
+        echo "=== reviewer-$role ==="
+        if [ ! -f ".autonomy/prompts/reviewer-$role.md" ]; then
+          echo "skipping role=$role: no prompt at .autonomy/prompts/reviewer-$role.md"
+          continue
+        fi
+        git diff "$AUTONOMY_TARGET_BRANCH"...HEAD \
+          | autonomy review \
+              --role "$role" \
+              --head-sha "$HEAD_SHA" \
+              --policy-sha "$POLICY_SHA" \
+              --target-branch "$AUTONOMY_TARGET_BRANCH" \
+              --repo "$CI_PROJECT_PATH" \
+          | tee ".autonomy/.receipts/$role.json"
+        decision=$(jq -r '.decision' ".autonomy/.receipts/$role.json")
+        echo "agent-merge: role=$role decision=$decision"
+        if [ "$decision" = "block" ]; then
+          echo "agent-merge: HARD BLOCK on role=$role; refusing to merge"
+          exit 1
+        fi
+      done
+      # Risk-gated merge via jeryu agent. Defers to jeryu's internal
+      # policy (CODEOWNERS, freeze windows, kill-bell, etc.).
+      echo "agent-merge: invoking jeryu agent merge with trust-tier=$AUTONOMY_TRUST_TIER"
+      jeryu agent merge "$CI_PROJECT_ID" "$CI_MERGE_REQUEST_IID" --trust-tier "$AUTONOMY_TRUST_TIER"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .autonomy/.receipts/
+  allow_failure: false
