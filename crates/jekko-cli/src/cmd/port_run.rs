@@ -199,7 +199,8 @@ fn validate_arg_combination(args: &PortRunArgs) -> Result<()> {
     if mode_count > 1 {
         bail!("--super, --resume, --status, and --summarize are mutually exclusive");
     }
-    if args.dry_run && (args.resume.is_some() || args.status.is_some() || args.summarize.is_some()) {
+    if args.dry_run && (args.resume.is_some() || args.status.is_some() || args.summarize.is_some())
+    {
         bail!("--dry-run is only valid with --super");
     }
     Ok(())

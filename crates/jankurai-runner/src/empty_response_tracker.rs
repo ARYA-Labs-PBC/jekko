@@ -169,7 +169,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let sink = EventSink::open(dir.path(), "run-1").unwrap();
         let mut tracker = EmptyResponseTracker::new("stage_brainstorm");
-        let n = tracker.record(&empty_receipt("jnoccio", "user_1"), &sink).unwrap();
+        let n = tracker
+            .record(&empty_receipt("jnoccio", "user_1"), &sink)
+            .unwrap();
         assert_eq!(n, 1);
         assert_eq!(read_log(dir.path()).matches(SERIALIZED_KIND).count(), 0);
     }
@@ -179,9 +181,15 @@ mod tests {
         let dir = tempdir().unwrap();
         let sink = EventSink::open(dir.path(), "run-2").unwrap();
         let mut tracker = EmptyResponseTracker::new("stage_brainstorm");
-        tracker.record(&empty_receipt("jnoccio", "user_1"), &sink).unwrap();
-        tracker.record(&empty_receipt("jnoccio", "user_2"), &sink).unwrap();
-        let n = tracker.record(&empty_receipt("jnoccio", "user_1"), &sink).unwrap();
+        tracker
+            .record(&empty_receipt("jnoccio", "user_1"), &sink)
+            .unwrap();
+        tracker
+            .record(&empty_receipt("jnoccio", "user_2"), &sink)
+            .unwrap();
+        let n = tracker
+            .record(&empty_receipt("jnoccio", "user_1"), &sink)
+            .unwrap();
         assert_eq!(n, 3);
         assert_eq!(
             read_log(dir.path()).matches(SERIALIZED_KIND).count(),
@@ -189,7 +197,9 @@ mod tests {
             "streak event must emit exactly once"
         );
         // 4th empty should not double-emit.
-        tracker.record(&empty_receipt("jnoccio", "user_2"), &sink).unwrap();
+        tracker
+            .record(&empty_receipt("jnoccio", "user_2"), &sink)
+            .unwrap();
         assert_eq!(read_log(dir.path()).matches(SERIALIZED_KIND).count(), 1);
     }
 
@@ -198,14 +208,22 @@ mod tests {
         let dir = tempdir().unwrap();
         let sink = EventSink::open(dir.path(), "run-3").unwrap();
         let mut tracker = EmptyResponseTracker::new("stage_brainstorm");
-        tracker.record(&empty_receipt("jnoccio", "user_1"), &sink).unwrap();
-        tracker.record(&empty_receipt("jnoccio", "user_2"), &sink).unwrap();
+        tracker
+            .record(&empty_receipt("jnoccio", "user_1"), &sink)
+            .unwrap();
+        tracker
+            .record(&empty_receipt("jnoccio", "user_2"), &sink)
+            .unwrap();
         // A non-empty receipt clears the streak.
         let n = tracker.record(&nonempty_receipt(), &sink).unwrap();
         assert_eq!(n, 0);
         // Now two more empties — still below threshold.
-        tracker.record(&empty_receipt("jnoccio", "user_1"), &sink).unwrap();
-        let n = tracker.record(&empty_receipt("jnoccio", "user_2"), &sink).unwrap();
+        tracker
+            .record(&empty_receipt("jnoccio", "user_1"), &sink)
+            .unwrap();
+        let n = tracker
+            .record(&empty_receipt("jnoccio", "user_2"), &sink)
+            .unwrap();
         assert_eq!(n, 2);
         assert_eq!(read_log(dir.path()).matches(SERIALIZED_KIND).count(), 0);
     }

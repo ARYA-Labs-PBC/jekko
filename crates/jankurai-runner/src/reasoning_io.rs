@@ -17,11 +17,11 @@ use crate::events::{EventKind, EventSink};
 use crate::model_client::{ModelCallReceipt, ModelClient};
 use crate::model_policy::ModelTaskKind;
 
+pub(crate) use crate::reasoning_artifacts::mark_blocked_for_parse_error;
 pub(crate) use crate::reasoning_artifacts::{
     artifact, emit_state, export_reasoning_graph, persist_artifact, persist_edge,
     synthetic_structured_value,
 };
-pub(crate) use crate::reasoning_artifacts::mark_blocked_for_parse_error;
 pub(crate) use crate::reasoning_parse::parse_structured_model_json;
 
 /// Outcome of the pure model-call half of [`complete_structured`].
@@ -63,7 +63,9 @@ pub(crate) async fn complete_structured_model_only(
     let mut queued_events: Vec<(EventKind, serde_json::Value)> = Vec::new();
     let mut intermediate_receipts: Vec<ModelCallReceipt> = Vec::new();
     let mut last_error: Option<String> = None;
-    let mut empty_tracker = crate::empty_response_tracker::EmptyResponseTracker::new(crate::model_client::kind_label(kind));
+    let mut empty_tracker = crate::empty_response_tracker::EmptyResponseTracker::new(
+        crate::model_client::kind_label(kind),
+    );
     for attempt in 1..=3 {
         queued_events.push((
             EventKind::ModelAttempt,
@@ -325,4 +327,3 @@ fn model_event_payload(
         "quality_band": receipt.quality_band,
     })
 }
-

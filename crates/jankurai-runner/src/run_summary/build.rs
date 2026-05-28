@@ -72,7 +72,10 @@ pub fn build(run_dir: &Path) -> Result<RunSummary> {
 
         match kind {
             "run_started" => {
-                workflow = data.get("workflow").and_then(Value::as_str).map(String::from);
+                workflow = data
+                    .get("workflow")
+                    .and_then(Value::as_str)
+                    .map(String::from);
             }
             "reasoning_state" => {
                 if let Some(state) = data.get("state").and_then(Value::as_str) {
@@ -165,9 +168,7 @@ pub fn build(run_dir: &Path) -> Result<RunSummary> {
             }
             "run_finished" => {
                 summary.terminal_status = "run_finished".to_string();
-                progress
-                    .stages_completed
-                    .push("final_signoff".to_string());
+                progress.stages_completed.push("final_signoff".to_string());
             }
             "phase_finalized" => {
                 if let Some(phase) = data.get("phase").and_then(Value::as_str) {
@@ -205,7 +206,9 @@ pub fn build(run_dir: &Path) -> Result<RunSummary> {
                 *signal_counts.entry("jankurai_regression").or_insert(0) += 1;
             }
             "worker_stall" | "worker_quarantine" => {
-                *signal_counts.entry("worker_stall_or_quarantine").or_insert(0) += 1;
+                *signal_counts
+                    .entry("worker_stall_or_quarantine")
+                    .or_insert(0) += 1;
             }
             "remediation_triggered" => {
                 *signal_counts.entry("remediation_triggered").or_insert(0) += 1;
@@ -242,8 +245,7 @@ pub fn build(run_dir: &Path) -> Result<RunSummary> {
     // Halt reason — only if we did NOT see a RunFinished event.
     if summary.terminal_status != "run_finished" {
         if let Some(witness) = empty_streak.as_ref() {
-            if empty_streak_seen
-                || witness.count >= crate::empty_response_tracker::STREAK_THRESHOLD
+            if empty_streak_seen || witness.count >= crate::empty_response_tracker::STREAK_THRESHOLD
             {
                 summary.halt_reason = Some(HaltReason {
                     kind: "empty_response_streak".to_string(),
@@ -298,9 +300,7 @@ pub fn build(run_dir: &Path) -> Result<RunSummary> {
         summary.manifest = Some(ManifestInfo {
             id: None,
             name: Some("hero-judge superreasoning".to_string()),
-            path: Some(
-                "docs/ZYAL/examples/34-superreasoning-openqg-foundry.zyal".to_string(),
-            ),
+            path: Some("docs/ZYAL/examples/34-superreasoning-openqg-foundry.zyal".to_string()),
         });
     } else if summary.pipeline.contains("advanced_port") {
         summary.manifest = Some(ManifestInfo {
@@ -385,12 +385,7 @@ fn recommend_next_steps(summary: &RunSummary) -> Vec<String> {
             _ => {}
         }
     }
-    if summary
-        .gates
-        .get("jankurai_gate")
-        .map(String::as_str)
-        == Some("failed")
-    {
+    if summary.gates.get("jankurai_gate").map(String::as_str) == Some("failed") {
         steps.push(
             "Jankurai audit regressed mid-run. Re-run audit + fix the new finding \
              before re-attempting."

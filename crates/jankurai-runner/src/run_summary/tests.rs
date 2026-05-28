@@ -23,7 +23,10 @@ fn builds_minimal_summary_with_no_events_file() {
     let summary = build(dir.path()).unwrap();
     assert_eq!(summary.schema_version, "zyal.run_summary.v1");
     assert_eq!(summary.terminal_status, "halted");
-    assert!(summary.operator_next_steps.iter().any(|s| s.contains("No events.jsonl")));
+    assert!(summary
+        .operator_next_steps
+        .iter()
+        .any(|s| s.contains("No events.jsonl")));
 }
 
 #[test]

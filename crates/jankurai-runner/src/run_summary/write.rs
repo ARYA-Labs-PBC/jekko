@@ -23,10 +23,7 @@ pub fn render_markdown(s: &RunSummary) -> String {
     out.push_str(&format!("# Run summary — `{}`\n\n", s.run_id));
     out.push_str(&format!("**Schema:** `{}`\n", s.schema_version));
     out.push_str(&format!("**Pipeline:** `{}`\n", s.pipeline));
-    out.push_str(&format!(
-        "**Terminal status:** `{}`\n",
-        s.terminal_status
-    ));
+    out.push_str(&format!("**Terminal status:** `{}`\n", s.terminal_status));
     if let Some(d) = s.duration_seconds {
         out.push_str(&format!("**Duration:** {} s\n\n", d));
     } else {
@@ -60,10 +57,7 @@ pub fn render_markdown(s: &RunSummary) -> String {
     out.push_str("## Pipeline progress\n\n");
     out.push_str(&format!(
         "- **deepest_stage:** `{}`\n",
-        s.pipeline_progress
-            .deepest_stage
-            .as_deref()
-            .unwrap_or("—")
+        s.pipeline_progress.deepest_stage.as_deref().unwrap_or("—")
     ));
     out.push_str(&format!(
         "- **stages reached ({}):** {}\n",
@@ -156,7 +150,10 @@ pub fn render_markdown(s: &RunSummary) -> String {
     } else {
         out.push_str("| id | name | count |\n|---|---|---:|\n");
         for row in fired {
-            out.push_str(&format!("| `{}` | `{}` | {} |\n", row.id, row.name, row.count));
+            out.push_str(&format!(
+                "| `{}` | `{}` | {} |\n",
+                row.id, row.name, row.count
+            ));
         }
         out.push('\n');
     }

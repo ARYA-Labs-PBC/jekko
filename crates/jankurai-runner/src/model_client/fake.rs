@@ -74,7 +74,7 @@ impl ModelClient for FakeModelClient {
                 selected_credential_user_id: None,
                 credential_user_id: None,
                 retry_count: Some(0),
-            quality_band: None,
+                quality_band: None,
             })
         } else {
             Ok(ModelCallReceipt::fake_success(kind, self.response.clone()))

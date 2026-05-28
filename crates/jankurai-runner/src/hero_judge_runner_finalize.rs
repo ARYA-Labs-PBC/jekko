@@ -189,9 +189,7 @@ pub(crate) fn finalize_run(inputs: FinalizeInputs<'_>) -> Result<HeroJudgeRunSum
     // Write GOD-level SUMMARY.json + .md as the LAST step. Failure here
     // should not poison a successful run — log and continue.
     if let Err(err) = crate::run_summary::build_and_write(&headless.run_dir) {
-        eprintln!(
-            "jankurai-runner: summary.json generation failed for {run_id}: {err:#}"
-        );
+        eprintln!("jankurai-runner: summary.json generation failed for {run_id}: {err:#}");
     }
     Ok(summary)
 }

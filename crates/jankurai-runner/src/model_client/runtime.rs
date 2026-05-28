@@ -289,7 +289,7 @@ impl ModelClient for JekkoRuntimeModelClient {
                 selected_credential_user_id: None,
                 credential_user_id: None,
                 retry_count: Some(0),
-            quality_band: None,
+                quality_band: None,
             }),
             Err(err) => Ok(ModelCallReceipt {
                 id: receipt_id("live"),
@@ -309,7 +309,7 @@ impl ModelClient for JekkoRuntimeModelClient {
                 selected_credential_user_id: None,
                 credential_user_id: None,
                 retry_count: Some(0),
-            quality_band: None,
+                quality_band: None,
             }),
         }
     }

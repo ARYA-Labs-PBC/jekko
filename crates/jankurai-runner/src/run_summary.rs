@@ -10,16 +10,14 @@
 //!
 //! See `docs/ZYAL/AGENT_PLAYBOOK.md` for field-by-field interpretation.
 
-mod types;
 mod build;
-mod write;
 #[cfg(test)]
 mod tests;
+mod types;
+mod write;
 
-pub use types::{
-    HaltReason, PipelineProgress, RunSummary, SignalRow, SCHEMA_VERSION,
-};
 pub use build::build;
+pub use types::{HaltReason, PipelineProgress, RunSummary, SignalRow, SCHEMA_VERSION};
 pub use write::{render_markdown, write_summary};
 
 use std::path::Path;
