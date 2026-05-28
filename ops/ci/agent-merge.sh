@@ -258,15 +258,21 @@ merge_response=$(curl -sS -X PUT \
   "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/merge" \
   -d "should_remove_source_branch=false" \
   -d "merge_commit_message=Merge via agent-merge (pipeline ${CI_PIPELINE_ID})" \
-  -d "merge_when_pipeline_succeeds=false" \
+  -d "merge_when_pipeline_succeeds=true" \
   2>/dev/null || true)
 
 state=$(printf '%s' "$merge_response" | jq -r '.state // "unknown"')
+merge_queued=$(printf '%s' "$merge_response" | jq -r '.merge_when_pipeline_succeeds // false')
 echo "agent-merge: merge response state=$state"
 printf '%s\n' "$merge_response" | jq '{state, merged_at, merge_commit_sha, error_message: .message}' 2>/dev/null || printf '%s\n' "$merge_response"
 
 if [ "$state" = "merged" ]; then
   echo "agent-merge: MR merged successfully"
+  exit 0
+fi
+
+if [ "$merge_queued" = "true" ]; then
+  echo "agent-merge: MR merge scheduled successfully"
   exit 0
 fi
 
