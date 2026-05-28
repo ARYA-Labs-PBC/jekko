@@ -58,8 +58,7 @@ pub(crate) fn run_preflight() -> Result<()> {
     let vendored_jankurai =
         manifest.contains(&vendored_audit_crate) || manifest.contains(&vendored_runner_crate);
     println!(
-        "  [{}] Jankurai workspace members are {}",
-        "OK",
+        "  [OK] Jankurai workspace members are {}",
         if vendored_jankurai {
             "native source crates"
         } else {
