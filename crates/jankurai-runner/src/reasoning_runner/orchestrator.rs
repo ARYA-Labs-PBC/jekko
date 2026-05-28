@@ -21,8 +21,8 @@ use crate::reasoning::{
 };
 use crate::reasoning_benchmark::{finish_tournament_score, score_baseline, write_benchmark_report};
 use crate::reasoning_io::{
-    artifact, complete_structured, emit_state, export_reasoning_graph, persist_artifact,
-    persist_edge,
+    artifact, complete_structured_recoverable, emit_state, export_reasoning_graph,
+    persist_artifact, persist_edge, StructuredCompletion,
 };
 use crate::stage0_proof::{benchmark_prompt, generate_seed_cases};
 
@@ -81,7 +81,7 @@ pub async fn run_advanced_reasoning_tick_with_db(
     )
     .await?;
 
-    let (_parity_seed_receipt, parity_seed_value) = complete_structured(
+    let parity_seed_value = match complete_structured_recoverable(
         repo,
         run_id,
         db,
@@ -90,7 +90,14 @@ pub async fn run_advanced_reasoning_tick_with_db(
         ModelTaskKind::ParityGenerate,
         "Generate target-switched parity seed cases from the evidence as JSON.",
     )
-    .await?;
+    .await?
+    {
+        StructuredCompletion::Parsed { value, .. } => value,
+        StructuredCompletion::RecoveredFailure { error, .. } => json!({
+            "recovered_from_model_error": error,
+            "recovery_seed_cases": "use deterministic target-switched seed cases",
+        }),
+    };
 
     emit_state(&sink, "track_stage")?;
     emit_state(&sink, "brainstorm_phase")?;
@@ -172,7 +179,7 @@ pub async fn run_advanced_reasoning_tick_with_db(
     artifacts.push(parity_seed_artifact);
     let baseline_benchmark = if runtime.proofs.reasoning_benchmark {
         let prompt = benchmark_prompt(&target, &evidence);
-        let (baseline_receipt, _baseline_value) = complete_structured(
+        let baseline_response = match complete_structured_recoverable(
             repo,
             run_id,
             db,
@@ -181,10 +188,24 @@ pub async fn run_advanced_reasoning_tick_with_db(
             ModelTaskKind::HardEscalation,
             &prompt,
         )
-        .await?;
+        .await?
+        {
+            StructuredCompletion::Parsed { receipt, .. } => match receipt.response {
+                Some(response) if !response.trim().is_empty() => response,
+                _ => serde_json::to_string(&json!({
+                    "recovered_from_model_error": "missing parsed benchmark response"
+                }))?,
+            },
+            StructuredCompletion::RecoveredFailure { error, .. } => {
+                format!(
+                    r#"{{"recovered_from_model_error":{}}}"#,
+                    serde_json::to_string(&error)?
+                )
+            }
+        };
         Some(score_baseline(
             &prompt,
-            baseline_receipt.response.as_deref().unwrap_or("{}"),
+            &baseline_response,
             &evidence,
             &cases,
         ))

@@ -83,11 +83,31 @@ fn stamp_generated_header(value: serde_json::Value) -> serde_json::Value {
 }
 
 pub(super) fn strip_pragmas(raw: &str) -> String {
-    raw.lines()
+    strip_zyal_envelope(raw)
+        .lines()
         .filter(|line| !line.trim_start().starts_with("# zyal:"))
         .filter(|line| !line.trim_start().starts_with("# zyalc:"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn strip_zyal_envelope(raw: &str) -> String {
+    let mut in_body = false;
+    let mut body = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim_start();
+        if !in_body {
+            if trimmed.starts_with("<<<ZYAL ") {
+                in_body = true;
+            }
+            continue;
+        }
+        if trimmed.starts_with("<<<END_ZYAL ") {
+            return body.join("\n");
+        }
+        body.push(line);
+    }
+    raw.to_string()
 }
 
 /// Convert a YAML mapping into a TOML value. The declarative schema uses

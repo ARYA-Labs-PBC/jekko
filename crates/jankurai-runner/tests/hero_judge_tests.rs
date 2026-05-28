@@ -537,7 +537,7 @@ async fn live_parse_substitution_records_storage_safe_substitution() {
 }
 
 #[tokio::test]
-async fn live_mode_invalid_json_blocks_instead_of_substituting() {
+async fn live_mode_invalid_json_substitutes_without_exhaustion() {
     let dir = tempdir().unwrap();
     bootstrap_repo(dir.path());
     let db = Db::open_in_memory().unwrap();
@@ -560,10 +560,46 @@ async fn live_mode_invalid_json_blocks_instead_of_substituting() {
             "live",
             "not json on final attempt",
         ),
+        scripted_success(
+            4,
+            ModelTaskKind::HeroGenerate,
+            "live",
+            r#"{"summary":"hero ok","claims":["c"],"questions":["q"],"rubric":["r"],"evidence_refs":["e"],"score":0.88}"#,
+        ),
+        scripted_success(
+            5,
+            ModelTaskKind::JudgePatch,
+            "live",
+            r#"{"summary":"judge ok","claims":["c"],"questions":["q"],"rubric":["r"],"evidence_refs":["e"],"score":0.82}"#,
+        ),
+        scripted_success(
+            6,
+            ModelTaskKind::Verifier,
+            "live",
+            r#"{"summary":"verifier ok","claims":["c"],"questions":["q"],"rubric":["r"],"evidence_refs":["e"],"score":0.86}"#,
+        ),
+        scripted_success(
+            7,
+            ModelTaskKind::RedTeam,
+            "live",
+            r#"{"summary":"red team ok","claims":["c"],"questions":["q"],"rubric":["r"],"evidence_refs":["e"],"score":0.2}"#,
+        ),
+        scripted_success(
+            8,
+            ModelTaskKind::MetaJudge,
+            "live",
+            r#"{"summary":"meta ok","claims":["c"],"questions":["q"],"rubric":["r"],"evidence_refs":["e"],"score":0.87}"#,
+        ),
+        scripted_success(
+            9,
+            ModelTaskKind::KnowledgeCurate,
+            "live",
+            r#"{"summary":"knowledge ok","claims":["c"],"questions":["q"],"rubric":["r"],"evidence_refs":["e"],"score":0.84}"#,
+        ),
     ];
-    let err = run_hero_judge_run_with_db(
+    run_hero_judge_run_with_db(
         dir.path(),
-        "hero-judge-live-parse-block",
+        "hero-judge-live-parse-substitute",
         &dir.path().join("agent/zyal/openqg-hero-judge-evolve.zyal"),
         single_lane_runbook(),
         Some(1),
@@ -572,17 +608,19 @@ async fn live_mode_invalid_json_blocks_instead_of_substituting() {
         &db,
     )
     .await
-    .unwrap_err()
-    .to_string();
-    assert!(err.contains("live model response was not parseable JSON"));
+    .unwrap();
     let states = read_model_attempt_outcome_states(
         &dir.path()
-            .join("target/zyal/runs/hero-judge-live-parse-block/events.jsonl"),
+            .join("target/zyal/runs/hero-judge-live-parse-substitute/events.jsonl"),
         "literature_synthesis",
     );
     assert_eq!(
         states,
-        vec!["retryable_failure", "retryable_failure", "final_block"]
+        vec![
+            "retryable_failure",
+            "retryable_failure",
+            "live_parse_substitution"
+        ]
     );
 }
 

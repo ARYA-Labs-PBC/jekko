@@ -26,6 +26,20 @@ fn write_jsonl(path: &Path, values: &[Value]) {
     fs::write(path, body).unwrap();
 }
 
+fn refresh_model_receipts_replay_hash(dir: &Path) {
+    let model_receipts = dir.join("model_receipts.jsonl");
+    let model_receipts_bytes = fs::read(&model_receipts).unwrap();
+    let mut replay: Value =
+        serde_json::from_slice(&fs::read(dir.join("replay_receipt.json")).unwrap()).unwrap();
+    let artifacts = replay["artifact_hashes"].as_array_mut().unwrap();
+    for artifact in artifacts {
+        if artifact["path"].as_str() == Some(&model_receipts.display().to_string()) {
+            artifact["sha256"] = Value::String(sha256_hex(&model_receipts_bytes));
+        }
+    }
+    write_json(&dir.join("replay_receipt.json"), &replay);
+}
+
 fn artifact(dir: &Path, name: &str, bytes: &[u8]) -> Value {
     let path = dir.join(name);
     fs::write(&path, bytes).unwrap();
@@ -219,7 +233,25 @@ fn strict_live_audit_passes_on_complete_fixture() {
 }
 
 #[test]
-fn strict_live_audit_rejects_live_parse_substitution() {
+fn strict_live_audit_allows_recovered_empty_attempt_receipt() {
+    let temp = write_good_run();
+    let mut receipt = good_model_receipt();
+    receipt["response_bytes"] = Value::Number(0.into());
+    receipt["response_sha256"] =
+        Value::String("da39a3ee5e6b4b0d3255bfef95601890afd80709".to_string());
+    write_jsonl(&temp.path().join("model_receipts.jsonl"), &[receipt]);
+    refresh_model_receipts_replay_hash(temp.path());
+
+    let report = audit(temp.path(), true).unwrap();
+    assert_eq!(report.status, "passed", "failures: {:?}", report.failures);
+    assert!(report
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("empty upstream response recovered")));
+}
+
+#[test]
+fn strict_live_audit_rejects_substitution_model_outcome() {
     let temp = write_good_run();
     let mut events = load_jsonl_optional(&temp.path().join("events.jsonl"), &mut empty_report());
     events[1]["data"]["state"] = Value::String("live_parse_substitution".to_string());

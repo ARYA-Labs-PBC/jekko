@@ -14,6 +14,15 @@ fn round_trip_strips_pragmas() {
 }
 
 #[test]
+fn strip_pragmas_uses_zyal_envelope_body() {
+    let raw = "# preamble: comment\n# zyal: declarative target=superworkflow schema=zyal/superworkflow@1\n<<<ZYAL v1:daemon id=smoke>>>\nversion: v1\nintent: daemon\n<<<END_ZYAL id=smoke>>>\n";
+    let stripped = strip_pragmas(raw);
+    assert!(!stripped.contains("preamble: comment"));
+    assert!(!stripped.contains("<<<ZYAL"));
+    assert!(stripped.contains("version: v1"));
+}
+
+#[test]
 fn toml_emit_basic() {
     let raw = "# zyal: declarative target=toml schema=t@1\nschema_version: \"1.0.0\"\nlanes:\n  - name: a\n    cost: 1\n";
     let out = emit_toml(raw).expect("emit");

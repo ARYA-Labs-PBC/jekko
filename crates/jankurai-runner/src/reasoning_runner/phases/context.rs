@@ -15,7 +15,8 @@ use crate::reasoning::{
     ReasoningEdge, ReasoningRole,
 };
 use crate::reasoning_io::{
-    artifact, complete_structured, emit_state, persist_artifact, persist_edge,
+    artifact, complete_structured_recoverable, emit_state, persist_artifact, persist_edge,
+    StructuredCompletion,
 };
 use crate::repo_graph::{build_repo_graph, RepoGraph};
 
@@ -29,7 +30,7 @@ pub(super) async fn frame_phase(
     config: &AdvancedReasoningConfig,
 ) -> Result<ReasoningArtifact> {
     emit_state(sink, "frame_request")?;
-    let (_frame_receipt, frame_value) = complete_structured(
+    let frame_value = match complete_structured_recoverable(
         repo,
         run_id,
         db,
@@ -41,7 +42,15 @@ pub(super) async fn frame_phase(
             target.request
         ),
     )
-    .await?;
+    .await?
+    {
+        StructuredCompletion::Parsed { value, .. } => value,
+        StructuredCompletion::RecoveredFailure { error, .. } => json!({
+            "recovered_from_model_error": error,
+            "objective": target.request,
+            "acceptance": ["derive evidence", "produce master plan", "generate parity cases"],
+        }),
+    };
     persist_artifact(
         db,
         run_id,

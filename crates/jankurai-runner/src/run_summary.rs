@@ -11,6 +11,8 @@
 //! See `docs/ZYAL/AGENT_PLAYBOOK.md` for field-by-field interpretation.
 
 mod build;
+mod fold;
+mod fold_support;
 #[cfg(test)]
 mod tests;
 mod types;

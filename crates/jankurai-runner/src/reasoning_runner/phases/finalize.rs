@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use jekko_store::db::Db;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::daemon_store;
 use crate::events::{EventKind, EventSink};
@@ -18,7 +18,8 @@ use crate::reasoning::{
     ReasoningEdge, ReasoningRole,
 };
 use crate::reasoning_io::{
-    artifact, complete_structured, emit_state, persist_artifact, persist_edge,
+    artifact, complete_structured_recoverable, emit_state, persist_artifact, persist_edge,
+    StructuredCompletion,
 };
 use crate::stage0_proof::{
     build_stage0_master_plan, evidence_prompt_fragment, parse_model_master_plan,
@@ -45,7 +46,7 @@ pub(super) async fn master_plan_phase(
     Option<PathBuf>,
 )> {
     emit_state(sink, "finalize_master_plan")?;
-    let (reduce_receipt, reduce_value) = complete_structured(
+    let completion = complete_structured_recoverable(
         repo,
         run_id,
         db,
@@ -63,24 +64,45 @@ pub(super) async fn master_plan_phase(
     } else {
         None
     };
-    let plan = if reduce_receipt.provider == "fake" {
+    let recovery_plan = || {
         evidence_plan
             .clone()
             .unwrap_or_else(|| draft_master_plan(target.clone()))
-    } else {
-        match parse_model_master_plan(target.clone(), &reduce_value) {
-            Ok(plan) => plan,
-            Err(err) => {
-                let error = format!("reducer master plan validation failed: {err}");
-                daemon_store::mark_daemon_run(
-                    db,
-                    run_id,
-                    "blocked",
-                    "master_plan_validation",
-                    Some(&error),
-                )?;
-                return Err(anyhow!(error));
-            }
+    };
+    let (reduce_receipt, reduce_value, plan) = match completion {
+        StructuredCompletion::Parsed { receipt, value } => {
+            let (reduce_value, plan) = if receipt.provider == "fake" {
+                (value, recovery_plan())
+            } else {
+                match parse_model_master_plan(target.clone(), &value) {
+                    Ok(plan) => (value, plan),
+                    Err(err) => (
+                        json!({
+                            "recovered_from_model_error": format!(
+                                "reducer master plan validation failed: {err}"
+                            ),
+                            "model": value,
+                        }),
+                        recovery_plan(),
+                    ),
+                }
+            };
+            (receipt, reduce_value, plan)
+        }
+        StructuredCompletion::RecoveredFailure { receipt, error, .. } => {
+            let receipt = receipt.unwrap_or_else(|| {
+                ModelCallReceipt::failure(
+                    ModelTaskKind::StageReduce,
+                    "recovered",
+                    "recovery",
+                    &error,
+                )
+            });
+            (
+                receipt,
+                json!({"recovered_from_model_error": error}),
+                recovery_plan(),
+            )
         }
     };
     validate_master_plan_contract(&plan)?;
@@ -137,24 +159,30 @@ pub(super) async fn verify_phase(
     master: &ReasoningArtifact,
     edges: &mut Vec<ReasoningEdge>,
 ) -> Result<ReasoningArtifact> {
-    // Tightened schema: the prior prompt only said "as JSON" which let
-    // models return prose around code blocks; parse_structured_model_json
-    // can extract bare JSON but not all formats. Explicit shape +
-    // "compact JSON, no commentary" mirrors the OpenQG hero/judge prompts
-    // that consistently parse on top10/top20 models. See FIX-CAND-Q.
-    let (_verifier_receipt, verifier_value) = complete_structured(
+    // Tightened schema: pass only the reduced plan payload and demand a
+    // compact JSON object. This keeps verifier calls focused and parseable.
+    let prompt = verifier_prompt(master);
+    let (verifier_value, confidence) = match complete_structured_recoverable(
         repo,
         run_id,
         db,
         sink,
         model_client,
         ModelTaskKind::Verifier,
-        "Verify the reduced master plan against evidence. \
-         Return ONLY one compact JSON object with these exact keys: \
-         {\"accepted\":string[],\"rejected\":string[],\"unsupported\":string[],\"confidence\":number}. \
-         No prose, no markdown, no code fences — just the JSON object.",
+        &prompt,
     )
-    .await?;
+    .await?
+    {
+        StructuredCompletion::Parsed { value, .. } => (value, 0.8),
+        StructuredCompletion::RecoveredFailure { error, .. } => (
+            json!({
+                "recovered_from_model_error": error,
+                "verdict": "degraded",
+                "requires_parity_gate": true,
+            }),
+            0.2,
+        ),
+    };
     let verifier = persist_artifact(
         db,
         run_id,
@@ -167,7 +195,7 @@ pub(super) async fn verify_phase(
             "Master plan verifier",
             "Checked the master plan for evidence coverage, unsupported claims, and parity proof hooks.",
             EvidenceLevel::Executable,
-            0.8,
+            confidence,
             json!({"model": verifier_value}),
             config,
         ),
@@ -180,4 +208,32 @@ pub(super) async fn verify_phase(
         "verified_by",
     )?);
     Ok(verifier)
+}
+
+fn verifier_prompt(master: &ReasoningArtifact) -> String {
+    let reduced = master
+        .payload_json
+        .get("plan")
+        .map(reduced_plan_payload)
+        .unwrap_or_else(|| {
+            json!({
+                "artifact_id": &master.id,
+                "summary": &master.summary,
+            })
+        });
+    let payload = serde_json::to_string(&reduced).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "Verify the reduced master plan payload against the bounded evidence already supplied. \
+         Payload: {payload}\n\
+         Return ONLY one compact JSON object with these exact keys: \
+         {{\"accepted\":string[],\"rejected\":string[],\"unsupported\":string[],\"confidence\":number}}. \
+         No prose, no markdown, no code fences."
+    )
+}
+
+fn reduced_plan_payload(plan: &Value) -> Value {
+    json!({
+        "stages": plan.get("stages").cloned().unwrap_or(Value::Null),
+        "tasks": plan.get("tasks").cloned().unwrap_or(Value::Null),
+    })
 }

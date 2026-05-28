@@ -89,7 +89,6 @@ pub(super) const PACKAGES_DIRS: &[&str] = &[
     "packages/script",
     "packages/sdk/js",
     "packages/slack",
-    "packages/ux-qa",
 ];
 
 pub(super) const BUILD_CACHES: &[&str] = &[
@@ -106,7 +105,6 @@ pub(super) const BUILD_CACHES: &[&str] = &[
     "packages/plugin/dist",
     "packages/script/.turbo",
     "packages/sdk/js/.turbo",
-    "packages/ux-qa/dist",
 ];
 
 // `mini-fleet-smoke` used to be a Bun smoke crate; it has been migrated to a

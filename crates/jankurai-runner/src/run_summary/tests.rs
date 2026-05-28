@@ -80,6 +80,42 @@ fn detects_empty_response_streak_halt() {
 }
 
 #[test]
+fn folds_budget_max_calls_and_quality_bands() {
+    let dir = tempdir().unwrap();
+    write_events(
+        dir.path(),
+        &[
+            json!({"ts": 1, "kind": "run_started", "data": {"workflow": "zyal_advanced_port"}}),
+            json!({"ts": 2, "kind": "model_attempt", "data": {"kind": "stage_brainstorm", "attempt": 1}}),
+            json!({"ts": 3, "kind": "live_budget", "data": {"used": 4, "remaining": 60}}),
+            json!({"ts": 4, "kind": "model_attempt_outcome", "data": {"state": "parsed", "response_bytes": 200, "quality_band": "top20", "credential_user_id": "user_1", "provider": "jnoccio", "latency_ms": 1000}}),
+        ],
+    );
+    let summary = build(dir.path()).unwrap();
+    assert_eq!(summary.budget.max_calls, Some(64));
+    assert_eq!(
+        summary.model_calls.by_quality_band.get("top20").copied(),
+        Some(1)
+    );
+}
+
+#[test]
+fn parity_gap_populates_terminal_halt_reason() {
+    let dir = tempdir().unwrap();
+    write_events(
+        dir.path(),
+        &[
+            json!({"ts": 1, "kind": "run_started", "data": {"workflow": "zyal_advanced_port"}}),
+            json!({"ts": 2, "kind": "reasoning_state", "data": {"state": "close_parity_perf"}}),
+            json!({"ts": 3, "kind": "parity_gap", "data": {"count": 2}}),
+        ],
+    );
+    let summary = build(dir.path()).unwrap();
+    let halt = summary.halt_reason.as_ref().expect("halt_reason");
+    assert_eq!(halt.kind, "parity_gap");
+}
+
+#[test]
 fn round_trips_through_disk() {
     let dir = tempdir().unwrap();
     write_events(

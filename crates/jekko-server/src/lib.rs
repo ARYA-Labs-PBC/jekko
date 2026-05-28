@@ -1,6 +1,6 @@
 //! Jekko HTTP/WebSocket/PTY/SSE server.
 //!
-//! Phase 6 of the Bun -> Rust port. Mirrors the externally-observable
+//! Phase 6 of the legacy JS -> Rust port. Mirrors the externally-observable
 //! surface of `packages/jekko/src/server/`:
 //!
 //! - [`app::router`] builds the Axum app.

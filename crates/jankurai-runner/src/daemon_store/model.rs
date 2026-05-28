@@ -80,6 +80,7 @@ pub fn persist_model_receipt(db: &Db, run_id: &str, receipt: &ModelCallReceipt) 
                 "selected_credential_user_id": receipt.selected_credential_user_id,
                 "credential_user_id": receipt.credential_user_id,
                 "retry_count": receipt.retry_count,
+                "quality_band": receipt.quality_band,
             })),
             time_created: now_ms(),
             time_updated: now_ms(),
@@ -133,6 +134,7 @@ pub fn export_model_receipts_jsonl(db: &Db, run_id: &str, path: &Path) -> Result
                 "selected_credential_user_id": payload.field("selected_credential_user_id"),
                 "credential_user_id": payload.field("credential_user_id"),
                 "retry_count": payload.field("retry_count"),
+                "quality_band": payload.field("quality_band"),
             })
         })
         .collect::<Vec<_>>();

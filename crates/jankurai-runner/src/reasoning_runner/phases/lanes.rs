@@ -14,8 +14,9 @@ use crate::reasoning::{
     ReasoningEdge, ReasoningLane, ReasoningRole,
 };
 use crate::reasoning_io::{
-    artifact, complete_structured, complete_structured_model_only, emit_state, persist_artifact,
-    persist_edge, ModelOnlyOutcome,
+    artifact, complete_structured_model_only, complete_structured_recoverable, emit_state,
+    flush_model_only_result, persist_artifact, persist_edge, ModelOnlyOutcome,
+    StructuredCompletion,
 };
 use crate::stage0_proof::evidence_prompt_fragment;
 
@@ -115,7 +116,7 @@ async fn run_brainstorm_sequential(
 ) -> Result<()> {
     for idx in 0..cap {
         let strategy = STRATEGIES[idx % STRATEGIES.len()];
-        let (_brainstorm_receipt, brainstorm_value) = complete_structured(
+        let completion = complete_structured_recoverable(
             repo,
             run_id,
             db,
@@ -125,6 +126,8 @@ async fn run_brainstorm_sequential(
             &lane_prompt(idx, strategy, evidence),
         )
         .await?;
+        let (brainstorm_value, status, confidence) =
+            brainstorm_lane_payload(completion, strategy, idx);
         persist_brainstorm_lane(
             db,
             run_id,
@@ -134,6 +137,8 @@ async fn run_brainstorm_sequential(
             idx,
             strategy,
             brainstorm_value,
+            &status,
+            confidence,
             artifacts,
             edges,
             lanes,
@@ -180,19 +185,20 @@ async fn run_brainstorm_parallel(
     .await;
 
     for (idx, lane_result) in results {
-        let (strategy, outcome): (String, ModelOnlyOutcome) = lane_result?;
+        let strategy = STRATEGIES[idx % STRATEGIES.len()];
+        let completion = flush_model_only_result(
+            db,
+            run_id,
+            sink,
+            lane_result.map(|(_strategy, outcome): (String, ModelOnlyOutcome)| outcome),
+        )?;
+        let (brainstorm_value, status, confidence) =
+            brainstorm_lane_payload(completion, strategy, idx);
         // Serialized persistence + event emission, in deterministic
         // lane-index order. SQLite stays single-writer, EventSink keeps its
         // append-only ordering, and the reducer fence holds because the next
         // phase (`critique_phase`) reads lanes through SQL after this loop
         // returns.
-        for receipt in &outcome.intermediate_receipts {
-            daemon_store::persist_model_receipt(db, run_id, receipt)?;
-        }
-        daemon_store::persist_model_receipt(db, run_id, &outcome.receipt)?;
-        for (event_kind, payload) in &outcome.queued_events {
-            sink.emit(*event_kind, payload.clone())?;
-        }
         persist_brainstorm_lane(
             db,
             run_id,
@@ -200,8 +206,10 @@ async fn run_brainstorm_parallel(
             config,
             context,
             idx,
-            &strategy,
-            outcome.value,
+            strategy,
+            brainstorm_value,
+            &status,
+            confidence,
             artifacts,
             edges,
             lanes,
@@ -220,6 +228,8 @@ fn persist_brainstorm_lane(
     idx: usize,
     strategy: &str,
     brainstorm_value: serde_json::Value,
+    lane_status: &str,
+    confidence: f64,
     artifacts: &mut Vec<ReasoningArtifact>,
     edges: &mut Vec<ReasoningEdge>,
     lanes: &mut Vec<ReasoningLane>,
@@ -236,7 +246,7 @@ fn persist_brainstorm_lane(
             format!("Stage proposal {}", idx + 1),
             format!("Blind lane using {strategy} strategy."),
             EvidenceLevel::IndependentAgreement,
-            0.5,
+            confidence,
             json!({"strategy": strategy, "model": brainstorm_value}),
             config,
         ),
@@ -253,7 +263,7 @@ fn persist_brainstorm_lane(
         run_id: run_id.to_string(),
         role: ReasoningRole::Planner,
         strategy: strategy.to_string(),
-        status: "complete".to_string(),
+        status: lane_status.to_string(),
         artifact_ids: vec![proposal.id.clone()],
         write_scope: vec!["src/**".to_string(), "tests/**".to_string()],
         worker_id: Some(format!("reasoner-{}", idx + 1)),
@@ -262,11 +272,31 @@ fn persist_brainstorm_lane(
     daemon_store::persist_reasoning_lane(db, run_id, &lane)?;
     sink.emit(
         EventKind::ReasoningLane,
-        json!({"id": lane.id, "role": "planner", "status": "complete"}),
+        json!({"id": lane.id, "role": "planner", "status": lane.status}),
     )?;
     lanes.push(lane);
     artifacts.push(proposal);
     Ok(())
+}
+
+fn brainstorm_lane_payload(
+    completion: StructuredCompletion,
+    strategy: &str,
+    idx: usize,
+) -> (serde_json::Value, String, f64) {
+    match completion {
+        StructuredCompletion::Parsed { value, .. } => (value, "complete".to_string(), 0.5),
+        StructuredCompletion::RecoveredFailure { error, .. } => (
+            json!({
+                "recovered_from_model_error": error,
+                "strategy": strategy,
+                "fallback_stage": format!("recovered-stage-{}", idx + 1),
+                "proposal": "Continue with evidence-derived stage planning; defer specifics to reducer and parity gates.",
+            }),
+            "recovered".to_string(),
+            0.2,
+        ),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -289,7 +319,7 @@ pub(super) async fn critique_phase(
         !lanes.is_empty() || config.effective_worker_cap() == 0,
         "critique_phase invoked with no persisted brainstorm lanes; brainstorm reducer fence violated",
     );
-    let (_critique_receipt, critique_value) = complete_structured(
+    let (critique_value, confidence) = match complete_structured_recoverable(
         repo,
         run_id,
         db,
@@ -298,7 +328,18 @@ pub(super) async fn critique_phase(
         ModelTaskKind::StageCritique,
         "Critique the generic stage proposals as JSON.",
     )
-    .await?;
+    .await?
+    {
+        StructuredCompletion::Parsed { value, .. } => (value, 0.45),
+        StructuredCompletion::RecoveredFailure { error, .. } => (
+            json!({
+                "recovered_from_model_error": error,
+                "lane_count": lanes.len(),
+                "fallback_critique": "Proceed with low-confidence recovered critique; reducer and parity gates must validate the plan.",
+            }),
+            0.2,
+        ),
+    };
     let critique = persist_artifact(
         db,
         run_id,
@@ -311,7 +352,7 @@ pub(super) async fn critique_phase(
             "Stage critique",
             "Critiqued stage proposals for missing evidence, overlap, and target hard-coding.",
             EvidenceLevel::IndependentAgreement,
-            0.45,
+            confidence,
             json!({"model": critique_value}),
             config,
         ),

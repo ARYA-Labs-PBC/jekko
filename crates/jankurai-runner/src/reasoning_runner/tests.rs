@@ -142,17 +142,52 @@ impl ModelClient for InvalidLiveJsonClient {
     }
 }
 
+struct EmptyLiveResponseClient;
+
+#[async_trait]
+impl ModelClient for EmptyLiveResponseClient {
+    async fn complete(
+        &self,
+        kind: ModelTaskKind,
+        _prompt: &str,
+        _cwd: &Path,
+    ) -> Result<ModelCallReceipt> {
+        Ok(ModelCallReceipt {
+            id: format!("empty-{kind:?}"),
+            kind: crate::model_client::kind_label(kind).to_string(),
+            task_id: None,
+            provider: "live-test".to_string(),
+            model: "empty".to_string(),
+            latency_ms: 1,
+            success: true,
+            cost_usd: Some(0.0),
+            response: Some(String::new()),
+            error: None,
+            budget_used: None,
+            budget_remaining: None,
+            route: Some(crate::model_client::kind_label(kind).to_string()),
+            credential_policy: None,
+            selected_credential_user_id: None,
+            credential_user_id: None,
+            retry_count: Some(0),
+            quality_band: None,
+        })
+    }
+}
+
 #[tokio::test]
-async fn invalid_live_json_blocks_run_after_retries() {
+async fn invalid_live_json_recovers_with_fallback_artifacts() {
     let dir = tempdir().unwrap();
     let db = Db::open_in_memory().unwrap();
     bootstrap_repo(dir.path());
-    let err = run_advanced_reasoning_tick_with_db(
+    let _guard = ParallelEnvGuard::set(Some("1"));
+    let report = run_advanced_reasoning_tick_with_db(
         dir.path(),
-        "run-advanced-bad-json",
+        "run-advanced-bad-json-recovered",
         target(),
         AdvancedReasoningConfig {
             enabled: true,
+            worker_cap: 4,
             ..AdvancedReasoningConfig::default()
         },
         PortRuntimeOptions::default(),
@@ -161,13 +196,56 @@ async fn invalid_live_json_blocks_run_after_retries() {
         &db,
     )
     .await
-    .unwrap_err()
-    .to_string();
-    assert!(err.contains("model JSON parse failed"));
-    let run = jekko_store::daemon::get_run(db.connection(), "run-advanced-bad-json")
+    .unwrap();
+
+    assert_eq!(report.advanced.state, "complete");
+    assert_eq!(report.advanced.lane_count, 4);
+    let run = jekko_store::daemon::get_run(db.connection(), "run-advanced-bad-json-recovered")
         .unwrap()
         .unwrap();
-    assert_eq!(run.status, "blocked");
+    assert_eq!(run.status, "complete");
+    let artifacts = jekko_store::daemon::list_reasoning_artifacts_for_run(
+        db.connection(),
+        "run-advanced-bad-json-recovered",
+    )
+    .unwrap();
+    assert!(artifacts
+        .iter()
+        .filter_map(|artifact| artifact.payload_json.as_ref())
+        .any(|payload| payload.to_string().contains("recovered_from_model_error")));
+}
+
+#[tokio::test]
+async fn empty_live_responses_degrade_without_empty_streak() {
+    let dir = tempdir().unwrap();
+    let db = Db::open_in_memory().unwrap();
+    bootstrap_repo(dir.path());
+    let _guard = ParallelEnvGuard::set(Some("1"));
+    let report = run_advanced_reasoning_tick_with_db(
+        dir.path(),
+        "run-advanced-empty-recovered",
+        target(),
+        AdvancedReasoningConfig {
+            enabled: true,
+            worker_cap: 4,
+            ..AdvancedReasoningConfig::default()
+        },
+        PortRuntimeOptions::default(),
+        true,
+        &EmptyLiveResponseClient,
+        &db,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.advanced.state, "complete");
+    let events = fs::read_to_string(
+        dir.path()
+            .join("target/zyal/runs/run-advanced-empty-recovered/events.jsonl"),
+    )
+    .unwrap();
+    assert!(events.contains("empty_response_recovered"));
+    assert!(!events.contains("empty_response_streak"));
 }
 
 #[test]

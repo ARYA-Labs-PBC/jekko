@@ -374,6 +374,7 @@ release-bad-behavior: ci-bad-behavior
 check: fast doctor-full score security
 
 # Rendered TUI component proof lane for HLT-013-RENDERED-UX-GAP evidence.
+# Backed by crates/tuiwright-jekko-unlock rather than the deleted packages/ux-qa CLI.
 ux-qa:
 	mkdir -p {{jankurai_artifact_root}}
 	rtk jankurai ux audit --config agent/ux-qa.toml --out {{jankurai_artifact_root}}/ux-qa.json
@@ -552,7 +553,7 @@ zyal-superreasoning-live-local run_id="superreasoning-live-local" provider="" mo
 	if [ -n "{{model}}" ]; then
 		args+=(--model "{{model}}")
 	fi
-	JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
+	JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}" JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
 	rtk just zyal-superreasoning-verify-replay target/zyal/runs/{{run_id}}
 	rtk just zyal-superreasoning-audit-live target/zyal/runs/{{run_id}}
 
@@ -585,7 +586,7 @@ zyal-advanced-reasoning-live-local run_id="advanced-reasoning-live-local" provid
 	if [ -n "{{model}}" ]; then
 		args+=(--model "{{model}}")
 	fi
-	JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
+	JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}" JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
 
 # Opt-in live local MiniRedis ladder proof. Refuses CI and requires users-only credentials.
 zyal-miniredis-live-local run_id="miniredis-live-local" provider="" model="":
@@ -616,7 +617,7 @@ zyal-miniredis-live-local run_id="miniredis-live-local" provider="" model="":
 	if [ -n "{{model}}" ]; then
 		args+=(--model "{{model}}")
 	fi
-	JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
+	JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}" JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_MODEL_CALL_TIMEOUT_SECS="${JEKKO_MODEL_CALL_TIMEOUT_SECS:-180}" rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- "${args[@]}"
 
 # Heavy live super-agent run against the canonical 12-stage MiniRedis
 # SuperWorkflow manifest. Refuses CI and requires JEKKO_ZYAL_LIVE=1 +
@@ -644,10 +645,30 @@ zyal-super-redis run_id="zyal-super-redis-local":
 			exit 1
 		fi
 	fi
+	JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}" \
 	JEKKO_KEY_SOURCE_POLICY=users-only \
 		rtk cargo run -p jekko-cli --offline -- port-run \
 			--super agent/zyal/ambitious-superworkflow.zyal \
 			--run-id "{{run_id}}"
+
+# Manual-only serious ZYAL live campaign. Never run in CI; requires both
+# explicit operator opt-ins and production users_pool credentials.
+zyal-serious-live-local:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [ "${CI:-}" = "true" ]; then
+		echo "zyal-serious-live-local refuses CI=true" >&2
+		exit 1
+	fi
+	if [ "${JEKKO_ZYAL_LIVE:-}" != "1" ]; then
+		echo "set JEKKO_ZYAL_LIVE=1 to run serious live local proof" >&2
+		exit 1
+	fi
+	if [ "${JEKKO_ZYAL_SERIOUS:-}" != "1" ]; then
+		echo "set JEKKO_ZYAL_SERIOUS=1 to run serious live local proof" >&2
+		exit 1
+	fi
+	JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}" JEKKO_KEY_SOURCE_POLICY=users-only rtk bash scripts/zyal-serious-live-local.sh
 
 # Print phase + task status for an existing super-agent run as JSON.
 # Usage: just zyal-super-status <run_id>

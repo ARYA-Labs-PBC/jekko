@@ -289,14 +289,14 @@ impl ModelClient for JekkoRuntimeModelClient {
                 selected_credential_user_id: None,
                 credential_user_id: None,
                 retry_count: Some(0),
-                quality_band: None,
+                quality_band: route.quality_band.clone(),
             }),
             Err(err) => Ok(ModelCallReceipt {
                 id: receipt_id("live"),
                 kind: kind_label(kind).to_string(),
                 task_id: None,
-                provider: route.provider.unwrap_or_else(|| "auto".to_string()),
-                model: route.model.unwrap_or_else(|| "auto".to_string()),
+                provider: route.provider.clone().unwrap_or_else(|| "auto".to_string()),
+                model: route.model.clone().unwrap_or_else(|| "auto".to_string()),
                 latency_ms,
                 success: false,
                 cost_usd: None,
@@ -309,7 +309,7 @@ impl ModelClient for JekkoRuntimeModelClient {
                 selected_credential_user_id: None,
                 credential_user_id: None,
                 retry_count: Some(0),
-                quality_band: None,
+                quality_band: route.quality_band.clone(),
             }),
         }
     }

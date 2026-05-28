@@ -11,6 +11,7 @@
 #
 # Optional env:
 #   BATCH_TAG=<slug>         (appended to the batch directory name)
+#   BATCH_DIR=<path>         (override the output directory)
 #   BATCH_SKIP_SMOKE=1       (skip r0 cargo test)
 #   BATCH_ONLY="r1 r2 r5"    (whitespace-separated; restrict which runs execute)
 #   FUSION_SKIP=1            (do not launch jnoccio-fusion — useful if you
@@ -25,7 +26,7 @@ cd "$REPO_ROOT"
 
 UTC_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BATCH_TAG="${BATCH_TAG:-toasty-toucan}"
-BATCH_DIR="target/zyal/live-batch-${UTC_STAMP}-${BATCH_TAG}"
+BATCH_DIR="${BATCH_DIR:-target/zyal/live-batch-${UTC_STAMP}-${BATCH_TAG}}"
 BATCH_ABS="$REPO_ROOT/$BATCH_DIR"
 
 JEKKO_BIN="${JEKKO_BIN:-$REPO_ROOT/target/release/jekko}"
@@ -59,6 +60,12 @@ declare -a RUN_LABELS=(
   "zyal-super-redis super-redis-r6-planwalk (plan-walk, no LLM)"
   "zyal-superreasoning-live-local super-r7-patient (300s timeout, parallel)"
 )
+
+if [[ -n "${BATCH_RUN_ID_PREFIX:-}" ]]; then
+  for idx in "${!RUN_IDS[@]}"; do
+    RUN_IDS[$idx]="${BATCH_RUN_ID_PREFIX}-${RUN_IDS[$idx]}"
+  done
+fi
 
 # ---------- helpers ------------------------------------------------------
 
@@ -95,7 +102,7 @@ snapshot_super_store() {
 
 log "batch dir: $BATCH_DIR"
 mkdir -p \
-  "$BATCH_ABS"/{runs,metrics-snapshots,balancer,super,pids}
+  "$BATCH_ABS"/{config,runs,metrics-snapshots,balancer,super,pids}
 
 [[ -x "$JEKKO_BIN" ]] || fail "JEKKO_BIN missing or non-executable: $JEKKO_BIN"
 export JEKKO_BIN
@@ -220,16 +227,27 @@ start_observers() {
 
 # Each driver returns the exit code in $RUN_EXIT.
 RUN_EXIT=0
+BATCH_FAILURES=0
+declare -a BATCH_FAILED_RUNS=()
+
+base_run_id() {
+  local rid="$1"
+  if [[ -n "${BATCH_RUN_ID_PREFIX:-}" && "$rid" == "$BATCH_RUN_ID_PREFIX-"* ]]; then
+    rid="${rid#"$BATCH_RUN_ID_PREFIX-"}"
+  fi
+  echo "$rid"
+}
 
 run_r0() {
-  log "r0: cargo test --workspace --locked --no-fail-fast"
+  local rid="$1"
+  log "$rid: cargo test --workspace --locked --no-fail-fast"
   # The tuiwright baseline_matrix capture suite now requires explicit
   # JEKKO_TUI_CAPTURE=1 (added in the GOD-logging session), so it skips
   # silently here even with JEKKO_BIN set globally for the live recipes.
-  /usr/bin/time -v -o "$BATCH_ABS/runs/r0-smoke.time" \
+  /usr/bin/time -v -o "$BATCH_ABS/runs/$rid.time" \
     cargo test --workspace --locked --no-fail-fast \
-      > "$BATCH_ABS/runs/r0-smoke.stdout" \
-      2> "$BATCH_ABS/runs/r0-smoke.stderr"
+      > "$BATCH_ABS/runs/$rid.stdout" \
+      2> "$BATCH_ABS/runs/$rid.stderr"
   RUN_EXIT=$?
 }
 
@@ -238,7 +256,7 @@ run_advanced() {
   local parallel_env="$1"; shift
   log "$rid: zyal-advanced-reasoning-live-local (parallel=$parallel_env)"
   (
-    export JEKKO_ZYAL_LIVE=1 JEKKO_KEY_SOURCE_POLICY=users-only
+    export JEKKO_ZYAL_LIVE=1 JEKKO_KEY_SOURCE_POLICY=users-only JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}"
     [[ "$parallel_env" = "on" ]] && export JEKKO_REASONING_PARALLEL=1
     /usr/bin/time -v -o "$BATCH_ABS/runs/$rid.time" \
       rtk just zyal-advanced-reasoning-live-local "$rid"
@@ -252,7 +270,7 @@ run_superreasoning() {
   local timeout_secs="${1:-}"
   log "$rid: zyal-superreasoning-live-local (parallel=$parallel_env, timeout=${timeout_secs:-default})"
   (
-    export JEKKO_ZYAL_LIVE=1 JEKKO_KEY_SOURCE_POLICY=users-only
+    export JEKKO_ZYAL_LIVE=1 JEKKO_KEY_SOURCE_POLICY=users-only JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}"
     [[ "$parallel_env" = "on" ]] && export JEKKO_REASONING_PARALLEL=1
     [[ -n "$timeout_secs" ]] && export JEKKO_MODEL_CALL_TIMEOUT_SECS="$timeout_secs"
     /usr/bin/time -v -o "$BATCH_ABS/runs/$rid.time" \
@@ -263,11 +281,42 @@ run_superreasoning() {
 
 run_miniredis() {
   local rid="$1"
-  log "$rid: zyal-miniredis-live-local (parallel=on)"
+  local max_calls="${BATCH_MINIREDIS_MAX_CALLS:-}"
+  local max_parallel="${BATCH_MINIREDIS_MAX_PARALLEL:-4}"
+  local max_ticks="${BATCH_MINIREDIS_MAX_TICKS:-}"
+  if [[ -z "$max_calls" ]]; then
+    if [[ "${JEKKO_ZYAL_SERIOUS:-}" = "1" ]]; then
+      max_calls=64
+    else
+      max_calls=12
+    fi
+  fi
+  if [[ -z "$max_ticks" ]]; then
+    if [[ "${JEKKO_ZYAL_SERIOUS:-}" = "1" ]]; then
+      max_ticks=12
+    else
+      max_ticks=1
+    fi
+  fi
+  local config="$BATCH_ABS/config/miniredis-batch.port-run.json"
+  jq \
+    --argjson max_calls "$max_calls" \
+    --argjson max_parallel "$max_parallel" \
+    '
+      .worker_cap = $max_parallel
+      | .advanced_reasoning.worker_cap = $max_parallel
+      | .live_call_budget.max_calls = $max_calls
+      | .live_call_budget.max_parallel = $max_parallel
+    ' docs/ZYAL/examples/35-rust-redis-replacement-superreasoning.port-run.json \
+    > "$config" || fail "failed to write MiniRedis batch config"
+  log "$rid: zyal-miniredis live port-run (parallel=on, max_ticks=$max_ticks, max_calls=$max_calls)"
   (
-    export JEKKO_ZYAL_LIVE=1 JEKKO_KEY_SOURCE_POLICY=users-only JEKKO_REASONING_PARALLEL=1
+    export JEKKO_ZYAL_LIVE=1 JEKKO_KEY_SOURCE_POLICY=users-only JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}" JEKKO_REASONING_PARALLEL=1
     /usr/bin/time -v -o "$BATCH_ABS/runs/$rid.time" \
-      rtk just zyal-miniredis-live-local "$rid"
+      rtk cargo run --manifest-path crates/jankurai-runner/Cargo.toml --locked -- \
+        --repo . --run-id "$rid" \
+        port-run --config "$config" \
+        --live --max-ticks "$max_ticks"
   ) > "$BATCH_ABS/runs/$rid.stdout" 2> "$BATCH_ABS/runs/$rid.stderr"
   RUN_EXIT=$?
 }
@@ -275,7 +324,8 @@ run_miniredis() {
 run_super_redis() {
   local rid="$1"
   log "$rid: zyal-super-redis (plan-walk, no LLM)"
-  /usr/bin/time -v -o "$BATCH_ABS/runs/$rid.time" \
+  JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}" \
+    /usr/bin/time -v -o "$BATCH_ABS/runs/$rid.time" \
     rtk just zyal-super-redis "$rid" \
       > "$BATCH_ABS/runs/$rid.stdout" \
       2> "$BATCH_ABS/runs/$rid.stderr"
@@ -287,9 +337,11 @@ run_super_redis() {
 # BATCH_ONLY filter: include all by default
 batch_only_filter() {
   local rid="$1"
+  local base
+  base=$(base_run_id "$rid")
   if [[ -z "${BATCH_ONLY:-}" ]]; then return 0; fi
   for sel in $BATCH_ONLY; do
-    if [[ "$rid" == "$sel"* ]]; then return 0; fi
+    if [[ "$rid" == "$sel"* || "$base" == "$sel"* ]]; then return 0; fi
   done
   return 1
 }
@@ -305,6 +357,8 @@ execute_run() {
   local idx="$1"
   local rid="${RUN_IDS[$idx]}"
   local label="${RUN_LABELS[$idx]}"
+  local base
+  base=$(base_run_id "$rid")
 
   if ! batch_only_filter "$rid"; then
     log "skipping $rid (BATCH_ONLY filter)"
@@ -318,13 +372,13 @@ execute_run() {
 
   log "==================== $rid : $label ===================="
   snapshot_balancer "before-$rid"
-  [[ "$rid" == "super-redis-r6-planwalk" ]] && snapshot_super_store "before-$rid"
+  [[ "$base" == "super-redis-r6-planwalk" ]] && snapshot_super_store "before-$rid"
 
   local started_at finished_at
   started_at=$(date -u +%s)
 
   case "$idx" in
-    0) run_r0 ;;
+    0) run_r0 "$rid" ;;
     1) run_advanced "$rid" "off" ;;
     2) run_advanced "$rid" "on" ;;
     3) run_superreasoning "$rid" "off" "" ;;
@@ -337,9 +391,13 @@ execute_run() {
   finished_at=$(date -u +%s)
   local duration_s=$((finished_at - started_at))
   log "$rid finished: exit=$RUN_EXIT duration=${duration_s}s"
+  if [[ "$RUN_EXIT" -ne 0 ]]; then
+    BATCH_FAILURES=$((BATCH_FAILURES + 1))
+    BATCH_FAILED_RUNS+=("$rid=$RUN_EXIT")
+  fi
 
   snapshot_balancer "after-$rid"
-  [[ "$rid" == "super-redis-r6-planwalk" ]] && snapshot_super_store "after-$rid"
+  [[ "$base" == "super-redis-r6-planwalk" ]] && snapshot_super_store "after-$rid"
 
   # Copy per-run events.jsonl if it exists
   local ev_src
@@ -391,3 +449,6 @@ rm -f "$manifest_tmp"
 log "==================== batch complete ===================="
 log "manifest: $BATCH_DIR/manifest.json"
 log "next: scripts/zyal-live-report.sh $BATCH_DIR"
+if [[ "$BATCH_FAILURES" -ne 0 ]]; then
+  fail "batch recorded $BATCH_FAILURES failed run(s): ${BATCH_FAILED_RUNS[*]}"
+fi

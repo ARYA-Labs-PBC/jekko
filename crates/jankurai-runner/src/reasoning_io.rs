@@ -1,6 +1,8 @@
 //! I/O helpers for advanced reasoning runs.
 //!
-//! This module owns the model-call retry loop (`complete_structured*`) and
+//! This module owns the model-call retry loop (`complete_structured_model_only`)
+//! and its recovery-aware persistence wrapper
+//! (`complete_structured_recoverable`), plus
 //! the related event-payload helpers. Artifact construction + persistence
 //! live in [`crate::reasoning_artifacts`]; JSON extraction lives in
 //! [`crate::reasoning_parse`]. Re-exported here so existing call sites
@@ -17,14 +19,13 @@ use crate::events::{EventKind, EventSink};
 use crate::model_client::{ModelCallReceipt, ModelClient};
 use crate::model_policy::ModelTaskKind;
 
-pub(crate) use crate::reasoning_artifacts::mark_blocked_for_parse_error;
 pub(crate) use crate::reasoning_artifacts::{
     artifact, emit_state, export_reasoning_graph, persist_artifact, persist_edge,
     synthetic_structured_value,
 };
 pub(crate) use crate::reasoning_parse::parse_structured_model_json;
 
-/// Outcome of the pure model-call half of [`complete_structured`].
+/// Outcome of the pure model-call retry loop.
 ///
 /// The retry loop runs end-to-end without touching `Db` or [`EventSink`], so
 /// callers can drive multiple of these concurrently (e.g. via
@@ -43,6 +44,19 @@ pub(crate) struct ModelOnlyOutcome {
     /// Per-attempt receipts that need to be persisted before the final one.
     /// Empty in the common 1-attempt case.
     pub intermediate_receipts: Vec<ModelCallReceipt>,
+}
+
+/// Persisted result of a structured model call that is allowed to recover.
+#[derive(Debug)]
+pub(crate) enum StructuredCompletion {
+    Parsed {
+        receipt: ModelCallReceipt,
+        value: serde_json::Value,
+    },
+    RecoveredFailure {
+        receipt: Option<ModelCallReceipt>,
+        error: String,
+    },
 }
 
 /// Pure model-call retry loop. Performs no `Db`/`EventSink` I/O; instead it
@@ -77,11 +91,14 @@ pub(crate) async fn complete_structured_model_only(
         let receipt = model_client.complete(kind, &prompt, &repo).await?;
         empty_tracker.record_into_queue(&receipt, &mut queued_events);
         if receipt.budget_used.is_some() || receipt.budget_remaining.is_some() {
+            let used = receipt.budget_used.unwrap_or(0);
+            let remaining = receipt.budget_remaining.unwrap_or(0);
             queued_events.push((
                 EventKind::LiveBudget,
                 json!({
-                    "used": receipt.budget_used.unwrap_or(0),
-                    "remaining": receipt.budget_remaining.unwrap_or(0),
+                    "max_calls": used.saturating_add(remaining),
+                    "used": used,
+                    "remaining": remaining,
                 }),
             ));
         }
@@ -119,10 +136,27 @@ pub(crate) async fn complete_structured_model_only(
                 });
             }
             push_model_attempt_outcome(&mut queued_events, &receipt, attempt, "missing_response");
-            last_error = Some("model response missing".to_string());
             intermediate_receipts.push(receipt);
-            continue;
+            return Err(anyhow!(ModelOnlyError::ParseFailure {
+                intermediate_receipts,
+                queued_events,
+                error: "model response missing".to_string(),
+            }));
         };
+        if text.trim().is_empty() {
+            push_model_attempt_outcome(
+                &mut queued_events,
+                &receipt,
+                attempt,
+                "empty_response_recovered",
+            );
+            intermediate_receipts.push(receipt);
+            return Err(anyhow!(ModelOnlyError::ParseFailure {
+                intermediate_receipts,
+                queued_events,
+                error: "model response empty".to_string(),
+            }));
+        }
         match parse_structured_model_json(text) {
             Ok(value) => {
                 push_model_attempt_outcome(&mut queued_events, &receipt, attempt, "parsed");
@@ -149,12 +183,12 @@ pub(crate) async fn complete_structured_model_only(
                 });
             }
             Err(err) => {
-                push_model_attempt_outcome(
-                    &mut queued_events,
-                    &receipt,
-                    attempt,
-                    "retryable_failure",
-                );
+                let state = if attempt == 3 {
+                    "final_block"
+                } else {
+                    "retryable_failure"
+                };
+                push_model_attempt_outcome(&mut queued_events, &receipt, attempt, state);
                 last_error = Some(err.to_string());
                 intermediate_receipts.push(receipt);
             }
@@ -205,7 +239,7 @@ impl std::fmt::Display for ModelOnlyError {
 
 impl std::error::Error for ModelOnlyError {}
 
-pub(crate) async fn complete_structured(
+pub(crate) async fn complete_structured_recoverable(
     repo: &Path,
     run_id: &str,
     db: &Db,
@@ -213,7 +247,7 @@ pub(crate) async fn complete_structured(
     model_client: &dyn ModelClient,
     kind: ModelTaskKind,
     prompt: &str,
-) -> Result<(ModelCallReceipt, serde_json::Value)> {
+) -> Result<StructuredCompletion> {
     let result = complete_structured_model_only(
         repo.to_path_buf(),
         run_id.to_string(),
@@ -222,6 +256,15 @@ pub(crate) async fn complete_structured(
         prompt.to_string(),
     )
     .await;
+    flush_model_only_result(db, run_id, sink, result)
+}
+
+pub(crate) fn flush_model_only_result(
+    db: &Db,
+    run_id: &str,
+    sink: &EventSink,
+    result: Result<ModelOnlyOutcome>,
+) -> Result<StructuredCompletion> {
     match result {
         Ok(outcome) => {
             for receipt in &outcome.intermediate_receipts {
@@ -231,7 +274,10 @@ pub(crate) async fn complete_structured(
             for (event_kind, payload) in &outcome.queued_events {
                 sink.emit(*event_kind, payload.clone())?;
             }
-            Ok((outcome.receipt, outcome.value))
+            Ok(StructuredCompletion::Parsed {
+                receipt: outcome.receipt,
+                value: outcome.value,
+            })
         }
         Err(err) => match err.downcast::<ModelOnlyError>() {
             Ok(ModelOnlyError::ModelFailure { outcome, error }) => {
@@ -242,30 +288,27 @@ pub(crate) async fn complete_structured(
                 for (event_kind, payload) in &outcome.queued_events {
                     sink.emit(*event_kind, payload.clone())?;
                 }
-                daemon_store::mark_daemon_run(
-                    db,
-                    run_id,
-                    "blocked",
-                    &outcome.receipt.kind,
-                    Some(&error),
-                )?;
-                Err(anyhow!("model call failed: {error}"))
+                if outcome.receipt.provider == "budget" {
+                    return Err(anyhow!("model call failed: {error}"));
+                }
+                Ok(StructuredCompletion::RecoveredFailure {
+                    receipt: Some(outcome.receipt),
+                    error,
+                })
             }
             Ok(ModelOnlyError::ParseFailure {
                 intermediate_receipts,
                 queued_events,
                 error,
             }) => {
+                let receipt = intermediate_receipts.last().cloned();
                 for receipt in &intermediate_receipts {
                     daemon_store::persist_model_receipt(db, run_id, receipt)?;
                 }
                 for (event_kind, payload) in &queued_events {
                     sink.emit(*event_kind, payload.clone())?;
                 }
-                mark_blocked_for_parse_error(db, run_id, &error)?;
-                Err(anyhow!(
-                    "advanced reasoning model JSON parse failed: {error}"
-                ))
+                Ok(StructuredCompletion::RecoveredFailure { receipt, error })
             }
             Err(other) => Err(other),
         },

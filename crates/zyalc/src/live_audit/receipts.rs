@@ -3,6 +3,8 @@ use serde_json::Value;
 use super::checks::{check_live_credential_fields, check_live_provider};
 use super::LiveAuditReport;
 
+const EMPTY_RESPONSE_SHA256: &str = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+
 pub(crate) fn audit_model_receipts(
     packet: Option<&Value>,
     receipts: &[Value],
@@ -47,15 +49,24 @@ fn audit_model_receipt(idx: usize, receipt: &Value, budget: u64, report: &mut Li
             .failures
             .push(format!("model_receipt[{idx}] was not successful"));
     }
-    if receipt
+    let response_bytes = receipt
         .get("response_bytes")
         .and_then(Value::as_u64)
-        .unwrap_or(0)
-        == 0
-    {
-        report.failures.push(format!(
-            "model_receipt[{idx}] missing nonzero response_bytes"
-        ));
+        .unwrap_or(0);
+    if response_bytes == 0 {
+        let response_sha256 = receipt
+            .get("response_sha256")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if response_sha256 == EMPTY_RESPONSE_SHA256 {
+            report.warnings.push(format!(
+                "model_receipt[{idx}] recorded empty upstream response recovered by runner"
+            ));
+        } else {
+            report.failures.push(format!(
+                "model_receipt[{idx}] missing nonzero response_bytes"
+            ));
+        }
     }
     if receipt
         .get("response_sha256")

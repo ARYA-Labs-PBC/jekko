@@ -55,11 +55,14 @@ pub(crate) async fn complete_hero_json(
             )?;
         }
         if receipt.budget_used.is_some() || receipt.budget_remaining.is_some() {
+            let used = receipt.budget_used.unwrap_or(0);
+            let remaining = receipt.budget_remaining.unwrap_or(0);
             ctx.sink.emit(
                 EventKind::LiveBudget,
                 json!({
-                    "used": receipt.budget_used.unwrap_or(0),
-                    "remaining": receipt.budget_remaining.unwrap_or(0),
+                    "max_calls": used.saturating_add(remaining),
+                    "used": used,
+                    "remaining": remaining,
                 }),
             )?;
         }
@@ -220,12 +223,15 @@ fn classify_hero_completion(
     }
 
     let Some(text) = receipt.response.as_deref() else {
-        return if attempt < 3 {
-            HeroCompletionDecision::RetryableFailure("missing model response".to_string())
-        } else {
-            HeroCompletionDecision::FinalBlock("missing model response".to_string())
-        };
+        return HeroCompletionDecision::LiveParseSubstitution(parse_substitute_lane_value(
+            kind, generation,
+        ));
     };
+    if text.trim().is_empty() {
+        return HeroCompletionDecision::LiveParseSubstitution(parse_substitute_lane_value(
+            kind, generation,
+        ));
+    }
     match parse_structured_model_json(text) {
         Ok(value) => HeroCompletionDecision::Parsed(value),
         Err(_) if receipt.provider == "fake" => HeroCompletionDecision::ProviderSyntheticResponse(
@@ -236,17 +242,64 @@ fn classify_hero_completion(
                 "live model response was not parseable JSON".to_string(),
             )
         }
-        Err(_) if require_parsed_live_json => HeroCompletionDecision::FinalBlock(
-            "live model response was not parseable JSON".to_string(),
+        Err(_) if require_parsed_live_json => HeroCompletionDecision::LiveParseSubstitution(
+            parse_substitute_lane_value(kind, generation),
         ),
-        Err(_) if text.trim().is_empty() && attempt < 3 => {
-            HeroCompletionDecision::RetryableFailure("empty model response".to_string())
-        }
-        Err(_) if text.trim().is_empty() => {
-            HeroCompletionDecision::FinalBlock("empty model response".to_string())
-        }
         Err(_) => HeroCompletionDecision::LiveParseSubstitution(parse_substitute_lane_value(
             kind, generation,
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn receipt(response: Option<&str>) -> ModelCallReceipt {
+        ModelCallReceipt {
+            id: "hero-test".to_string(),
+            kind: kind_label(ModelTaskKind::HeroGenerate).to_string(),
+            task_id: None,
+            provider: "live-test".to_string(),
+            model: "test".to_string(),
+            latency_ms: 1,
+            success: true,
+            cost_usd: None,
+            response: response.map(str::to_string),
+            error: None,
+            budget_used: None,
+            budget_remaining: None,
+            route: Some(kind_label(ModelTaskKind::HeroGenerate).to_string()),
+            credential_policy: None,
+            selected_credential_user_id: None,
+            credential_user_id: None,
+            retry_count: Some(0),
+            quality_band: None,
+        }
+    }
+
+    #[test]
+    fn strict_empty_live_response_substitutes_without_retrying() {
+        let decision =
+            classify_hero_completion(ModelTaskKind::HeroGenerate, 1, 1, &receipt(Some("")), true);
+        assert!(matches!(
+            decision,
+            HeroCompletionDecision::LiveParseSubstitution(_)
+        ));
+    }
+
+    #[test]
+    fn strict_invalid_live_json_substitutes_on_final_attempt() {
+        let decision = classify_hero_completion(
+            ModelTaskKind::HeroGenerate,
+            1,
+            3,
+            &receipt(Some("not json")),
+            true,
+        );
+        assert!(matches!(
+            decision,
+            HeroCompletionDecision::LiveParseSubstitution(_)
+        ));
     }
 }

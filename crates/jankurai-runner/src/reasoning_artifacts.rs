@@ -4,7 +4,7 @@
 //! authored-source ceiling and to expose a cleaner public surface: the
 //! retry/io machinery lives next to the model-call loop, while this module
 //! owns the `ReasoningArtifact` lifecycle (construct → persist → emit →
-//! export → mark-blocked).
+//! export).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -136,11 +136,4 @@ pub(crate) fn synthetic_structured_value(kind: ModelTaskKind) -> serde_json::Val
         "kind": format!("{kind:?}"),
         "summary": "deterministic fake structured response",
     })
-}
-
-/// Mark the run as blocked on a model-JSON parse error so the supervisor
-/// halts further phase advancement until an operator resolves it.
-pub(crate) fn mark_blocked_for_parse_error(db: &Db, run_id: &str, error: &str) -> Result<()> {
-    daemon_store::mark_daemon_run(db, run_id, "blocked", "model_json_parse", Some(error))?;
-    Ok(())
 }

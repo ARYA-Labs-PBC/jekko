@@ -121,7 +121,11 @@ pub(super) fn validate_superworkflow_value(source: &Path, value: &serde_yaml::Va
             .and_then(|v| v.as_str())
             .expect("checked above");
         if let Some(depends_on) = lookup(phase, "depends_on") {
-            for dep in depends_on.as_sequence().cloned().unwrap_or_default() {
+            let deps = match depends_on.as_sequence() {
+                Some(deps) => deps,
+                None => continue,
+            };
+            for dep in deps {
                 let dep = dep
                     .as_str()
                     .ok_or_else(|| anyhow!("phase {id} dependency must be string"))?;
@@ -181,11 +185,13 @@ fn superworkflow_dependencies_are_acyclic(phases: &[serde_yaml::Value]) -> Resul
     let mut visited = 0usize;
     while let Some(id) = ready.pop_front() {
         visited += 1;
-        for next in outgoing.get(&id).cloned().unwrap_or_default() {
-            let degree = indegree.get_mut(&next).expect("known node");
-            *degree -= 1;
-            if *degree == 0 {
-                ready.push_back(next);
+        if let Some(children) = outgoing.get(&id) {
+            for next in children {
+                let degree = indegree.get_mut(next).expect("known node");
+                *degree -= 1;
+                if *degree == 0 {
+                    ready.push_back(next.clone());
+                }
             }
         }
     }
@@ -213,10 +219,8 @@ fn require_seq<'a>(map: &'a serde_yaml::Mapping, key: &str) -> Result<&'a Vec<se
 }
 
 fn require_scalar(map: &serde_yaml::Mapping, key: &str, expected: &str) -> Result<()> {
-    let actual = require_present(map, key)?.as_str().unwrap_or_default();
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(anyhow!("`{key}` must be `{expected}`"))
+    match require_present(map, key)?.as_str() {
+        Some(actual) if actual == expected => Ok(()),
+        _ => Err(anyhow!("`{key}` must be `{expected}`")),
     }
 }

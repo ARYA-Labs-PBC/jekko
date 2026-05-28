@@ -193,7 +193,8 @@ impl ModelTaskKind {
     /// Whether this task routes to the power model by default.
     pub fn uses_power_model(self) -> bool {
         match self {
-            ModelTaskKind::StageReduce
+            ModelTaskKind::StageBrainstorm
+            | ModelTaskKind::StageReduce
             | ModelTaskKind::StageCritique
             | ModelTaskKind::Critic
             | ModelTaskKind::PerfClose
@@ -206,7 +207,6 @@ impl ModelTaskKind {
             | ModelTaskKind::RedTeam
             | ModelTaskKind::MetaJudge => true,
             ModelTaskKind::Frame
-            | ModelTaskKind::StageBrainstorm
             | ModelTaskKind::PhaseBrainstorm
             | ModelTaskKind::Hypothesis
             | ModelTaskKind::Verifier
@@ -292,12 +292,9 @@ mod tests {
             }),
             ..ModelPolicy::default()
         };
-        // StageBrainstorm routes to the power role when uses_power_model()
-        // is true OR allow_power_for_routine_roles is set; here it goes
-        // through the inherit_power_when_empty fallback for critic/meta
-        // BUT in default for routine kinds it routes to .routine — and
-        // .routine is empty, so for a kind that explicitly uses power:
-        let route = policy.select(ModelTaskKind::StageReduce);
+        // StageBrainstorm is load-bearing for MiniRedis runs and must inherit
+        // the power role's quality band.
+        let route = policy.select(ModelTaskKind::StageBrainstorm);
         assert_eq!(route.quality_band.as_deref(), Some("top20"));
         // is_empty() must still consider a band-only record as non-empty
         // so the inherit_power_when_empty fallback fires correctly.

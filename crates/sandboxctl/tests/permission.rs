@@ -38,7 +38,7 @@ fn pushable_table() {
     let m = Matcher::new(
         &[
             "just *".into(),
-            "bun *".into(),
+            "sh *".into(),
             "cargo check*".into(),
             "cargo build*".into(),
             "cargo test*".into(),
@@ -57,7 +57,7 @@ fn pushable_table() {
     .unwrap();
     let allow = [
         vec!["just", "fast"],
-        vec!["bun", "test"],
+        vec!["sh", "test"],
         vec!["cargo", "check"],
         vec!["cargo", "build", "--release"],
         vec!["cargo", "test", "-p", "sandboxctl"],

@@ -5,12 +5,13 @@ use anyhow::{Context, Result};
 use jankurai_runner::bootstrap_check;
 use jankurai_runner::daemon_store;
 use jankurai_runner::events::{EventKind, EventSink};
+use jankurai_runner::hero_judge::HeroJudgeRunbook;
 use jankurai_runner::hero_judge_runner::{read_hero_judge_runbook, run_hero_judge_run};
 use jankurai_runner::model_client::{
     BudgetedModelClient, FakeModelClient, JekkoRuntimeModelClient, ModelClient,
 };
 use jankurai_runner::model_policy::ModelTaskKind;
-use jankurai_runner::port_runner::{read_port_run_config, run_port_tick};
+use jankurai_runner::port_runner::{read_port_run_config, run_port_tick_with_db, PortTickReport};
 use jankurai_runner::runner::{self, run_once, RunnerConfig};
 
 use super::cli::{Cli, HeroJudgeRunArgs, ModelSmokeArgs, PortRunArgs, RunnerCommand};
@@ -101,7 +102,8 @@ async fn run_model_smoke(repo: PathBuf, run_id: String, args: ModelSmokeArgs) ->
 }
 
 async fn run_port_command(repo: PathBuf, run_id: String, args: PortRunArgs) -> Result<i32> {
-    let config = read_port_run_config(&args.config)?;
+    let mut config = read_port_run_config(&args.config)?;
+    apply_port_env_overrides(&mut config)?;
     if config.runtime.live_call_budget.require_live && !args.live {
         anyhow::bail!("port config requires live model calls; pass --live");
     }
@@ -123,7 +125,10 @@ async fn run_port_command(repo: PathBuf, run_id: String, args: PortRunArgs) -> R
     let max_ticks = args
         .max_ticks
         .unwrap_or(if args.forever { u64::MAX } else { 1 });
+    let db = daemon_store::open_db(&repo)?;
     let mut tick = 0_u64;
+    let mut last_report: Option<PortTickReport> = None;
+    let mut terminal_error = None;
     loop {
         if stop_requested(args.stop_file.as_ref()) {
             println!(
@@ -137,15 +142,39 @@ async fn run_port_command(repo: PathBuf, run_id: String, args: PortRunArgs) -> R
             );
             break;
         }
-        let report = run_port_tick(&repo, &run_id, config.clone(), client.as_ref()).await?;
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        tick += 1;
+        match run_port_tick_with_db(&repo, &run_id, config.clone(), client.as_ref(), &db).await {
+            Ok(report) => {
+                let completed = port_report_completed(Some(&report));
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                tick += 1;
+                last_report = Some(report);
+                if completed {
+                    break;
+                }
+            }
+            Err(err) => {
+                terminal_error = Some(err);
+                break;
+            }
+        }
         if tick >= max_ticks {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(args.tick_interval_secs)).await;
     }
-    Ok(0)
+    finalize_port_artifacts(
+        &repo,
+        &run_id,
+        &db,
+        tick,
+        last_report.as_ref(),
+        terminal_error.is_none(),
+    )?;
+    if let Some(err) = terminal_error {
+        Err(err)
+    } else {
+        Ok(0)
+    }
 }
 
 async fn run_hero_judge_command(
@@ -153,7 +182,8 @@ async fn run_hero_judge_command(
     run_id: String,
     args: HeroJudgeRunArgs,
 ) -> Result<i32> {
-    let runbook = read_hero_judge_runbook(&args.zyal)?;
+    let mut runbook = read_hero_judge_runbook(&args.zyal)?;
+    apply_hero_judge_env_overrides(&mut runbook)?;
     if args.runs > 500 {
         anyhow::bail!("hero-judge-run --runs is capped at 500");
     }
@@ -179,4 +209,74 @@ async fn run_hero_judge_command(
 
 fn stop_requested(path: Option<&PathBuf>) -> bool {
     path.is_some_and(|path| path.exists())
+}
+
+fn finalize_port_artifacts(
+    repo: &PathBuf,
+    run_id: &str,
+    db: &jekko_store::db::Db,
+    ticks: u64,
+    last_report: Option<&PortTickReport>,
+    command_completed: bool,
+) -> Result<()> {
+    let run_dir = repo.join("target/zyal/runs").join(run_id);
+    daemon_store::export_model_receipts_jsonl(db, run_id, &run_dir.join("model_receipts.jsonl"))?;
+    if command_completed && port_report_completed(last_report) {
+        let sink = EventSink::open(repo, run_id)?;
+        sink.emit(
+            EventKind::RunFinished,
+            serde_json::json!({
+                "workflow": "zyal_advanced_port",
+                "status": "complete",
+                "ticks": ticks,
+            }),
+        )?;
+    }
+    if let Err(err) = jankurai_runner::run_summary::build_and_write(&run_dir) {
+        eprintln!("jankurai-runner: summary.json generation failed for {run_id}: {err:#}");
+    }
+    Ok(())
+}
+
+fn port_report_completed(report: Option<&PortTickReport>) -> bool {
+    report
+        .and_then(|report| report.advanced_reasoning.as_ref())
+        .map(|advanced| advanced.state == "complete")
+        .unwrap_or(false)
+}
+
+fn apply_port_env_overrides(
+    config: &mut jankurai_runner::port_runner::PortRunConfig,
+) -> Result<()> {
+    if let Some(max_calls) = env_usize("JEKKO_ZYAL_PORT_MAX_CALLS")? {
+        config.runtime.live_call_budget.max_calls = max_calls;
+    }
+    if let Some(max_parallel) = env_usize("JEKKO_ZYAL_PORT_MAX_PARALLEL")? {
+        config.runtime.live_call_budget.max_parallel = max_parallel;
+    }
+    Ok(())
+}
+
+fn apply_hero_judge_env_overrides(runbook: &mut HeroJudgeRunbook) -> Result<()> {
+    if let Some(model_calls) = env_usize("JEKKO_ZYAL_HERO_MODEL_CALL_BUDGET")? {
+        runbook.hero_judge.budgets.model_calls = model_calls;
+    }
+    if let Some(max_parallel) = env_usize("JEKKO_ZYAL_HERO_MAX_PARALLEL")? {
+        runbook.hero_judge.population.max_parallel = max_parallel;
+    }
+    Ok(())
+}
+
+fn env_usize(name: &str) -> Result<Option<usize>> {
+    let Some(value) = std::env::var(name).ok() else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<usize>()
+        .with_context(|| format!("parse {name}={trimmed:?} as usize"))
+        .map(Some)
 }

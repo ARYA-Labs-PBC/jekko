@@ -96,7 +96,10 @@ pub(super) fn numeric_tolerance_from_json(value: &Json) -> Result<NumericToleran
 
 pub(super) fn support_from_json(value: &Json) -> Result<SupportRef, String> {
     let obj = as_object(value)?;
-    let section_hash = optional_string(obj, "section_hash").unwrap_or_default();
+    let section_hash = match optional_string(obj, "section_hash") {
+        Some(section_hash) => section_hash,
+        None => String::new(),
+    };
     Ok(SupportRef {
         section_id: required_string(obj, "section_id")?,
         section_hash,
@@ -158,4 +161,18 @@ pub(super) fn optional_bool(
     key: &str,
 ) -> Option<bool> {
     obj.get(key).and_then(as_bool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json::{obj, s};
+
+    #[test]
+    fn support_from_json_defaults_missing_section_hash_to_empty_string() {
+        let value = obj(&[("section_id", s("s1"))]);
+        let support = support_from_json(&value).expect("parse support");
+        assert_eq!(support.section_id, "s1");
+        assert!(support.section_hash.is_empty());
+    }
 }
