@@ -14,15 +14,22 @@ use crate::model::{PhaseStatus, SuperWorkflow};
 impl SupervisorStore {
     /// Initialize a run from a manifest. Returns the assigned `run_id`.
     ///
-    /// The run id is derived from the manifest id plus a millisecond
-    /// timestamp so multiple runs of the same workflow coexist. All phases
-    /// are seeded as [`PhaseStatus::Pending`]; callers can promote
-    /// dependency-free phases to `Ready` via [`Self::record_phase_status`]
-    /// or by reading [`crate::planner::ready_phases`].
-    pub fn init_run(&self, manifest: &SuperWorkflow) -> rusqlite::Result<String> {
+    /// When `requested_id` is `Some`, that value is used verbatim. Otherwise
+    /// the run id is derived from the manifest id plus a millisecond timestamp
+    /// so multiple runs of the same workflow coexist. All phases are seeded
+    /// as [`PhaseStatus::Pending`]; callers can promote dependency-free phases
+    /// to `Ready` via [`Self::record_phase_status`] or by reading
+    /// [`crate::planner::ready_phases`].
+    pub fn init_run(
+        &self,
+        manifest: &SuperWorkflow,
+        requested_id: Option<&str>,
+    ) -> rusqlite::Result<String> {
         let now_dt = Utc::now();
         let now = now_dt.to_rfc3339();
-        let run_id = format!("{}-{}", manifest.id, now_dt.timestamp_millis());
+        let run_id = requested_id
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{}-{}", manifest.id, now_dt.timestamp_millis()));
         let manifest_json = serde_json::to_string(manifest)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
 

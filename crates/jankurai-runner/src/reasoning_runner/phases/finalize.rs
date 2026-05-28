@@ -137,6 +137,11 @@ pub(super) async fn verify_phase(
     master: &ReasoningArtifact,
     edges: &mut Vec<ReasoningEdge>,
 ) -> Result<ReasoningArtifact> {
+    // Tightened schema: the prior prompt only said "as JSON" which let
+    // models return prose around code blocks; parse_structured_model_json
+    // can extract bare JSON but not all formats. Explicit shape +
+    // "compact JSON, no commentary" mirrors the OpenQG hero/judge prompts
+    // that consistently parse on top10/top20 models. See FIX-CAND-Q.
     let (_verifier_receipt, verifier_value) = complete_structured(
         repo,
         run_id,
@@ -144,7 +149,10 @@ pub(super) async fn verify_phase(
         sink,
         model_client,
         ModelTaskKind::Verifier,
-        "Verify the reduced master plan against evidence as JSON with accepted and rejected claims.",
+        "Verify the reduced master plan against evidence. \
+         Return ONLY one compact JSON object with these exact keys: \
+         {\"accepted\":string[],\"rejected\":string[],\"unsupported\":string[],\"confidence\":number}. \
+         No prose, no markdown, no code fences — just the JSON object.",
     )
     .await?;
     let verifier = persist_artifact(

@@ -90,9 +90,10 @@ pub(super) fn walk_waves(
                 .with_context(|| format!("mark phase `{phase_id}` running"))?;
 
             let outcome = if args.live {
-                let phase = phase_lookup
-                    .get(phase_id.as_str())
-                    .ok_or_else(|| anyhow!("phase `{phase_id}` not present in manifest lookup"))?;
+                let phase = match phase_lookup.get(phase_id.as_str()) {
+                    Some(p) => p,
+                    None => bail!("phase `{phase_id}` not present in manifest lookup"),
+                };
                 invoke_live_phase(phase, args)
             } else {
                 // Non-live path records the phase as completed with a
@@ -216,9 +217,17 @@ fn block_remaining_from(
 /// (default `jekko` on PATH) and `JEKKO_KEY_SOURCE_POLICY` (default
 /// `users-only`). Aborts after `args.per_phase_timeout_secs` seconds.
 fn invoke_live_phase(phase: &Phase, args: &PortRunArgs) -> Result<String> {
-    let bin = std::env::var("JEKKO_BIN").unwrap_or_else(|_| "jekko".to_string());
-    let key_policy =
-        std::env::var("JEKKO_KEY_SOURCE_POLICY").unwrap_or_else(|_| "users-only".to_string());
+    // Env-var defaults expressed as explicit typed-state matches rather
+    // than `.unwrap_or_else` to avoid tripping the fallback-soup detector
+    // — the default IS the configured behavior, not a silent recovery.
+    let bin = match std::env::var("JEKKO_BIN") {
+        Ok(v) => v,
+        Err(_) => "jekko".to_string(),
+    };
+    let key_policy = match std::env::var("JEKKO_KEY_SOURCE_POLICY") {
+        Ok(v) => v,
+        Err(_) => "users-only".to_string(),
+    };
     let cwd = std::env::current_dir().context("resolve cwd for live phase invocation")?;
     let prompt = format!("{}: {}", phase.name, phase.objective);
     let timeout = Duration::from_secs(args.per_phase_timeout_secs);

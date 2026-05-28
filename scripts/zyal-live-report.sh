@@ -88,7 +88,18 @@ if ls "$BATCH_ABS"/balancer/before-*.sql >/dev/null 2>&1; then
     [[ -z "$before_cursor" ]] && before_cursor="—"
     [[ -z "$after_cursor" ]] && after_cursor="—"
     moved="moved"
-    [[ "$before_cursor" = "$after_cursor" ]] && moved="STALLED"
+    if [[ "$before_cursor" = "$after_cursor" ]]; then
+      # If the run produced zero events (e.g. r6 plan-walk / no-LLM
+      # scaffold), the cursor SHOULD stay put — no model attempts means
+      # no cursor advance is expected. Distinguish that legitimate
+      # no-op from a real balancer stall.
+      ev_file="$BATCH_ABS/runs/$rid.events.jsonl"
+      if [[ -s "$ev_file" ]]; then
+        moved="STALLED"
+      else
+        moved="no-op (0 events)"
+      fi
+    fi
     slot_rows+="| $rid | \`$before_cursor\` | \`$after_cursor\` | $moved |"$'\n'
   done < <(ls -1 "$BATCH_ABS"/balancer/before-*.sql 2>/dev/null)
 fi
@@ -122,7 +133,21 @@ if [[ -f "$BATCH_ABS/manifest.json" ]]; then
   while read -r run_id; do
     ev="$BATCH_ABS/runs/$run_id.events.jsonl"
 
-    s1=$(filter_kind "$ev" "model_attempt_outcome" ".data.success==false")
+    # Signal 1: model_attempt_outcome_burst — failure-RATE, not raw count.
+    # Match watcher::remediation::ProviderErrorBurst (attempts>=20 AND
+    # failures/attempts > 0.5). Hero-judge runs naturally accumulate dozens
+    # of attempts via the 3-retry × multi-lane × multi-generation fan-out
+    # even when fusion shows 100% gateway success; gating on rate keeps
+    # this signal from false-positiving on healthy traffic.
+    s1_attempts=$(count_kind "$ev" "model_attempt")
+    s1_failures=$(filter_kind "$ev" "model_attempt_outcome" ".data.success==false")
+    if [[ "$s1_attempts" -ge 20 ]]; then
+      # bash integer math; convert to "1" iff (failures*100/attempts) > 50.
+      pct=$(( (s1_failures * 100) / (s1_attempts == 0 ? 1 : s1_attempts) ))
+      if [[ "$pct" -gt 50 ]]; then s1=1; else s1=0; fi
+    else
+      s1=0
+    fi
     s4=$(jq -rs '[.[] | select(.kind=="worker_stall" or .kind=="worker_quarantine")] | length' "$ev" 2>/dev/null || echo 0)
     s5=$(filter_kind "$ev" "live_budget" ".data.remaining<=0")
     s6=$(count_kind "$ev" "proof_failed")

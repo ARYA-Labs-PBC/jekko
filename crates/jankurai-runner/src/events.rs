@@ -72,6 +72,14 @@ pub enum EventKind {
     /// Jankurai audit hard-findings count increased mid-run — phase signoff
     /// should block until cleared.
     JankuraiRegression,
+    /// Three or more consecutive model attempts at the same task kind
+    /// returned an empty response (response_bytes == 0). Distinct from
+    /// `model_failure` / `retryable_failure` because the subprocess
+    /// completed successfully — the model spoke, but said nothing.
+    /// Typically a content-side issue (prompt too long, output budget
+    /// exceeded, content filter) — the recommended remediation is to
+    /// declare a stronger `quality_band` on the affected stage.
+    EmptyResponseStreak,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,7 +161,7 @@ fn append_line(path: &Path, line: &str) -> Result<()> {
     Ok(())
 }
 
-fn now_epoch_secs() -> u64 {
+pub(crate) fn now_epoch_secs() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(d) => d.as_secs(),
         Err(_) => 0,

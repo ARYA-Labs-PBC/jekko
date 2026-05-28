@@ -161,10 +161,15 @@ start_fusion() {
     return 0
   fi
   [[ -x "$FUSION_BIN" ]] || fail "fusion binary missing: $FUSION_BIN (run: cargo build -p jnoccio-fusion --manifest-path jnoccio-fusion/Cargo.toml)"
-  log "starting jnoccio-fusion → $BATCH_DIR/fusion.log"
+  log "starting jnoccio-fusion → $BATCH_DIR/fusion.log (key_source=${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool})"
   (
     cd "$REPO_ROOT/jnoccio-fusion"
-    "$FUSION_BIN" --config config/server.json --env-file .env.jnoccio
+    # The ladder is built around the users_pool fan-out across
+    # ~/.jekko/users/<id>/llm.env. Without this env var fusion defaults
+    # to legacy config_env (single .env.jnoccio pool) — which silently
+    # bypasses the multi-tenant credential design the recipes assume.
+    JNOCCIO_UPSTREAM_KEY_SOURCE="${JNOCCIO_UPSTREAM_KEY_SOURCE:-users_pool}" \
+      "$FUSION_BIN" --config config/server.json --env-file .env.jnoccio
   ) > "$BATCH_ABS/fusion.log" 2>&1 &
   FUSION_PID=$!
   echo "$FUSION_PID" > "$BATCH_ABS/pids/fusion.pid"
@@ -218,6 +223,9 @@ RUN_EXIT=0
 
 run_r0() {
   log "r0: cargo test --workspace --locked --no-fail-fast"
+  # The tuiwright baseline_matrix capture suite now requires explicit
+  # JEKKO_TUI_CAPTURE=1 (added in the GOD-logging session), so it skips
+  # silently here even with JEKKO_BIN set globally for the live recipes.
   /usr/bin/time -v -o "$BATCH_ABS/runs/r0-smoke.time" \
     cargo test --workspace --locked --no-fail-fast \
       > "$BATCH_ABS/runs/r0-smoke.stdout" \

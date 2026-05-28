@@ -137,6 +137,7 @@ impl ModelClient for InvalidLiveJsonClient {
             selected_credential_user_id: None,
             credential_user_id: None,
             retry_count: Some(0),
+            quality_band: None,
         })
     }
 }

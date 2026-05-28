@@ -66,6 +66,7 @@ impl JekkoRuntimeModelClient {
         ModelRouteRecord {
             provider: self.provider.clone().or(policy_route.provider),
             model: self.model_override.clone().or(policy_route.model),
+            quality_band: policy_route.quality_band,
         }
     }
 
@@ -148,6 +149,20 @@ impl ModelClient for JekkoRuntimeModelClient {
         if let Some(selected_model) = route.model.as_deref() {
             command.arg("--model").arg(selected_model);
         }
+        // Forward the per-stage quality band, if declared on the active
+        // model_policy role. `jekko run` reads this env var and injects
+        // {"quality_band": "<band>"} into the OpenAI request's extra map,
+        // which fusion's RequestProfile::from_request lifts into the
+        // routing filter. End-to-end chain:
+        //   manifest.model_policy.<role>.quality_band
+        //     → ModelRouteRecord.quality_band
+        //     → JEKKO_RUN_QUALITY_BAND env on jekko run subprocess
+        //     → request.extra.quality_band on the OpenAI call
+        //     → RequestProfile.quality_band in jnoccio-fusion
+        //     → select_without_replacement filter pass.
+        if let Some(band) = route.quality_band.as_deref() {
+            command.env("JEKKO_RUN_QUALITY_BAND", band);
+        }
         command.arg(prompt);
         let result = output_with_timeout(command, model_call_timeout());
         let latency_ms = started.elapsed().as_millis() as u64;
@@ -156,12 +171,25 @@ impl ModelClient for JekkoRuntimeModelClient {
                 let value = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
+                let json_success = value
+                    .as_ref()
+                    .and_then(|value| value.get("success"))
+                    .and_then(serde_json::Value::as_bool);
                 let error_text = value
                     .as_ref()
                     .and_then(|value| value.get("error"))
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string)
                     .or_else(|| {
+                        // The inner `jekko run --json` subprocess emits a structured
+                        // payload with an explicit `"success": true` field on healthy
+                        // completions. Successful runs may still write log lines to
+                        // stderr (tracing init, session boot, zyalc compile chatter).
+                        // Honor the self-report instead of treating any stderr line
+                        // as evidence of failure.
+                        if json_success == Some(true) {
+                            return None;
+                        }
                         let trimmed = if stderr.trim().is_empty() {
                             stdout.trim()
                         } else {
@@ -234,6 +262,10 @@ impl ModelClient for JekkoRuntimeModelClient {
                         .and_then(serde_json::Value::as_u64)
                         .map(|value| value as usize)
                         .or(Some(0)),
+                    // Echo the declared band back so the outcome event payload
+                    // carries it; SUMMARY.json.model_calls.by_quality_band
+                    // aggregates over this field.
+                    quality_band: route.quality_band.clone(),
                 })
             }
             Ok(None) => Ok(ModelCallReceipt {
@@ -257,6 +289,7 @@ impl ModelClient for JekkoRuntimeModelClient {
                 selected_credential_user_id: None,
                 credential_user_id: None,
                 retry_count: Some(0),
+                quality_band: None,
             }),
             Err(err) => Ok(ModelCallReceipt {
                 id: receipt_id("live"),
@@ -276,6 +309,7 @@ impl ModelClient for JekkoRuntimeModelClient {
                 selected_credential_user_id: None,
                 credential_user_id: None,
                 retry_count: Some(0),
+                quality_band: None,
             }),
         }
     }

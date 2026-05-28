@@ -60,6 +60,14 @@ pub const STUB_BINARY_THRESHOLD: u64 = 5 * 1024 * 1024;
 /// Env-var opt-in for the Rust render parity matrix.
 pub const RUST_OPT_IN_ENV: &str = "JEKKO_RUST_MATRIX";
 
+/// Env-var opt-in for the captured-reference baseline matrix. `JEKKO_BIN` is
+/// also required, but the matrix tests deliberately need a SECOND knob so
+/// `cargo test --workspace` with `JEKKO_BIN` set globally (the common case
+/// when iterating on the live ZYAL recipes) does not silently hijack workspace
+/// smoke runs with multi-minute snapshot captures. Set `JEKKO_TUI_CAPTURE=1`
+/// explicitly when you want the capture suite to run.
+pub const TUI_CAPTURE_OPT_IN_ENV: &str = "JEKKO_TUI_CAPTURE";
+
 /// Static configuration that distinguishes the captured-reference matrix from
 /// the Rust-port matrix. Held in a `const` per matrix driver.
 pub struct MatrixConfig {
@@ -486,14 +494,27 @@ impl MatrixConfig {
     }
 }
 
-/// Default binary resolver for the captured-reference baseline matrix:
-/// just delegates to `JEKKO_BIN`. Returns `None` (skip) when unset.
+/// Default binary resolver for the captured-reference baseline matrix.
+///
+/// Requires BOTH `JEKKO_BIN` (binary path) AND `JEKKO_TUI_CAPTURE=1`
+/// (explicit opt-in). Returns `None` (skip silently) when either is unset.
+/// The second gate exists so a globally-set `JEKKO_BIN` (e.g. for live ZYAL
+/// recipes) does not hijack `cargo test --workspace` with multi-minute
+/// snapshot capture runs across 5 terminal sizes per screen.
 pub fn reference_binary() -> Option<PathBuf> {
     let Some(path) = jekko_bin() else {
         eprintln!("skipped: set JEKKO_BIN to a jekko binary path");
         return None;
     };
-    Some(path)
+    match std::env::var(TUI_CAPTURE_OPT_IN_ENV).ok().as_deref() {
+        Some("1") => Some(path),
+        _ => {
+            eprintln!(
+                "skipped: set {TUI_CAPTURE_OPT_IN_ENV}=1 to engage the captured-reference baseline matrix"
+            );
+            None
+        }
+    }
 }
 
 /// Binary resolver for the Rust render-parity matrix. Skips silently when any

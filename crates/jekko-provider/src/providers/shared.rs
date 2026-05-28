@@ -118,6 +118,15 @@ pub fn build_openai_style_body(req: &ProviderRequest) -> Value {
     if let Some(store) = req.options.get("store") {
         body.insert("store".into(), store.clone());
     }
+    // ZYAL `quality_band` request hint — flows through as a top-level
+    // field so fusion's RequestProfile::from_request can lift it into
+    // its `extra` map. Set by `jekko run` from JEKKO_RUN_QUALITY_BAND,
+    // which jankurai-runner sets per stage from the manifest's
+    // `model_policy.<role>.quality_band` declaration. See
+    // docs/ZYAL/MODEL_QUALITY_BAND.md.
+    if let Some(band) = req.options.get("quality_band") {
+        body.insert("quality_band".into(), band.clone());
+    }
     if let Some(key) = req.options.get("promptCacheKey") {
         body.insert("prompt_cache_key".into(), key.clone());
     }
@@ -405,5 +414,38 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("Bearer demo-key")
         );
+    }
+
+    #[test]
+    fn quality_band_in_options_lands_at_request_top_level() {
+        // FIX-CAND-M: ZYAL declares quality_band on a stage's model_policy
+        // role; jankurai-runner sets JEKKO_RUN_QUALITY_BAND; jekko run
+        // injects it into provider_options; the body builder must hoist
+        // it to a top-level field so fusion's RequestProfile reads it
+        // from `extra`.
+        let mut options = serde_json::Map::new();
+        options.insert(
+            "quality_band".into(),
+            serde_json::Value::String("top20".into()),
+        );
+        let req = ProviderRequest {
+            model: "jnoccio/jnoccio-fusion".into(),
+            api_model_id: "jnoccio-fusion".into(),
+            session_id: "s-1".into(),
+            system: vec![],
+            messages: vec![json!({"role":"user","content":"hi"})],
+            tools: vec![],
+            tool_choice: None,
+            options,
+            headers: BTreeMap::new(),
+            max_output_tokens: 256,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            credential: None,
+            base_url: None,
+        };
+        let body = build_openai_style_body(&req);
+        assert_eq!(body["quality_band"], "top20");
     }
 }

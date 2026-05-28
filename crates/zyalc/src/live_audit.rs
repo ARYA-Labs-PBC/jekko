@@ -75,14 +75,10 @@ pub fn audit(run_dir: &Path, strict: bool) -> Result<LiveAuditReport> {
     audit_ledgers(run_dir, &mut report);
     audit_forbidden_content(run_dir, packet.as_ref(), &mut report);
 
-    if report.model_receipt_count != 0
-        && report.model_outcome_event_count != 0
-        && report.model_receipt_count != report.model_outcome_event_count
+    if let Some(failure) =
+        outcome_receipt_consistency(report.model_receipt_count, report.model_outcome_event_count)
     {
-        report.failures.push(format!(
-            "model receipt count {} does not match model_outcome event count {}",
-            report.model_receipt_count, report.model_outcome_event_count
-        ));
+        report.failures.push(failure);
     }
 
     if report.failures.is_empty() {
@@ -107,6 +103,22 @@ fn audit_replay(run_dir: &Path, report: &mut LiveAuditReport) {
         Err(err) => report
             .failures
             .push(format!("verify-replay could not run: {err:#}")),
+    }
+}
+
+/// Returns the failure string if the receipt/outcome counts are inconsistent.
+///
+/// Receipts (one per model attempt) can exceed model_outcome events (one per
+/// PARSED attempt) when retries fail to parse — that's the normal post-FIX-1
+/// path. The reverse — more parsed outcomes than receipts — is a data integrity
+/// break and is the only direction worth flagging.
+fn outcome_receipt_consistency(receipt_count: usize, outcome_count: usize) -> Option<String> {
+    if receipt_count != 0 && outcome_count != 0 && outcome_count > receipt_count {
+        Some(format!(
+            "model_outcome event count {outcome_count} exceeds model receipt count {receipt_count} (each parsed outcome must have a backing receipt)"
+        ))
+    } else {
+        None
     }
 }
 
