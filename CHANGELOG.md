@@ -10,6 +10,25 @@ releases, see `UPCOMING_CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added (zyal-testing session, 2026-05-27)
+
+- **`scripts/zyal-live-batch.sh`** now defaults `JNOCCIO_UPSTREAM_KEY_SOURCE=users_pool` when starting `jnoccio-fusion`. Prior batches silently ran the legacy single-pool path, bypassing the multi-tenant `~/.jekko/users/*/llm.env` fan-out. (FIX-2)
+- **Forensic artifacts** for the campaign live runs preserved under `docs/ZYAL/live-tests/` — per-run balancer SQL dumps, metrics .prom snapshots, events.jsonl copies, cursor TSV diffs for the heavy MiniRedis stages.
+- Seven per-test markdown reports under `docs/ZYAL/live-tests/` (`PHASE-0-BASELINE.md`, `BATCH-zyal-testing-phase2.md`, `HEAVY-MINIREDIS.md`, three `RUN-p1-*.md`, `SESSION-SUMMARY.md`) documenting the end-to-end live-test campaign.
+- Design proposal `docs/ZYAL/MODEL_QUALITY_BAND.md` for ZYAL stages to declare model-tier requests via fusion's existing win-rate evidence. Implementation deferred to the follow-up session.
+
+### Fixed (zyal-testing session, 2026-05-27)
+
+- **`crates/jankurai-runner/src/model_client/runtime.rs`** now honors the inner `jekko run --json` subprocess's explicit `"success": true` flag. Before, any non-empty stderr (tracing init, session boot, zyalc compile chatter) was misread as a failure indicator — every live ZYAL pipeline halted at the first model call. Now the JSON self-report wins; stdout/stderr chatter on successful runs is ignored. (FIX-1)
+- **`crates/zyalc/src/live_audit.rs`** strict audit now accepts `model_receipt_count >= model_outcome_event_count` (failed retries write receipts but not `model_outcome` events). The prior `==` invariant was a pre-FIX-1 assumption and falsely flagged every successful run with a single retried attempt. (FIX-3)
+- **`crates/zyalc/src/main.rs`** routes "wrote/unchanged" compile status to stderr instead of stdout. The chatter previously leaked into `jekko port-run --dry-run` stdout and broke downstream JSON consumers. (FIX-4)
+- **`scripts/zyal-live-batch.sh::run_r0`** unsets `JEKKO_BIN` before running `cargo test --workspace`. With JEKKO_BIN set, the `tuiwright-jekko-unlock::baseline_matrix` capture suite was driving the reference binary across 5 terminal sizes (`#[serial]`, minutes per test). Workaround for now — see `JEKKO_TUI_CAPTURE` follow-up. (FIX-5)
+- **`scripts/zyal-live-report.sh`** distinguishes plan-walk no-op (0 events) from a real balancer stall: rows with empty `events.jsonl` now render `no-op (0 events)` instead of `STALLED`. (FIX-6)
+
+### Changed (zyal-testing session, 2026-05-27)
+
+- **BREAKING — `zyal-supervisor::SupervisorStore::init_run`** signature widened to accept `requested_id: Option<&str>`. When `Some`, the value is used verbatim as the run id; when `None`, the prior `{manifest.id}-{millis}` derivation is preserved. Allows `jekko port-run --super --run-id <foo>` to honor `<foo>` end-to-end. External vendors of `zyal-supervisor` must update call sites. (FIX-7)
+
 ## [2.0.5] - 2026-05-24
 
 ### Changed

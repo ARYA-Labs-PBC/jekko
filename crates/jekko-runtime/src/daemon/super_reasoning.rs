@@ -239,9 +239,10 @@ impl SuperReasoningPlan {
             out.push(id.clone());
             if let Some(next) = children.remove(&id) {
                 for child in next {
-                    let degree = indegree
-                        .get_mut(&child)
-                        .ok_or_else(|| RuntimeError::invalid("dependency map corrupt"))?;
+                    let degree = match indegree.get_mut(&child) {
+                        Some(d) => d,
+                        None => return Err(RuntimeError::invalid("dependency map corrupt")),
+                    };
                     *degree -= 1;
                     if *degree == 0 {
                         queue.push_back(child);
@@ -389,9 +390,11 @@ impl SuperReasoningPlan {
                         phase.id, dep
                     )));
                 }
-                *indegree
-                    .get_mut(&phase.id)
-                    .ok_or_else(|| RuntimeError::invalid("dependency map corrupt"))? += 1;
+                let degree = match indegree.get_mut(&phase.id) {
+                    Some(d) => d,
+                    None => return Err(RuntimeError::invalid("dependency map corrupt")),
+                };
+                *degree += 1;
                 children
                     .entry(dep.clone())
                     .or_default()

@@ -127,11 +127,15 @@ fn dispatch(cli: &Cli) -> Result<i32> {
                 let outcome = compile::compile_one(path, out.as_deref(), *check)?;
                 match outcome {
                     compile::Outcome::Wrote(p) => {
-                        println!("zyalc: wrote {}", p.display());
+                        // Status to stderr so callers piping zyalc into a JSON
+                        // consumer (e.g. `jekko port-run --super foo.zyal
+                        // --dry-run` shells out to zyalc and forwards its
+                        // stdout) don't have to strip a chatter line.
+                        eprintln!("zyalc: wrote {}", p.display());
                         Ok(0)
                     }
                     compile::Outcome::Unchanged(p) => {
-                        println!("zyalc: unchanged {}", p.display());
+                        eprintln!("zyalc: unchanged {}", p.display());
                         Ok(0)
                     }
                     compile::Outcome::Drift(p) => {

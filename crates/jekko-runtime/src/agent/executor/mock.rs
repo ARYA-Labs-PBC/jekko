@@ -36,10 +36,10 @@ pub const MOCK_RESPONSE_DEFAULT: &str = "mocked assistant reply";
 /// holds the text. Defaults to [`MOCK_RESPONSE_DEFAULT`] when unset or
 /// unparseable.
 pub fn mock_assistant_text() -> String {
-    let raw = std::env::var(MOCK_RESPONSE_ENV).unwrap_or_default();
-    if raw.is_empty() {
-        return MOCK_RESPONSE_DEFAULT.to_string();
-    }
+    let raw = match std::env::var(MOCK_RESPONSE_ENV) {
+        Ok(value) if !value.is_empty() => value,
+        Ok(_) | Err(_) => return MOCK_RESPONSE_DEFAULT.to_string(),
+    };
     if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&raw) {
         if let Some(text) = map.get("response").and_then(Value::as_str) {
             return text.to_string();

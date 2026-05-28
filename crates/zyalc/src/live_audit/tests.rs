@@ -310,6 +310,36 @@ fn strict_live_audit_rejects_fake_provider() {
         .any(|failure| failure.contains("provider fake")));
 }
 
+#[test]
+fn outcome_receipt_consistency_accepts_failed_retries() {
+    // Post-FIX-1: every attempt emits a model_attempt_outcome (and a receipt),
+    // but only PARSED attempts emit a model_outcome event. 20 receipts / 14
+    // outcomes is the normal hero-judge shape — must not be flagged.
+    assert_eq!(super::outcome_receipt_consistency(20, 14), None);
+    assert_eq!(super::outcome_receipt_consistency(3, 1), None);
+    assert_eq!(super::outcome_receipt_consistency(1, 1), None);
+}
+
+#[test]
+fn outcome_receipt_consistency_flags_orphan_outcome() {
+    // The only direction that's a real bug: an outcome event with no backing
+    // receipt — the parsed lane wrote an outcome but no underlying receipt
+    // was recorded.
+    let failure = super::outcome_receipt_consistency(1, 2).unwrap();
+    assert!(failure.contains("exceeds"));
+    assert!(failure.contains("2"));
+    assert!(failure.contains("1"));
+}
+
+#[test]
+fn outcome_receipt_consistency_skips_when_either_zero() {
+    // Empty fixtures should not flag — other failure paths handle "missing"
+    // explicitly.
+    assert_eq!(super::outcome_receipt_consistency(0, 0), None);
+    assert_eq!(super::outcome_receipt_consistency(5, 0), None);
+    assert_eq!(super::outcome_receipt_consistency(0, 5), None);
+}
+
 fn empty_report() -> LiveAuditReport {
     LiveAuditReport {
         schema_version: "zyal.live_audit.v1".to_string(),

@@ -27,6 +27,8 @@ pub(crate) async fn complete_hero_json(
     generation: usize,
     prompt: &str,
 ) -> Result<(ModelCallReceipt, serde_json::Value)> {
+    let mut empty_tracker =
+        crate::empty_response_tracker::EmptyResponseTracker::new(kind_label(kind));
     for attempt in 1..=3 {
         ctx.sink.emit(
             EventKind::ModelAttempt,
@@ -34,6 +36,7 @@ pub(crate) async fn complete_hero_json(
         )?;
         let receipt = ctx.model_client.complete(kind, prompt, ctx.repo).await?;
         daemon_store::persist_model_receipt(ctx.db, ctx.run_id, &receipt)?;
+        empty_tracker.record(&receipt, ctx.sink)?;
         let outcome = classify_hero_completion(
             kind,
             generation,
@@ -137,6 +140,7 @@ fn model_outcome_payload(
         "retry_count": receipt.retry_count,
         "budget_used": receipt.budget_used,
         "budget_remaining": receipt.budget_remaining,
+        "quality_band": receipt.quality_band,
     })
 }
 

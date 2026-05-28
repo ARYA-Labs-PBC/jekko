@@ -62,6 +62,13 @@ pub struct ModelCallReceipt {
     /// Retry count reported by the runtime, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_count: Option<usize>,
+    /// ZYAL-declared quality band that constrained the model selection
+    /// for this call (e.g. `top10`, `top20`). `None` when no band was
+    /// declared on the active `model_policy.<role>` entry. Echoed back
+    /// into `model_attempt_outcome.data.quality_band` so SUMMARY.json's
+    /// `model_calls.by_quality_band` aggregate populates correctly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_band: Option<String>,
 }
 
 impl ModelCallReceipt {
@@ -85,6 +92,7 @@ impl ModelCallReceipt {
             selected_credential_user_id: None,
             credential_user_id: None,
             retry_count: Some(0),
+            quality_band: None,
         }
     }
 
@@ -113,6 +121,7 @@ impl ModelCallReceipt {
             selected_credential_user_id: None,
             credential_user_id: None,
             retry_count: Some(0),
+            quality_band: None,
         }
     }
 }

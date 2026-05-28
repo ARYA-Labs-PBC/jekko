@@ -92,6 +92,12 @@ pub struct ModelRouteRecord {
     /// Optional model id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Optional model quality band (`any`/`top10`/`top20`/`top50`/`bottom20`).
+    /// Forwarded to the fusion gateway via the OpenAI request's `extra` map
+    /// so the router constrains selection by observed win-rate percentile.
+    /// See `docs/ZYAL/MODEL_QUALITY_BAND.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_band: Option<String>,
 }
 
 impl ModelRouteRecord {
@@ -104,17 +110,21 @@ impl ModelRouteRecord {
             Some((provider, model)) if !provider.is_empty() && !model.is_empty() => Self {
                 provider: Some(provider.to_string()),
                 model: Some(model.to_string()),
+                quality_band: None,
             },
             _ => Self {
                 provider: None,
                 model: Some(trimmed.to_string()),
+                quality_band: None,
             },
         }
     }
 
-    /// Whether neither provider nor model was explicitly configured.
+    /// Whether neither provider nor model nor quality_band was explicitly
+    /// configured. Used by `inherit_power_when_empty` so an empty role
+    /// entry still falls through to the `power` policy.
     pub fn is_empty(&self) -> bool {
-        self.provider.is_none() && self.model.is_none()
+        self.provider.is_none() && self.model.is_none() && self.quality_band.is_none()
     }
 }
 
@@ -267,5 +277,35 @@ mod tests {
         let route = policy.select(ModelTaskKind::Implement);
         assert_eq!(route.provider.as_deref(), Some("openrouter"));
         assert_eq!(route.model.as_deref(), Some("qwen"));
+    }
+
+    #[test]
+    fn quality_band_round_trips_through_role_selection() {
+        // FIX-CAND-M: a per-role quality_band declared in the manifest
+        // must survive policy.select() so jankurai-runner can forward
+        // it as JEKKO_RUN_QUALITY_BAND to the jekko-run subprocess.
+        let policy = ModelPolicy {
+            power: ModelRoute::Record(ModelRouteRecord {
+                provider: None,
+                model: None,
+                quality_band: Some("top20".to_string()),
+            }),
+            ..ModelPolicy::default()
+        };
+        // StageBrainstorm routes to the power role when uses_power_model()
+        // is true OR allow_power_for_routine_roles is set; here it goes
+        // through the inherit_power_when_empty fallback for critic/meta
+        // BUT in default for routine kinds it routes to .routine — and
+        // .routine is empty, so for a kind that explicitly uses power:
+        let route = policy.select(ModelTaskKind::StageReduce);
+        assert_eq!(route.quality_band.as_deref(), Some("top20"));
+        // is_empty() must still consider a band-only record as non-empty
+        // so the inherit_power_when_empty fallback fires correctly.
+        let band_only = ModelRouteRecord {
+            provider: None,
+            model: None,
+            quality_band: Some("top10".to_string()),
+        };
+        assert!(!band_only.is_empty());
     }
 }
