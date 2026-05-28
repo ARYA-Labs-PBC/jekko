@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -212,7 +212,7 @@ fn stop_requested(path: Option<&PathBuf>) -> bool {
 }
 
 fn finalize_port_artifacts(
-    repo: &PathBuf,
+    repo: &Path,
     run_id: &str,
     db: &jekko_store::db::Db,
     ticks: u64,
