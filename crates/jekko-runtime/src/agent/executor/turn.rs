@@ -341,13 +341,11 @@ pub(super) fn runtime_provenance_headers(
 ) -> BTreeMap<String, String> {
     let mut headers = BTreeMap::new();
     headers.insert("x-jekko-client".to_string(), "jekko-runtime".to_string());
-    headers.insert(
-        "x-jekko-run-id".to_string(),
-        std::env::var("JEKKO_ZYAL_RUN_ID")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| request.session_id.clone()),
-    );
+    let run_id_header = match std::env::var("JEKKO_ZYAL_RUN_ID").ok() {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => request.session_id.clone(),
+    };
+    headers.insert("x-jekko-run-id".to_string(), run_id_header);
     headers.insert("x-jekko-session".to_string(), request.session_id.clone());
     headers.insert(
         "x-jekko-credential-policy".to_string(),
