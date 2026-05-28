@@ -106,10 +106,7 @@ fn compute_layout(area: Rect, inputs: LayoutInputs) -> LayoutPlan {
 
     // Per-component desired heights (pre-clamp).
     let composer_h = h_tier.composer_height().min(area.height.max(1));
-    let banner_visible = matches!(
-        h_tier,
-        HeightTier::Mini | HeightTier::Compact | HeightTier::Full
-    );
+    let banner_visible = false;
     let strip_visible =
         matches!(h_tier, HeightTier::Compact | HeightTier::Full) && inputs.working_strip_active;
     let footer_visible = matches!(

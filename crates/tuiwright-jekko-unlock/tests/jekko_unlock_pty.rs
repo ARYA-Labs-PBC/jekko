@@ -24,6 +24,7 @@ const SECRET_LEN: usize = 128;
 const SCREEN_COLS: u16 = 160;
 const SCREEN_ROWS: u16 = 48;
 const ARTIFACT_DIR: &str = "target/tuiwright-jekko";
+const ARTIFACT_DIR_ENV: &str = "JEKKO_TUI_ARTIFACT_DIR";
 
 fn enabled() -> bool {
     std::env::var("JNOCCIO_TUIWRIGHT_E2E").as_deref() == Ok("1")
@@ -81,7 +82,20 @@ fn clone_repo(target: &std::path::Path) -> Result<()> {
 }
 
 fn ensure_artifact_dir() -> Result<PathBuf> {
-    let dir = repo_root().join(ARTIFACT_DIR);
+    let dir = match std::env::var(ARTIFACT_DIR_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root().join(path)
+            }
+        }
+        None => repo_root().join(ARTIFACT_DIR),
+    };
     std::fs::create_dir_all(&dir).with_context(|| format!("create {dir:?}"))?;
     Ok(dir)
 }
@@ -158,7 +172,7 @@ fn jekko_tui_paste_unlocks_jnoccio_fusion() -> Result<()> {
 
     let page = Page::spawn(cfg).context("spawn jekko in pty")?;
 
-    page.wait_for_text("ctrl+p commands", Duration::from_secs(30))
+    page.wait_for_text("bypass permissions", Duration::from_secs(30))
         .context("wait for jekko prompt UI")?;
     page.screenshot(artifact_dir.join("01-boot.png"))?;
 

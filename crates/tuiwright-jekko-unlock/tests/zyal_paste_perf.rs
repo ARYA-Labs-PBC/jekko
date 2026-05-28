@@ -37,7 +37,7 @@ fn large_zyal_paste_recognised_under_one_and_a_half_seconds() -> Result<()> {
     let artifact_dir = ensure_artifact_dir()?;
     let page = spawn_jekko(&parent, &jekko)?;
 
-    page.wait_for_text("ctrl+p commands", Duration::from_secs(30))
+    page.wait_for_text("bypass permissions", Duration::from_secs(30))
         .context("jekko prompt UI did not boot")?;
 
     let zyal =

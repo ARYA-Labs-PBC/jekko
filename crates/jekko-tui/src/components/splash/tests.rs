@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 
 use super::*;
-use crate::theme::codex;
 
 fn fixture_ctx() -> SplashContext {
     SplashContext {
@@ -28,6 +28,22 @@ fn buffer_to_symbol_string(buf: &Buffer) -> String {
         out.push('\n');
     }
     out
+}
+
+fn wordmark_colors(buf: &Buffer) -> Vec<Color> {
+    let area = buf.area();
+    let mut colors = Vec::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            if buf[(x, y)].symbol().trim().is_empty() {
+                continue;
+            }
+            if let Some(color) = buf[(x, y)].style().fg {
+                colors.push(color);
+            }
+        }
+    }
+    colors
 }
 
 #[test]
@@ -67,77 +83,67 @@ fn render_splash_emits_subtitle() {
 }
 
 #[test]
-fn render_splash_animates_when_motion_enabled() {
+fn render_splash_stays_static_across_elapsed_time() {
     let area = Rect::new(0, 0, 80, 24);
     let ctx = fixture_ctx();
 
     let mut buf_a = fresh_buffer(80, 24);
-    render_splash_with_motion(&mut buf_a, area, Duration::ZERO, &ctx, true);
+    render_splash(&mut buf_a, area, Duration::ZERO, &ctx, None);
 
     let mut buf_b = fresh_buffer(80, 24);
-    render_splash_with_motion(&mut buf_b, area, Duration::from_millis(500), &ctx, true);
-
-    let mut diff_found = false;
-    for y in 0..area.height {
-        for x in 0..area.width {
-            if buf_a[(x, y)].style().fg != buf_b[(x, y)].style().fg {
-                diff_found = true;
-                break;
-            }
-        }
-        if diff_found {
-            break;
-        }
-    }
-    assert!(
-        diff_found,
-        "expected at least one cell color to change between frames"
-    );
-}
-
-#[test]
-fn render_splash_static_when_motion_disabled() {
-    let area = Rect::new(0, 0, 80, 24);
-    let ctx = fixture_ctx();
-
-    let mut buf_a = fresh_buffer(80, 24);
-    render_splash_with_motion(&mut buf_a, area, Duration::ZERO, &ctx, false);
-
-    let mut buf_b = fresh_buffer(80, 24);
-    render_splash_with_motion(&mut buf_b, area, Duration::from_millis(1_000), &ctx, false);
+    render_splash(&mut buf_b, area, Duration::from_millis(500), &ctx, None);
 
     for y in 0..area.height {
         for x in 0..area.width {
             assert_eq!(
                 buf_a[(x, y)].style().fg,
                 buf_b[(x, y)].style().fg,
-                "expected flat color when reduced-motion is active (cell {x},{y})"
+                "splash logo must not animate (cell {x},{y})"
             );
         }
     }
 }
 
 #[test]
-fn render_splash_static_uses_blue_path_color() {
+fn render_splash_static_test_seam_matches_public_renderer() {
+    let area = Rect::new(0, 0, 80, 24);
+    let ctx = fixture_ctx();
+
+    let mut buf_a = fresh_buffer(80, 24);
+    render_splash_static_for_tests(&mut buf_a, area, &ctx);
+
+    let mut buf_b = fresh_buffer(80, 24);
+    render_splash(&mut buf_b, area, Duration::from_millis(1_000), &ctx, None);
+
+    for y in 0..area.height {
+        for x in 0..area.width {
+            assert_eq!(
+                buf_a[(x, y)].style().fg,
+                buf_b[(x, y)].style().fg,
+                "expected static seam to match public renderer (cell {x},{y})"
+            );
+        }
+    }
+}
+
+#[test]
+fn render_splash_uses_multi_color_gradient() {
     let area = Rect::new(0, 0, 80, 24);
     let ctx = fixture_ctx();
     let mut buf = fresh_buffer(80, 24);
-    render_splash_with_motion(&mut buf, area, Duration::ZERO, &ctx, false);
+    render_splash(&mut buf, area, Duration::ZERO, &ctx, None);
 
-    let mut saw_blue = false;
-    for y in 0..area.height {
-        for x in 0..area.width {
-            if buf[(x, y)].symbol() == "█" {
-                assert_eq!(
-                    buf[(x, y)].style().fg,
-                    Some(codex::BLUE_PATH),
-                    "wordmark cell at ({x},{y}) must be BLUE_PATH in reduced motion"
-                );
-                saw_blue = true;
-            }
+    let colors = wordmark_colors(&buf);
+    let mut unique = Vec::new();
+    for color in colors {
+        if !unique.contains(&color) {
+            unique.push(color);
         }
     }
-    assert!(saw_blue, "expected at least one block glyph in dump");
+    assert!(
+        unique.len() >= 5,
+        "expected a rich static gradient, saw {unique:?}"
+    );
 }
 
 #[test]

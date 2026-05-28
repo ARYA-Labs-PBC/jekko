@@ -6,26 +6,27 @@ mod layout_and_runtime_tests {
 
     #[test]
     fn layout_full_height_40() {
-        // Full: all chrome visible, rail uses requested rows, transcript
-        // gets the leftover space.
+        // Full: bottom chrome visible, rail uses requested rows, transcript
+        // gets the leftover space. The permission status lives in the bottom
+        // agent rail, so there is no separate banner above the composer.
         let area = Rect::new(0, 0, 120, 40);
         let plan = compute_layout(area, layout_inputs(true, 6, 5));
         assert_eq!(plan.composer.height, 3);
         assert!(plan.working_strip.is_some());
-        assert!(plan.permission_banner.is_some());
+        assert!(plan.permission_banner.is_none());
         assert!(plan.footer.is_some());
         let rail = plan.agent_rail.expect("full keeps rail");
         assert_eq!(rail.height, 5, "full layout grants requested rail rows");
-        // Sanity: transcript_h = 40 - 3 (composer) - 1 (banner) - 1 (footer)
-        //          - 1 (strip) - 6 (popup) - 5 (rail) = 23.
-        assert_eq!(plan.transcript.height, 23);
+        // Sanity: transcript_h = 40 - 3 (composer) - 1 (footer)
+        //          - 1 (strip) - 6 (popup) - 5 (rail) = 24.
+        assert_eq!(plan.transcript.height, 24);
     }
 
     #[test]
     fn layout_full_preserves_80x24_snapshot_shape() {
         // The historical snapshot tests render at 80x24 — height 24 sits in
         // the Compact tier, so they get the same composer height (3) and
-        // banner/footer pair they had before T2-P4. This test pins that
+        // footer/rail shape they had before T2-P4. This test pins that
         // behaviour so future tier-edge tweaks don't silently shift existing
         // snapshots.
         let area = Rect::new(0, 0, 80, 24);
@@ -33,7 +34,7 @@ mod layout_and_runtime_tests {
         assert_eq!(HeightTier::from_height(area.height), HeightTier::Compact);
         assert_eq!(plan.composer.height, 3);
         assert!(plan.working_strip.is_none(), "no in-flight ⇒ no strip");
-        assert!(plan.permission_banner.is_some());
+        assert!(plan.permission_banner.is_none());
         assert!(plan.footer.is_some());
         assert_eq!(plan.agent_rail.unwrap().height, 1);
     }

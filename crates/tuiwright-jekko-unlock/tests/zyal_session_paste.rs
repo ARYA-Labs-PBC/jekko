@@ -29,6 +29,7 @@ use tuiwright::{Page, SpawnConfig};
 const SCREEN_COLS: u16 = 200;
 const SCREEN_ROWS: u16 = 60;
 const ARTIFACT_DIR: &str = "target/tuiwright-jekko";
+const ARTIFACT_DIR_ENV: &str = "JEKKO_TUI_ARTIFACT_DIR";
 const RECOGNITION_TIMEOUT: Duration = Duration::from_secs(8);
 const SESSION_BOOT_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -64,7 +65,20 @@ fn jekko_bin() -> Option<PathBuf> {
 }
 
 fn ensure_artifact_dir() -> Result<PathBuf> {
-    let dir = repo_root().join(ARTIFACT_DIR);
+    let dir = match std::env::var(ARTIFACT_DIR_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root().join(path)
+            }
+        }
+        None => repo_root().join(ARTIFACT_DIR),
+    };
     std::fs::create_dir_all(&dir).with_context(|| format!("create {dir:?}"))?;
     Ok(dir)
 }
@@ -314,7 +328,7 @@ fn pasting_zyal_inside_a_session_lights_up_the_right_sidebar() -> Result<()> {
     // wait on the same boot sentinel. The presence of the sidebar (right rail)
     // is what proves we're in session route, and that's verified by the panel
     // assertion below.
-    page.wait_for_text("ctrl+p commands", SESSION_BOOT_TIMEOUT)
+    page.wait_for_text("bypass permissions", SESSION_BOOT_TIMEOUT)
         .context("session TUI did not finish booting")?;
     page.screenshot(artifact_dir.join("zyal-session-01-boot.png"))?;
 

@@ -14,8 +14,8 @@ use tuiwright::Key;
 
 mod test_helpers;
 use test_helpers::{
-    copy_jekko_logs, ensure_artifact_dir, jekko_bin, prepare_workspace_no_config,
-    spawn_jekko_with_size,
+    copy_jekko_logs, ensure_artifact_dir, jekko_bin, mock_llm_fixture_json,
+    prepare_workspace_no_config, spawn_jekko_with_size, spawn_jekko_with_size_env,
 };
 
 const ARTIFACT_SUBDIR: &str = "chat-enter-mock";
@@ -58,7 +58,7 @@ fn chat_enter_with_no_provider_shows_warning() -> Result<()> {
     let page = spawn_jekko_with_size(&workspace, &jekko, 200, 60, "chat-enter-no-provider")?;
 
     // Wait for TUI to fully boot.
-    page.wait_for_text("ctrl+p commands", BOOT_TIMEOUT)
+    page.wait_for_text("bypass permissions", BOOT_TIMEOUT)
         .with_context(|| {
             let _ = page.screenshot(artifact_dir.join("01-boot-failed.png"));
             let _ = copy_jekko_logs(&workspace, "chat-no-provider");
@@ -126,7 +126,7 @@ fn chat_enter_with_model_configured_submits() -> Result<()> {
 
     let page = spawn_jekko_with_size(&workspace, &jekko, 200, 60, "chat-enter-with-model")?;
 
-    page.wait_for_text("ctrl+p commands", BOOT_TIMEOUT)
+    page.wait_for_text("bypass permissions", BOOT_TIMEOUT)
         .with_context(|| {
             let _ = page.screenshot(artifact_dir.join("10-boot-failed.png"));
             let _ = copy_jekko_logs(&workspace, "chat-with-model");
@@ -155,6 +155,61 @@ fn chat_enter_with_model_configured_submits() -> Result<()> {
         })?;
 
     page.screenshot(artifact_dir.join("12-user-msg-shown.png"))?;
+    Ok(())
+}
+
+#[test]
+#[ignore]
+#[serial]
+fn chat_enter_with_mock_llm_renders_assistant() -> Result<()> {
+    if !enabled() {
+        eprintln!("skipped: set TUI_CHAT_TEST=1");
+        return Ok(());
+    }
+    let Some(jekko) = jekko_bin() else {
+        eprintln!("skipped: set JEKKO_BIN");
+        return Ok(());
+    };
+
+    let artifact_dir = ensure_artifact_dir()?.join(ARTIFACT_SUBDIR);
+    std::fs::create_dir_all(&artifact_dir)?;
+    let response_json = mock_llm_fixture_json("chat-enter.json")?;
+
+    let (workspace, _project, _, _, _, _) =
+        prepare_workspace("project", "# chat-enter-mock-assistant test\n")?;
+    let page = spawn_jekko_with_size_env(
+        &workspace,
+        &jekko,
+        200,
+        60,
+        "chat-enter-mock-assistant",
+        &[
+            ("JEKKO_TUI_TEST_MOCK_LLM", "1"),
+            ("JEKKO_TUI_TEST_MOCK_RESPONSE", response_json.as_str()),
+        ],
+    )?;
+
+    page.wait_for_text("bypass permissions", BOOT_TIMEOUT)
+        .with_context(|| {
+            let _ = page.screenshot(artifact_dir.join("20-boot-failed.png"));
+            let _ = copy_jekko_logs(&workspace, "chat-mock-assistant");
+            "TUI did not boot"
+        })?;
+
+    let prompt = "Reply through the mock LLM path.";
+    page.type_text(prompt)?;
+    std::thread::sleep(Duration::from_millis(300));
+    page.press(Key::Enter)?;
+    page.screenshot(artifact_dir.join("21-after-enter.png"))?;
+
+    page.wait_for_text("Mock assistant response.", Duration::from_secs(8))
+        .with_context(|| {
+            let _ = page.screenshot(artifact_dir.join("22-assistant-missing.png"));
+            let _ = copy_jekko_logs(&workspace, "chat-mock-assistant");
+            "The mock assistant response did not render after pressing Enter."
+        })?;
+
+    page.screenshot(artifact_dir.join("22-assistant-shown.png"))?;
     Ok(())
 }
 

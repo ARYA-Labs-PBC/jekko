@@ -109,7 +109,7 @@ fn live_jekko_prompt_round_trips_through_tui() -> Result<()> {
     std::fs::create_dir_all(&artifact_dir)?;
     let page = spawn_live_tui(&workspace, &jekko, prompt, &model)?;
 
-    page.wait_for_text("ctrl+p commands", Duration::from_secs(45))
+    page.wait_for_text("bypass permissions", Duration::from_secs(45))
         .context("live TUI did not boot")?;
     page.screenshot(artifact_dir.join("01-live-boot.png"))?;
 

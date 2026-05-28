@@ -108,8 +108,8 @@ pub fn classify_text(text: &str) -> Result<ClassifyResult> {
                 Some(s) => Severity::parse(s),
                 None => Severity::Info,
             };
-            // A finding without ANY id is malformed input; drop it rather
-            // than fall through with an empty string (fallback-soup).
+            // A finding without any id is malformed input; drop it rather
+            // than let it degrade into an empty-string marker.
             let rule_id = finding_rule_id(f.rule_id, f.check_id, f.id, f.rule)?;
             let fingerprint = f.fingerprint.unwrap_or_else(|| rule_id.clone());
             Some(Finding {
@@ -127,11 +127,9 @@ pub fn classify_text(text: &str) -> Result<ClassifyResult> {
     if let Some(caps) = parsed.caps_applied {
         for cap in caps {
             let (cap_id, affects) = parse_cap_value(cap);
-            // A cap row with a missing/empty id is degenerate input — drop
-            // it explicitly rather than fall through with an empty marker.
-            // The prior `unwrap_or_default()` tripped fallback-soup; this
-            // typed-state form makes the "no id" outcome impossible to
-            // confuse with a real cap.
+            // A cap row with a missing or empty id is degenerate input. Drop
+            // it explicitly so the empty-id case stays distinct from a real
+            // cap marker.
             let cap_marker = match cap_id.filter(|id| !id.is_empty()) {
                 Some(id) => id,
                 None => continue,

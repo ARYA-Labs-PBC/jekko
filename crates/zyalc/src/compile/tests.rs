@@ -146,6 +146,21 @@ fn superworkflow_rejects_unknown_dependency() {
 }
 
 #[test]
+fn superworkflow_rejects_non_sequence_dependency_list() {
+    let mut raw = superworkflow_with_phases(9);
+    raw = raw.replacen(
+        "- id: p0\n      name: p0\n      objective: p0\n      exit:\n",
+        "- id: p0\n      name: p0\n      objective: p0\n      depends_on: p1\n      exit:\n",
+        1,
+    );
+    let err = emit_superworkflow(&raw).unwrap_err();
+    assert!(
+        format!("{err}").contains("dependency list must be a sequence"),
+        "expected sequence type error, got: {err}"
+    );
+}
+
+#[test]
 fn superworkflow_rejects_cycle() {
     // Wire `p0` -> `p1` and `p1` -> `p0` so the dependency graph is a 2-cycle.
     let mut raw = superworkflow_with_phases(9);

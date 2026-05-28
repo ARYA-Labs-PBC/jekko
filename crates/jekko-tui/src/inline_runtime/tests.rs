@@ -281,15 +281,14 @@ mod tests {
     }
 
     #[test]
-    fn slash_state_deactivates_on_whitespace() {
+    fn slash_state_keeps_active_with_background_args() {
         let cat = fixture_catalog();
         let mut c = ComposerState::default();
-        c.text.push_str("/help me");
+        c.text.push_str("/run --background sleep 30");
         c.sync_slash(&cat);
-        assert!(
-            !c.slash.active,
-            "space after the slash word kills the popup"
-        );
+        assert!(c.slash.active);
+        assert_eq!(c.slash.query, "run");
+        assert_eq!(c.slash.current_command(&cat).map(|cmd| cmd.id()), Some("run"));
     }
 
     #[test]
@@ -879,21 +878,19 @@ mod tests {
 
     #[test]
     fn layout_mini_height_15() {
-        // Mini: composer 1 row, agent rail hidden, banner + footer keep.
+        // Mini: composer 1 row, agent rail hidden, footer keeps.
         let area = Rect::new(0, 0, 120, 15);
         let plan = compute_layout(area, layout_inputs(true, 6, 5));
-        assert!(plan.permission_banner.is_some(), "banner stays in mini");
+        assert!(plan.permission_banner.is_none(), "banner hidden in mini");
         assert!(plan.footer.is_some(), "footer stays in mini");
         assert!(plan.agent_rail.is_none(), "rail hidden in mini");
         assert!(plan.working_strip.is_none(), "strip suppressed in mini");
         assert!(plan.popup.is_none(), "popup hidden in mini");
         assert_eq!(plan.composer.height, 1);
-        let banner_h = plan.permission_banner.unwrap().height;
         let footer_h = plan.footer.unwrap().height;
-        assert_eq!(banner_h, 1);
         assert_eq!(footer_h, 1);
-        // Transcript fills remaining: 15 - 1 (composer) - 1 (banner) - 1 (footer) = 12.
-        assert_eq!(plan.transcript.height, 12);
+        // Transcript fills remaining: 15 - 1 (composer) - 1 (footer) = 13.
+        assert_eq!(plan.transcript.height, 13);
     }
 
     #[test]
@@ -910,12 +907,11 @@ mod tests {
             rail.height
         );
         assert!(plan.working_strip.is_some(), "strip visible when active");
-        assert!(plan.permission_banner.is_some());
+        assert!(plan.permission_banner.is_none());
         assert!(plan.footer.is_some());
         // Sum must match area.
         let sum = plan.transcript.height
             + plan.working_strip.unwrap().height
-            + plan.permission_banner.unwrap().height
             + plan.popup.map(|r| r.height).unwrap_or(0)
             + plan.composer.height
             + rail.height

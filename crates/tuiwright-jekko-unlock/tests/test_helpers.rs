@@ -13,6 +13,7 @@ const ARTIFACT_DIR: &str = "target/tuiwright-jekko";
 const OFFLINE_MODEL: &str = "jekko/big-pickle";
 const OFFLINE_API_KEY: &str = "tuiwright-offline-fake-key";
 const MOCK_FIXTURE_DIR: &str = "fixtures/tui-mock-responses";
+const ARTIFACT_DIR_ENV: &str = "JEKKO_TUI_ARTIFACT_DIR";
 
 pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -33,7 +34,20 @@ pub fn jekko_bin() -> Option<PathBuf> {
 }
 
 pub fn ensure_artifact_dir() -> Result<PathBuf> {
-    let dir = repo_root().join(ARTIFACT_DIR);
+    let dir = match std::env::var(ARTIFACT_DIR_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root().join(path)
+            }
+        }
+        None => repo_root().join(ARTIFACT_DIR),
+    };
     std::fs::create_dir_all(&dir).with_context(|| format!("create {dir:?}"))?;
     Ok(dir)
 }

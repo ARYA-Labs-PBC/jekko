@@ -147,18 +147,12 @@ async fn run_loop_async<B: ChatBackend>(
         // animating. Anything that mutates draw-relevant state must set
         // `dirty = true` somewhere along its handling path.
         //
-        // `animation_active` triggers per-tick redraws (~30 fps). Pager and
-        // toasts are static surfaces — their mutations are event-driven and
-        // handlers set `dirty = true`, so they do not require per-frame
-        // redraws between events. This keeps idle CPU near zero (COWBOY.md
-        // K5: < 0.5%).
-        //
-        // The splash MUST animate while visible: the per-row oscillating
-        // wordmark relies on `elapsed_at(Instant::now())` being recomputed
-        // every frame, AND the splash render itself bails silently if the
-        // first frame isn't drawn — leading to the "starts at bottom with
-        // empty top" bug. So `animation_active` also covers `splash.visible()`.
-        let animation_active = in_flight.is_some() || splash.visible();
+        // `animation_active` triggers per-tick redraws (~30 fps). Pager,
+        // toasts, and the startup splash are static surfaces — their
+        // mutations are event-driven and handlers set `dirty = true`, so they
+        // do not require per-frame redraws between events. This keeps idle CPU
+        // near zero (COWBOY.md K5: < 0.5%).
+        let animation_active = in_flight.is_some();
         if dirty || animation_active {
             // T-BG-COUNT-MANAGER: drive the working strip's background-count
             // segment from the runtime-owned [`BackgroundJobManager`] rather
@@ -837,6 +831,129 @@ async fn run_loop_async<B: ChatBackend>(
                             }
                             if in_flight.is_some() {
                                 continue;
+                            }
+                            let raw_line_for_args = composer.text.clone();
+                            if let Some(cmd_id) = raw_line_for_args
+                                .trim_start()
+                                .strip_prefix('/')
+                                .and_then(|rest| rest.split_whitespace().next())
+                            {
+                                let has_args = raw_line_for_args.trim_start().contains(char::is_whitespace);
+                                if has_args && matches!(cmd_id, "run" | "stop") {
+                                    let action = catalog.action_for(cmd_id);
+                                    composer.clear_all();
+                                    match action {
+                                        SlashAction::Run => {
+                                            let raw = slash_args(&raw_line_for_args, &cmd_id);
+                                            let (background, cmd) = parse_run_args(&raw);
+                                            if cmd.is_empty() {
+                                                let lines = render_system_notice(
+                                                    NoticeKind::Warn,
+                                                    "/run requires a command (e.g. /run --background sleep 30)",
+                                                );
+                                                emit_lines(
+                                                    terminal,
+                                                    mode,
+                                                    &mut transcript,
+                                                    &mut scroll,
+                                                    &lines,
+                                                )?;
+                                            } else if background {
+                                                let (id, token) =
+                                                    bg_manager.register(cmd.to_string(), None);
+                                                let bg_for_task = Arc::clone(&bg_manager);
+                                                let cmd_for_task = cmd.to_string();
+                                                tokio::spawn(async move {
+                                                    let status = run_background_shell(
+                                                        cmd_for_task,
+                                                        token,
+                                                    )
+                                                    .await;
+                                                    bg_for_task.finalize(id, status);
+                                                });
+                                                let lines = render_system_notice(
+                                                    NoticeKind::Info,
+                                                    &format!(
+                                                        "[{id}] backgrounded \"{cmd}\". Use /ps to list, /stop {id} to cancel."
+                                                    ),
+                                                );
+                                                emit_lines(
+                                                    terminal,
+                                                    mode,
+                                                    &mut transcript,
+                                                    &mut scroll,
+                                                    &lines,
+                                                )?;
+                                            } else {
+                                                let lines = render_system_notice(
+                                                    NoticeKind::Warn,
+                                                    &format!(
+                                                        "/run {cmd}: foreground execution is a follow-up; use /run --background to detach."
+                                                    ),
+                                                );
+                                                emit_lines(
+                                                    terminal,
+                                                    mode,
+                                                    &mut transcript,
+                                                    &mut scroll,
+                                                    &lines,
+                                                )?;
+                                            }
+                                        }
+                                        SlashAction::Stop => {
+                                            let arg = slash_args(&raw_line_for_args, &cmd_id);
+                                            if !arg.is_empty() {
+                                                match arg.parse::<JobId>() {
+                                                    Ok(id) => {
+                                                        let (kind, msg) = if bg_manager.stop(id)
+                                                        {
+                                                            (
+                                                                NoticeKind::Info,
+                                                                format!(
+                                                                    "stopped background job [{id}]"
+                                                                ),
+                                                            )
+                                                        } else {
+                                                            (
+                                                                NoticeKind::Warn,
+                                                                format!(
+                                                                    "no background job with id [{id}]"
+                                                                ),
+                                                            )
+                                                        };
+                                                        let lines =
+                                                            render_system_notice(kind, &msg);
+                                                        emit_lines(
+                                                            terminal,
+                                                            mode,
+                                                            &mut transcript,
+                                                            &mut scroll,
+                                                            &lines,
+                                                        )?;
+                                                    }
+                                                    Err(_) => {
+                                                        let lines = render_system_notice(
+                                                            NoticeKind::Warn,
+                                                            &format!(
+                                                                "invalid job id: {arg:?} (expected an integer)"
+                                                            ),
+                                                        );
+                                                        emit_lines(
+                                                            terminal,
+                                                            mode,
+                                                            &mut transcript,
+                                                            &mut scroll,
+                                                            &lines,
+                                                        )?;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                    dirty = true;
+                                    continue;
+                                }
                             }
                             if composer.mention.active && !composer.mention.filtered.is_empty() {
                                 composer.accept_mention();

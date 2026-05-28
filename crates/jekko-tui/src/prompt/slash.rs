@@ -157,15 +157,19 @@ impl SlashPopup {
 }
 
 /// True if `buffer` matches the slash-popup trigger condition. The popup opens
-/// when the buffer begins with `/` and contains no whitespace before the
-/// cursor (i.e. the user is still typing the command name).
+/// when the buffer begins with `/` and still contains a slash command token.
 pub fn buffer_triggers_slash(buffer: &str) -> bool {
-    buffer.starts_with('/') && !buffer.contains(char::is_whitespace)
+    buffer
+        .strip_prefix('/')
+        .map(|rest| !rest.trim_start().is_empty())
+        .unwrap_or(false)
 }
 
-/// Extract the query string from a triggering buffer (slash already stripped).
+/// Extract the current slash-token query from a triggering buffer (slash
+/// already stripped; only the command token before any args is returned).
 pub fn query_from_buffer(buffer: &str) -> &str {
-    buffer.strip_prefix('/').unwrap_or(buffer)
+    let rest = buffer.strip_prefix('/').unwrap_or(buffer);
+    rest.trim_start().split_whitespace().next().unwrap_or("")
 }
 
 // ---------------------------------------------------------------------------

@@ -10,6 +10,11 @@ releases, see `UPCOMING_CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.0.6] - 2026-05-28
+
+### Changed
+- Bumped the workspace patch version and refreshed the local TUI battle lane and validation harness.
+
 ### Added (zyal-testing session, 2026-05-27)
 
 - **`scripts/zyal-live-batch.sh`** now defaults `JNOCCIO_UPSTREAM_KEY_SOURCE=users_pool` when starting `jnoccio-fusion`. Prior batches silently ran the legacy single-pool path, bypassing the multi-tenant `~/.jekko/users/*/llm.env` fan-out. (FIX-2)

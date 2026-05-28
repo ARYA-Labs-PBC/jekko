@@ -215,7 +215,7 @@ fn wait_for_boot(
     artifact_dir: &std::path::Path,
     name: &str,
 ) -> Result<()> {
-    page.wait_for_text("ctrl+p commands", BOOT_TIMEOUT)
+    page.wait_for_text("bypass permissions", BOOT_TIMEOUT)
         .with_context(|| {
             let _ = page.screenshot(artifact_dir.join(format!("{name}-boot-failed.png")));
             let _ = copy_jekko_logs(workspace, name);

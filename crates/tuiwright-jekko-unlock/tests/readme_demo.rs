@@ -294,7 +294,7 @@ fn readme_demo_records_zyal_research_flow() -> Result<()> {
 
             std::thread::sleep(Duration::from_secs(2));
             page.screenshot(artifact_dir.join("00-preboot.png"))?;
-            page.wait_for_text("ctrl+p commands", BOOT_TIMEOUT)
+            page.wait_for_text("bypass permissions", BOOT_TIMEOUT)
                 .context("session TUI did not finish booting")?;
             page.screenshot(artifact_dir.join("01-boot.png"))?;
 

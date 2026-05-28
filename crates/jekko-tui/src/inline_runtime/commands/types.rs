@@ -99,17 +99,30 @@ impl ComposerState {
     /// every keystroke that could change `text`.
     fn sync_slash(&mut self, catalog: &SlashCatalog) {
         if let Some(rest) = self.text.strip_prefix('/') {
-            // Only activate when the prefix is contiguous (no whitespace yet).
-            if rest.chars().all(|c| !c.is_whitespace()) {
+            let trimmed = rest.trim_start();
+            if !trimmed.is_empty() {
+                let next_query = trimmed.split_whitespace().next().unwrap_or("").to_string();
+                let allows_args = matches!(next_query.as_str(), "run" | "stop");
+                if trimmed.contains(char::is_whitespace) && !allows_args {
+                    self.slash = SlashState::default();
+                    return;
+                }
                 if !self.slash.active {
                     self.slash.active = true;
                     self.slash.cursor = 0;
                 }
-                let next_query = rest.to_string();
                 if self.slash.query != next_query {
                     self.slash.submenu = None;
                 }
                 self.slash.query = next_query;
+                self.slash.refresh_filter(catalog);
+                return;
+            } else if rest.is_empty() {
+                if !self.slash.active {
+                    self.slash.active = true;
+                    self.slash.cursor = 0;
+                }
+                self.slash.query.clear();
                 self.slash.refresh_filter(catalog);
                 return;
             }
@@ -163,10 +176,10 @@ impl ComposerState {
     }
 }
 
-/// Startup-splash lifecycle (T1-V6b). Owns just enough state to (a) compute
-/// the per-frame `elapsed` for the splash animation and (b) flip the
-/// `dismissed` flag once the user submits their first prompt. Pure data —
-/// drawing is delegated to [`crate::components::splash::render_splash`].
+/// Startup-splash lifecycle (T1-V6b). Owns just enough state to mark first
+/// draw compatibility and flip the `dismissed` flag once the user submits
+/// their first prompt. Pure data — drawing is delegated to
+/// [`crate::components::splash::render_splash`].
 #[derive(Clone, Debug)]
 struct SplashState {
     started_at: Option<Instant>,
@@ -195,7 +208,8 @@ impl SplashState {
         !self.dismissed
     }
 
-    /// Compute the animation `elapsed` for the current draw frame.
+    /// Compute elapsed time for the render signature. The splash logo is
+    /// static, but the timestamp remains part of the call contract.
     fn elapsed_at(&self, now: Instant) -> Duration {
         match self.started_at {
             Some(start) => now.saturating_duration_since(start),

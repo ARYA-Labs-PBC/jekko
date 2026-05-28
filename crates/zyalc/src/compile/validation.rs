@@ -121,10 +121,9 @@ pub(super) fn validate_superworkflow_value(source: &Path, value: &serde_yaml::Va
             .and_then(|v| v.as_str())
             .expect("checked above");
         if let Some(depends_on) = lookup(phase, "depends_on") {
-            let deps = match depends_on.as_sequence() {
-                Some(deps) => deps,
-                None => continue,
-            };
+            let deps = depends_on
+                .as_sequence()
+                .ok_or_else(|| anyhow!("phase dependency list must be a sequence"))?;
             for dep in deps {
                 let dep = dep
                     .as_str()
@@ -164,7 +163,10 @@ fn superworkflow_dependencies_are_acyclic(phases: &[serde_yaml::Value]) -> Resul
             // Dedupe before counting — see zyal-supervisor planner for the
             // same fix rationale (false-cycle on duplicate dep entries).
             let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-            for dep in depends_on.as_sequence().cloned().unwrap_or_default() {
+            let deps = depends_on
+                .as_sequence()
+                .ok_or_else(|| anyhow!("phase dependency list must be a sequence"))?;
+            for dep in deps {
                 let dep = dep
                     .as_str()
                     .ok_or_else(|| anyhow!("phase dependency must be string"))?
@@ -203,7 +205,10 @@ fn lookup<'a>(map: &'a serde_yaml::Mapping, key: &str) -> Option<&'a serde_yaml:
 }
 
 fn require_present<'a>(map: &'a serde_yaml::Mapping, key: &str) -> Result<&'a serde_yaml::Value> {
-    lookup(map, key).ok_or_else(|| anyhow!("missing required key `{key}`"))
+    match lookup(map, key) {
+        Some(value) => Ok(value),
+        None => Err(anyhow!("missing required key `{key}`")),
+    }
 }
 
 fn require_map<'a>(map: &'a serde_yaml::Mapping, key: &str) -> Result<&'a serde_yaml::Mapping> {
