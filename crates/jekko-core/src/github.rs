@@ -187,7 +187,8 @@ fn parse_pull_request(payload: &serde_json::Map<String, Value>) -> GitHubPullReq
         number: number(pr.get("number")),
         title: string(pr.get("title")),
         body: string(pr.get("body")),
-        author_login: string_at(pr, &["user", "login"]),
+        author_login: string_at(pr, &["user", "login"])
+            .or_else(|| string_at(pr, &["author", "login"])),
         author_association: string(pr.get("author_association")),
         state: string(pr.get("state")),
         draft: boolean(pr.get("draft")),
@@ -324,6 +325,34 @@ mod tests {
         assert_eq!(
             ctx.field("pull_request.created_at").as_deref(),
             Some("2026-01-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn parses_pull_request_author_login_from_author_object() {
+        let payload = json!({
+            "pull_request": {
+                "number": 8,
+                "title": "Add fallback",
+                "body": "Body",
+                "author_association": "MEMBER",
+                "author": { "login": "carol" },
+                "state": "open",
+                "draft": false,
+                "merged": false,
+                "created_at": "2026-01-02T00:00:00Z",
+                "head": { "ref": "fallback" },
+                "base": { "ref": "main" }
+            },
+            "repository": { "default_branch": "main" }
+        });
+
+        let ctx =
+            parse_github_event_context("pull_request", "neverhuman/jekko", Some("carol"), &payload)
+                .unwrap();
+        assert_eq!(
+            ctx.field("pull_request.author.login").as_deref(),
+            Some("carol")
         );
     }
 
