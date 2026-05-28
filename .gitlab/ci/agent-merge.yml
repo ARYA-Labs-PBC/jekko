@@ -5,8 +5,9 @@
 # diff and — if the agent verdict is `pass` or `concern` (not `block` or
 # `abstain`) and the existing risk gate is satisfied — calls
 # `jeryu agent merge` to merge the MR. The agent uses the local LLM
-# providers configured in `~/.jekko/users/<user>/llm.env` via
-# jnoccio-fusion's `users_pool` path.
+# providers configured in `~/llm.env` on the runner host (autonomy's
+# secrets chain looks at `OPENROUTER_API_KEY` env, then
+# `~/.jeryu/secrets/llm.env`, then `~/llm.env`).
 #
 # Trust tiers (passed to `jeryu agent merge --trust-tier`):
 #   * trusted    — author is the project bot OR previously-merged
@@ -25,15 +26,20 @@
 #
 # This lane is the LAST stage before `github-sync:push-to-main` (which
 # only fires on $CI_COMMIT_BRANCH == "main" after the merge lands).
+#
+# Runtime requirements (provided by the jeryu pool-cache host):
+#   * /home/ubuntu/.jeryu/bin/autonomy  — Evidence Gate CLI
+#   * /home/ubuntu/.jeryu/bin/jeryu     — jeryu CLI (agent merge)
+#   * /home/ubuntu/llm.env              — LLM provider keys
+#   * /home/ubuntu/.jeryu/jeryu.env     — GITLAB_PAT for jeryu API auth
+# The runner shells out as root on the host filesystem, so these paths
+# are reachable directly — no install/build step needed.
 
 agent-merge:autonomy-review-and-merge:
   stage: deploy
-  extends: .rust_linux_base
-  timeout: 30m
+  timeout: 15m
   rules:
-    # Only auto-fire on merge-request pipelines from human-readable
-    # branches. Tag pipelines, schedule pipelines, and direct main
-    # pushes do not enter this lane.
+    # Only auto-fire on merge-request pipelines targeting main.
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
       when: on_success
     - when: never
@@ -66,13 +72,25 @@ agent-merge:autonomy-review-and-merge:
   variables:
     AUTONOMY_TRUST_TIER: "trusted"
     AUTONOMY_TARGET_BRANCH: "main"
+    # Workflow default GIT_DEPTH=20 doesn't include `main`. We fetch it
+    # explicitly in before_script so `git diff main...HEAD` works without
+    # paying for a full unshallow.
   before_script:
-    - !reference [.rust_setup]
-    # The autonomy CLI reads provider keys from ~/.jekko/users/<user>/llm.env
-    # which the runner host already has. No extra credential plumbing
-    # needed for the local jeryu pool.
-    - which autonomy || (echo "autonomy CLI not on PATH; install ~/.jeryu/bin"; exit 1)
-    - which jeryu    || (echo "jeryu CLI not on PATH; install ~/.jeryu/bin"; exit 1)
+    - export DEBIAN_FRONTEND=noninteractive
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends bash ca-certificates curl git jq
+    # Host-installed binaries (autonomy + jeryu) live on the pool runner's
+    # filesystem. The job runs as root, so the 750 perm on /home/ubuntu
+    # is bypassed — but $HOME must point at /home/ubuntu so autonomy can
+    # find ~/llm.env in its secrets chain.
+    - export PATH="/home/ubuntu/.jeryu/bin:$PATH"
+    - export HOME="/home/ubuntu"
+    # Source jeryu auth (GITLAB_PAT for `jeryu agent merge`, etc.).
+    - if [ -f /home/ubuntu/.jeryu/jeryu.env ]; then set -a; . /home/ubuntu/.jeryu/jeryu.env; set +a; fi
+    # Make `main` available for the diff.
+    - git fetch --depth=50 origin main:refs/heads/main || git fetch origin main:refs/heads/main
+    - command -v autonomy >/dev/null || { echo "autonomy CLI missing on host"; exit 1; }
+    - command -v jeryu    >/dev/null || { echo "jeryu CLI missing on host"; exit 1; }
   script:
     - |
       set -euo pipefail
@@ -80,9 +98,8 @@ agent-merge:autonomy-review-and-merge:
       POLICY_SHA=$(find .autonomy -type f -print0 | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1)
       echo "agent-merge: head=$HEAD_SHA policy=$POLICY_SHA target=$AUTONOMY_TARGET_BRANCH"
       mkdir -p .autonomy/.receipts
-      # Run two reviewer roles in sequence. Each writes a receipt JSON to
-      # .autonomy/.receipts/<role>.json. If either returns `block` (and
-      # not `concern`/`pass`/`abstain`), the gate fails the job.
+      # Run each reviewer role in sequence against the MR diff. Receipts
+      # land under .autonomy/.receipts/ for artifact upload.
       for role in security test_integrity; do
         echo "=== reviewer-$role ==="
         if [ ! -f ".autonomy/prompts/reviewer-$role.md" ]; then
