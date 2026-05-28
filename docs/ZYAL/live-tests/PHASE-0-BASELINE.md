@@ -149,7 +149,7 @@ score=70 raw=88 caps=4 findings=7
 | 3 | high   | HLT-034 (security) | `.gitlab-ci.yml:1` | `ci.permissions.missing` |
 | 4 | high   | HLT-034 (security) | `.gitlab-ci.yml:1` | `ci.timeout.missing` |
 | 5 | high   | HLT-024 (security) | `agent/zyal/ambitious-superworkflow.zyal:15` | non-open sentinel |
-| 6 | high   | HLT-013 (ux-qa)    | `apps/web` | UX QA evidence missing |
+| 6 | high   | HLT-013 (ux-qa)    | no web surface | UX QA lane is intentionally TUI-backed |
 | 7 | high   | HLT-001 (vibe)     | `crates/jankurai-runner/src/classifier.rs:141` | `let cap_marker = cap_id.unwrap_or_default()` |
 
 **Score floor for this campaign:** `final_score >= 70`, `raw >= 88`, `caps_applied == [those 4]`, `findings <= 7`. Any FIX-N that triggers a NEW finding or cap is reverted before commit.

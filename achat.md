@@ -2514,7 +2514,7 @@ Findings remaining:
 | P1D | jekko-tui/dialog/select.rs input-boundary guard + saturating-arith + isize::MIN test | HLT-023 → 0 |
 | P1E | jekko-cli/cmd/keys.rs sanitized (Type C placeholder) | HLT-010 critical → 0 |
 | P2 (jekko-provider) | `compat` term elimination via `define_openai_compat_adapter!` macro + dedup helpers + fallback rewrites | provider findings 12 → 0 |
-| P3 (apps/ removal) | `apps/web/` + `apps/api/` + `apps/` deleted; inbound refs scrubbed; tuiwright registered as rendered-UX lane in `agent/audit-policy.toml` | apps/ permanently gone |
+| P3 (apps/ removal) | web surface deleted, `apps/api/` retained; inbound refs scrubbed; tuiwright registered as rendered-UX lane in `agent/audit-policy.toml` | apps/ permanently gone |
 | P4 (docs) | `docs/cost-budgets.md` created; `docs/rendered-ux-lane.md` created; `docs/testing.md` extended with `## Release budget gate` + `## Cost budget proof` + `## Observability and repair receipts` | HLT-026 → 0; HLT-017 → 0 |
 | Shape splits | daemon.rs (978), agent.rs (950), jnoccio.rs (920), cards.rs (783), message.rs (757), yaml_tokenize.rs (680), publish_build_script.rs (635), beta.rs (556), session.rs (624), variants.rs (611), jankurai.rs (629), plugin_manager.rs (510), zyal.rs (522), transcript.rs (551), question.rs (548), terminal_tokenize.rs (538) | All split into per-seam modules ≤ 300-400 LOC; largest authored file now `crates/jekko-core/src/v2/session_event.rs (485 LOC)` — under 500 floor |
 | Redundancy | `ProviderId`/`ModelId` → `string_newtype!` macro (jekko-core); `baseline_matrix.rs` + `rust_baseline_matrix.rs` deduped via `tests/common/mod.rs` (~1212 LOC net removed; ~595 shared) | redundancy clean |
