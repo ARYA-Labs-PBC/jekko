@@ -96,6 +96,7 @@ pub(super) fn numeric_tolerance_from_json(value: &Json) -> Result<NumericToleran
 
 pub(super) fn support_from_json(value: &Json) -> Result<SupportRef, String> {
     let obj = as_object(value)?;
+    #[allow(clippy::manual_unwrap_or_default)]
     let section_hash = match optional_string(obj, "section_hash") {
         Some(section_hash) => section_hash,
         None => String::new(),
