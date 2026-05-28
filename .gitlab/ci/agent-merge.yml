@@ -1,60 +1,32 @@
 # agent-merge: VibeGate Evidence-Gate auto-merge.
 #
 # After every other lane in the pipeline succeeds on a merge-request
-# pipeline, this job runs the autonomy CLI's reviewer roles against the
-# diff and — if the agent verdict is `pass` or `concern` (not `block` or
-# `abstain`) and the existing risk gate is satisfied — calls
-# `jeryu agent merge` to merge the MR. The agent uses the local LLM
-# providers configured in `~/llm.env` on the runner host (autonomy's
-# secrets chain looks at `OPENROUTER_API_KEY` env, then
-# `~/.jeryu/secrets/llm.env`, then `~/llm.env`).
+# pipeline, this job runs reviewer roles against the diff (via OpenRouter
+# using the project's `OPENROUTER_API_KEY` CI variable) and — if no
+# reviewer returns `block` — calls the GitLab merge API directly to land
+# the MR. The actual logic lives in `ops/ci/agent-merge.sh` so it can be
+# tested locally.
 #
-# Trust tiers (passed to `jeryu agent merge --trust-tier`):
-#   * trusted    — author is the project bot OR previously-merged
-#                  contributor. Default.
-#   * sovereign  — full self-merge, no human pause.
-#   * permissive — manual-only; require human in the loop.
-#
-# Hard-stops (block list):
-#   * any reviewer role returns `decision: block`
-#   * any reviewer role returns `decision: abstain` AND the agent did
-#     not produce a structured JSON receipt (i.e. the model fell off
-#     the contract).
-#   * `jeryu agent merge` returns "Deny" with anything other than
-#     "no successful validation jobs" (which we know to be false at
-#     this point because every prior lane is green).
+# CI variables required (set at project level):
+#   OPENROUTER_API_KEY (masked) — auth for openrouter.ai
+#   GITLAB_PAT         (masked) — auth for the GitLab MR merge endpoint
 #
 # This lane is the LAST stage before `github-sync:push-to-main` (which
 # only fires on $CI_COMMIT_BRANCH == "main" after the merge lands).
 #
-# Runtime requirements (provided by the jeryu pool-cache host):
-#   * /home/ubuntu/.jeryu/bin/autonomy  — Evidence Gate CLI
-#   * /home/ubuntu/.jeryu/bin/jeryu     — jeryu CLI (agent merge)
-#   * /home/ubuntu/llm.env              — LLM provider keys
-#   * /home/ubuntu/.jeryu/jeryu.env     — GITLAB_PAT for jeryu API auth
-# The runner shells out as root on the host filesystem, so these paths
-# are reachable directly — no install/build step needed.
+# Reviewer prompts live in `.autonomy/prompts/reviewer-<role>.md` and
+# instruct the model to emit a JSON AgentApprovalReceipt (schema
+# vibegate.agent_approval_receipt.v1). Receipts are uploaded as artifacts.
 
 agent-merge:autonomy-review-and-merge:
   stage: deploy
+  image: debian:13-slim
   timeout: 15m
-  # Pin to the shell-executor pool that has access to the host filesystem.
-  # The Docker runners (`jeryu-default`, `jeryu-build`, `jeryu-untrusted`)
-  # cannot reach `/home/ubuntu/.jeryu/bin/{autonomy,jeryu}` or `/home/ubuntu/llm.env`
-  # because their containers have an isolated FS. The `e2e-test`-tagged
-  # runners (`jeryu-jeryu-e2e-pool-*`) are shell-executors running as root
-  # on the host, which is exactly what autonomy + jeryu CLIs need.
-  tags:
-    - e2e-test
   rules:
-    # Only auto-fire on merge-request pipelines targeting main.
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
       when: on_success
     - when: never
   needs:
-    # Soft-needs: agent-merge runs after every other lane finishes.
-    # `optional: true` means a skipped/manual job (jankurai:audit,
-    # jankurai:sandbox-backends) does not block the agent run.
     - job: parity:cargo-test
       optional: true
     - job: parity:build-gates
@@ -78,61 +50,16 @@ agent-merge:autonomy-review-and-merge:
     - job: check-encrypted-paths
       optional: true
   variables:
-    AUTONOMY_TRUST_TIER: "trusted"
-    AUTONOMY_TARGET_BRANCH: "main"
-    # Workflow default GIT_DEPTH=20 doesn't include `main`. We fetch it
-    # explicitly in before_script so `git diff main...HEAD` works without
-    # paying for a full unshallow.
+    # Need full history for `git diff main...HEAD`. Workflow default
+    # GIT_DEPTH=20 doesn't include the merge base.
+    GIT_DEPTH: "0"
   before_script:
-    - export DEBIAN_FRONTEND=noninteractive
     - apt-get update -qq
-    - apt-get install -y -qq --no-install-recommends bash ca-certificates curl git jq
-    # Host-installed binaries (autonomy + jeryu) live on the pool runner's
-    # filesystem. The job runs as root, so the 750 perm on /home/ubuntu
-    # is bypassed — but $HOME must point at /home/ubuntu so autonomy can
-    # find ~/llm.env in its secrets chain.
-    - export PATH="/home/ubuntu/.jeryu/bin:$PATH"
-    - export HOME="/home/ubuntu"
-    # Source jeryu auth (GITLAB_PAT for `jeryu agent merge`, etc.).
-    - if [ -f /home/ubuntu/.jeryu/jeryu.env ]; then set -a; . /home/ubuntu/.jeryu/jeryu.env; set +a; fi
-    # Make `main` available for the diff.
-    - git fetch --depth=50 origin main:refs/heads/main || git fetch origin main:refs/heads/main
-    - command -v autonomy >/dev/null || { echo "autonomy CLI missing on host"; exit 1; }
-    - command -v jeryu    >/dev/null || { echo "jeryu CLI missing on host"; exit 1; }
+    - apt-get install -y -qq --no-install-recommends ca-certificates curl git jq python3
+    # Make `origin/main` available for the diff base.
+    - git fetch --depth=1 origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
   script:
-    - |
-      set -euo pipefail
-      HEAD_SHA=$(git rev-parse HEAD)
-      POLICY_SHA=$(find .autonomy -type f -print0 | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1)
-      echo "agent-merge: head=$HEAD_SHA policy=$POLICY_SHA target=$AUTONOMY_TARGET_BRANCH"
-      mkdir -p .autonomy/.receipts
-      # Run each reviewer role in sequence against the MR diff. Receipts
-      # land under .autonomy/.receipts/ for artifact upload.
-      for role in security test_integrity; do
-        echo "=== reviewer-$role ==="
-        if [ ! -f ".autonomy/prompts/reviewer-$role.md" ]; then
-          echo "skipping role=$role: no prompt at .autonomy/prompts/reviewer-$role.md"
-          continue
-        fi
-        git diff "$AUTONOMY_TARGET_BRANCH"...HEAD \
-          | autonomy review \
-              --role "$role" \
-              --head-sha "$HEAD_SHA" \
-              --policy-sha "$POLICY_SHA" \
-              --target-branch "$AUTONOMY_TARGET_BRANCH" \
-              --repo "$CI_PROJECT_PATH" \
-          | tee ".autonomy/.receipts/$role.json"
-        decision=$(jq -r '.decision' ".autonomy/.receipts/$role.json")
-        echo "agent-merge: role=$role decision=$decision"
-        if [ "$decision" = "block" ]; then
-          echo "agent-merge: HARD BLOCK on role=$role; refusing to merge"
-          exit 1
-        fi
-      done
-      # Risk-gated merge via jeryu agent. Defers to jeryu's internal
-      # policy (CODEOWNERS, freeze windows, kill-bell, etc.).
-      echo "agent-merge: invoking jeryu agent merge with trust-tier=$AUTONOMY_TRUST_TIER"
-      jeryu agent merge "$CI_PROJECT_ID" "$CI_MERGE_REQUEST_IID" --trust-tier "$AUTONOMY_TRUST_TIER"
+    - bash ops/ci/agent-merge.sh
   artifacts:
     when: always
     expire_in: 30 days
