@@ -30,7 +30,10 @@ pub fn render(
             opts.compact,
             opts.motion_enabled,
         ));
-        if !agent.summary.is_empty() {
+        // The main turn's prompt already streams into the transcript above the
+        // composer; echoing it here as a summary row duplicates the chat below
+        // the input box. Only sub-agents get a one-line summary in the rail.
+        if agent.kind != AgentKind::Main && !agent.summary.is_empty() {
             lines.push(render_summary_row(agent, width));
         }
     }

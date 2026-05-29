@@ -9,7 +9,7 @@ use std::time::Instant;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::agents::{AgentLocality, AgentPanelState, AgentRun, AgentStatus};
+use crate::agents::{AgentKind, AgentLocality, AgentPanelState, AgentRun, AgentStatus};
 use crate::anim::{elapsed_label, pulse_glyph_with_motion};
 use crate::format::format_tokens_with_direction;
 use crate::glyph_set;

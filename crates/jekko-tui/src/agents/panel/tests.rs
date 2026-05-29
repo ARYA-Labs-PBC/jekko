@@ -11,11 +11,23 @@ mod tests {
     }
 
     #[test]
-    fn one_agent_renders_strip_plus_two_rows() {
+    fn sub_agent_renders_strip_plus_two_rows() {
+        let mut p = AgentPanelState::new();
+        let mut a = AgentRun::new_main("worker", "do thing");
+        a.kind = AgentKind::Worker;
+        p.agents.push(a);
+        let lines = render(&p, Instant::now(), &PanelRenderOptions::default());
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn main_agent_omits_summary_row() {
+        // The main turn's prompt already appears in the transcript above the
+        // composer; it must not be echoed as a summary row below the box.
         let mut p = AgentPanelState::new();
         p.agents.push(AgentRun::new_main("main", "do thing"));
         let lines = render(&p, Instant::now(), &PanelRenderOptions::default());
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 2, "main agent renders strip + bullet only");
     }
 
     #[test]
@@ -71,6 +83,9 @@ mod tests {
         for i in 0..20 {
             let mut a = AgentRun::new_main(format!("a{i}"), "x");
             a.id = crate::agents::AgentId::new(format!("a{i}"));
+            // Sub-agents keep a summary row, so each occupies two rows — the
+            // row-budgeting this test exercises.
+            a.kind = AgentKind::Worker;
             p.agents.push(a);
         }
         p.set_viewport_rows(9);
