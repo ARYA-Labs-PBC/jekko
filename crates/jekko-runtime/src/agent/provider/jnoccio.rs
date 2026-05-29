@@ -42,7 +42,8 @@ pub(in crate::agent) async fn ensure_jnoccio_ready(start: &Path) -> RuntimeResul
         ));
     }
 
-    let Some(fusion_root) = jekko_jnoccio_boot::unlock::find_jnoccio_fusion_root_from(start) else {
+    let Some(fusion_root) = jekko_jnoccio_boot::fusion_root::find_jnoccio_fusion_root_from(start)
+    else {
         return Err(RuntimeError::other(
             "jnoccio-fusion checkout not found for runtime auto-boot",
         ));

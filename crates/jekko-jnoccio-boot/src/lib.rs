@@ -17,6 +17,7 @@
 //! 7. Emit `Ready { model_count }` or `Failed`.
 //! 8. Start 5 s re-poll loop regardless.
 
+pub mod fusion_root;
 pub mod health;
 pub mod poller;
 pub mod secret_unlock;

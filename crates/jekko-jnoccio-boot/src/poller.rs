@@ -11,8 +11,9 @@ use std::thread;
 use std::time::Duration;
 
 use crate::health::{probe_health_combined, HealthResult};
+use crate::fusion_root::find_jnoccio_fusion_root;
 use crate::spawn::ensure_and_spawn;
-use crate::unlock::{find_jnoccio_fusion_root, is_unlocked};
+use crate::unlock::is_unlocked;
 
 /// How often the background re-poll fires (matches TS: 5 000 ms).
 const REPOLL_INTERVAL: Duration = Duration::from_secs(5);
