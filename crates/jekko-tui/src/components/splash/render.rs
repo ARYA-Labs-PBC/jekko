@@ -6,8 +6,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use crate::theme::codex;
-
 use super::SplashContext;
 
 /// 6x38 block-glyph "JEKKO" wordmark. Each entry is one row.
@@ -83,7 +81,7 @@ pub(crate) fn render_splash_static_for_tests(buf: &mut Buffer, area: Rect, ctx: 
     Paragraph::new(lines).render(render_area, buf);
 }
 
-fn build_lines(ctx: &SplashContext, width: u16) -> Vec<Line<'static>> {
+fn build_lines(ctx: &SplashContext, _width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> =
         Vec::with_capacity(WORDMARK.len() + SPLASH_TOP_PAD as usize + 1);
 
@@ -99,19 +97,34 @@ fn build_lines(ctx: &SplashContext, width: u16) -> Vec<Line<'static>> {
         lines.push(Line::from(spans));
     }
 
-    let subtitle = format!(
-        "v{} · {} · {}",
-        ctx.version,
-        ctx.cwd,
-        ctx.branch.as_deref().unwrap_or("(no git)")
-    );
-    let subtitle_width = subtitle.chars().count() as u16;
-    let subtitle_left_pad = width.saturating_sub(subtitle_width) / 2;
-    let subtitle_style = Style::default().fg(codex::FG_DIM);
-    lines.push(Line::from(vec![
-        Span::raw(" ".repeat(subtitle_left_pad as usize)),
-        Span::styled(subtitle, subtitle_style),
-    ]));
+    // Version label only — right-aligned to the wordmark's right edge and
+    // colored so the logo gradient visually continues into it. The workspace
+    // path and git branch are intentionally omitted here: they already live in
+    // the status bar at the bottom of the screen.
+    let pad_len = SPLASH_LEFT_PAD.chars().count();
+    let logo_width = WORDMARK
+        .iter()
+        .map(|row| row.chars().count())
+        .max()
+        .unwrap_or(0);
+    let content_width = logo_width.saturating_sub(1).max(1);
+    let label = format!("v{}", ctx.version);
+    let label_width = label.chars().count();
+    let left_pad = (pad_len + logo_width).saturating_sub(label_width);
+
+    let mut version_spans: Vec<Span<'static>> = Vec::with_capacity(label_width + 1);
+    version_spans.push(Span::raw(" ".repeat(left_pad)));
+    for (i, ch) in label.chars().enumerate() {
+        // Continue the wordmark gradient one row past its bottom edge, at the
+        // column where this glyph sits, so the version reads as part of the logo.
+        let content_col = (left_pad + i).saturating_sub(pad_len);
+        let color = gradient_color(WORDMARK.len(), content_col, content_width);
+        version_spans.push(Span::styled(
+            ch.to_string(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
+    lines.push(Line::from(version_spans));
 
     lines
 }

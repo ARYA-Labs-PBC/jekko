@@ -71,15 +71,61 @@ fn render_splash_emits_wordmark() {
 }
 
 #[test]
-fn render_splash_emits_subtitle() {
+fn render_splash_emits_version_label_only() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = fresh_buffer(80, 24);
     let ctx = fixture_ctx();
     render_splash(&mut buf, area, Duration::ZERO, &ctx, None);
     let dump = buffer_to_symbol_string(&buf);
     assert!(dump.contains("v1.2.3"), "expected version, got:\n{dump}");
-    assert!(dump.contains("~/code/jekko"), "expected cwd, got:\n{dump}");
-    assert!(dump.contains("main"), "expected branch, got:\n{dump}");
+    // cwd + branch now live only in the bottom status bar, not under the logo.
+    assert!(
+        !dump.contains("~/code/jekko"),
+        "cwd must not appear under the logo, got:\n{dump}"
+    );
+    assert!(
+        !dump.contains("main"),
+        "branch must not appear under the logo, got:\n{dump}"
+    );
+    assert!(
+        !dump.contains('·'),
+        "separator dot must be gone, got:\n{dump}"
+    );
+}
+
+#[test]
+fn render_splash_right_aligns_version_to_logo_edge() {
+    // The version label's right edge should line up with the wordmark's
+    // rightmost visible glyph (not be centered across the terminal width).
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = fresh_buffer(80, 24);
+    let ctx = fixture_ctx();
+    render_splash(&mut buf, area, Duration::ZERO, &ctx, None);
+
+    let area = *buf.area();
+    let rightmost_nonblank =
+        |y: u16| (0..area.width).filter(|&x| !buf[(x, y)].symbol().trim().is_empty()).max();
+
+    // Content rows, top to bottom. The version label is the last one; every
+    // row above it belongs to the wordmark.
+    let content_rows: Vec<u16> = (0..area.height)
+        .filter(|&y| rightmost_nonblank(y).is_some())
+        .collect();
+    let (&version_y, logo_rows) = content_rows
+        .split_last()
+        .expect("splash emits a version row plus wordmark rows");
+
+    let logo_right = logo_rows
+        .iter()
+        .filter_map(|&y| rightmost_nonblank(y))
+        .max()
+        .expect("wordmark rows present");
+    let version_right = rightmost_nonblank(version_y).expect("version glyphs present");
+
+    assert_eq!(
+        version_right, logo_right,
+        "version right edge ({version_right}) should match logo right edge ({logo_right})"
+    );
 }
 
 #[test]
@@ -166,7 +212,7 @@ fn splash_context_detect_returns_version() {
 }
 
 #[test]
-fn splash_context_omits_branch_when_unknown() {
+fn render_splash_shows_only_version_not_workspace() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = fresh_buffer(80, 24);
     let ctx = SplashContext {
@@ -178,11 +224,11 @@ fn splash_context_omits_branch_when_unknown() {
     let dump = buffer_to_symbol_string(&buf);
     assert!(dump.contains("v9.9.9"));
     assert!(
-        dump.contains("/tmp"),
-        "cwd should appear in splash:\n{dump}"
+        !dump.contains("/tmp"),
+        "cwd must not appear under the logo:\n{dump}"
     );
     assert!(
-        dump.contains("(no git)"),
-        "branch fallback should appear when absent:\n{dump}"
+        !dump.contains("(no git)"),
+        "branch fallback must not appear under the logo:\n{dump}"
     );
 }
