@@ -7,15 +7,15 @@
 - Target stack ID: `rust-ts-vite-react-postgres-bounded-python`
 - Target stack: `Rust core + TypeScript/React/Vite + PostgreSQL + generated contracts + exception-only Python AI/data service`
 - Repo: `.`
-- Run ID: `1779968461`
-- Started at: `1779968461`
-- Elapsed: `8877` ms
+- Run ID: `1780091506`
+- Started at: `1780091506`
+- Elapsed: `8760` ms
 - Scope: `full`
-- Raw score: `91`
-- Final score: `70`
+- Raw score: `93`
+- Final score: `78`
 - Decision: `advisory`
 - Minimum score: `85`
-- Caps applied: `fallback-soup-in-product-code, missing-rendered-ux-qa-lane, agent-tool-supply-chain-gap`
+- Caps applied: `missing-rendered-ux-qa-lane, agent-tool-supply-chain-gap`
 
 ## Hard Rule Caps
 
@@ -34,7 +34,7 @@
 | `too-much-python-in-product-surface` | 72 | no |
 | `boundary-reclassification-evidence-gap` | 72 | no |
 | `vibe-placeholders-in-product-code` | 68 | no |
-| `fallback-soup-in-product-code` | 70 | yes |
+| `fallback-soup-in-product-code` | 70 | no |
 | `future-hostile-dead-language-in-product-code` | 64 | no |
 | `severe-duplication-in-product-code` | 70 | no |
 | `generated-zone-mutation-risk` | 76 | no |
@@ -70,7 +70,7 @@
 
 ## Copy-Code Redundancy
 
-- Status: `review` hard=`0` warning=`57` files=`801`
+- Status: `review` hard=`0` warning=`57` files=`802`
 - Policy: min-lines=`10` min-tokens=`100` max-findings=`50` include-tests=`false` strict=`false`
 - Duplicate volume: lines=`164` tokens=`450` bytes=`4536`
 
@@ -141,7 +141,7 @@
 | Contract and boundary integrity | 13 | 98 | 12.74 | contract surface found; generated contract artifacts found |
 | Proof lanes and test routing | 12 | 98 | 11.76 | one-command setup/validation lane found; deterministic fast lane found |
 | Security and supply-chain posture | 12 | 100 | 12.00 | lockfile present; secret or dependency scan tooling found |
-| Code shape and semantic surface | 12 | 62 | 7.44 | largest authored code file: crates/jekko-cli/src/cmd/watch.rs (454 LOC); most code files stay under 300 LOC |
+| Code shape and semantic surface | 12 | 80 | 9.60 | largest authored code file: crates/jekko-cli/src/cmd/watch.rs (454 LOC); most code files stay under 300 LOC |
 | Data truth and workflow safety | 8 | 95 | 7.60 | database surface present; structured db boundary manifest present |
 | Observability and repair evidence | 8 | 98 | 7.84 | observability libraries or patterns found; diagnostic shaping hints found |
 | Context economy and agent instructions | 7 | 100 | 7.00 | root `AGENTS.md` present; root `AGENTS.md` stays short |
@@ -224,32 +224,12 @@ No audited runtime boundary reclassifications declared.
    Check: `HLT-001-DEAD-MARKER:shape` `soft` confidence `0.76`
    Route: TLR `Entropy`, lane `fast`, owner `tools`
    Docs: `docs/audit-rubric.md#future-hostile-language-rule`
-   Reason: `Code shape and semantic surface` scored 62 below the standard floor of 85
+   Reason: `Code shape and semantic surface` scored 80 below the standard floor of 85
    Fix: split large or ambiguous authored code into smaller semantic modules with focused tests
    Rerun: `just fast`
-   Fingerprint: `sha256:423c7b4e9ad6fccaf3330a67a96b18063d83ab1143f937fcb1aff774b6f245a6`
-   Evidence: largest authored code file: crates/jekko-cli/src/cmd/watch.rs (454 LOC), most code files stay under 300 LOC, copy-code advisory classes found: 57 (advisory only, no score impact), fallback soup marker found
-2. `high` `generated` `agent/generated-zones.toml:1`
-   Rule: `HLT-002-GENERATED-MUTATION`
-   Check: `HLT-002-GENERATED-MUTATION:generated` `hard` confidence `0.95`
-   Route: TLR `Contracts/data`, lane `contract`, owner `workspace`
-   Docs: `agent/JANKURAI_STANDARD.md#generated-zones`
-   Reason: generated zone file `agent/repo-score.json` is missing
-   Fix: regenerate `agent/repo-score.json` using the declared command, or remove the zone entry if the file was deleted intentionally
-   Rerun: `just fast`
-   Fingerprint: `sha256:da4c97d8849ada8e584127cefd2a38618b2122ac9f5d9918c4996048a2e47b21`
-   Evidence: generated zone integrity violation
-3. `high` `generated` `agent/generated-zones.toml:1`
-   Rule: `HLT-002-GENERATED-MUTATION`
-   Check: `HLT-002-GENERATED-MUTATION:generated` `hard` confidence `0.95`
-   Route: TLR `Contracts/data`, lane `contract`, owner `workspace`
-   Docs: `agent/JANKURAI_STANDARD.md#generated-zones`
-   Reason: generated zone file `agent/repo-score.md` is missing
-   Fix: regenerate `agent/repo-score.md` using the declared command, or remove the zone entry if the file was deleted intentionally
-   Rerun: `just fast`
-   Fingerprint: `sha256:73f51c07759943db494d8bd45c79b3ea786d6bce0e391f2408f30b6a9de7af8c`
-   Evidence: generated zone integrity violation
-4. `high` `security` `agent/zyal/ambitious-superworkflow.zyal:387`
+   Fingerprint: `sha256:a03b6aba08c0724b8b71ae9b7941f54cd04897958ccbd170cb2576d716315502`
+   Evidence: largest authored code file: crates/jekko-cli/src/cmd/watch.rs (454 LOC), most code files stay under 300 LOC, copy-code advisory classes found: 57 (advisory only, no score impact), rust bad-behavior advisory signals: 2336
+2. `high` `security` `agent/zyal/ambitious-superworkflow.zyal:387`
    Rule: `HLT-024-AGENT-TOOL-SUPPLY-GAP`
    Check: `HLT-024-AGENT-TOOL-SUPPLY-GAP:security` `hard` confidence `0.88`
    Route: TLR `Security, secrets, agency`, lane `security`, owner `agent`
@@ -260,7 +240,7 @@ No audited runtime boundary reclassifications declared.
    Rerun: `just security`
    Fingerprint: `sha256:821aafc4672d2bf6d71f6d817435f9b4f9ba6cacd56aa8c796d8bb5a1ddfa2e4`
    Evidence: open_id=ambitious-superworkflow-template
-5. `high` `ux-qa` `apps/web`
+3. `high` `ux-qa` `apps/web`
    Rule: `HLT-013-RENDERED-UX-GAP`
    Check: `HLT-013-RENDERED-UX-GAP:ux-qa` `hard` confidence `0.88`
    Route: TLR `Verification and rendered UX`, lane `web`, owner `apps`
@@ -270,16 +250,6 @@ No audited runtime boundary reclassifications declared.
    Rerun: `just ux-qa`
    Fingerprint: `sha256:571d35c2e730a393b782bac14825b197c0543920bb21967079d264ac602ea5b1`
    Evidence: rendered UX QA lane missing
-6. `high` `vibe` `crates/zyalc/src/compile/validation.rs:167`
-   Rule: `HLT-001-DEAD-MARKER`
-   Check: `HLT-001-DEAD-MARKER:vibe` `hard` confidence `0.88`
-   Route: TLR `Entropy`, lane `fast`, owner `tools`
-   Docs: `docs/audit-rubric.md#future-hostile-language-rule`
-   Reason: fallback soup detected in product code
-   Fix: collapse fallback chains into explicit typed states with bounded retry policy, telemetry, and documented repair guidance
-   Rerun: `just fast`
-   Fingerprint: `sha256:2425054f52d8fe7925a09e1a03d6d5da47565327cdada7b4c22b8799fd51e08d`
-   Evidence: crates/zyalc/src/compile/validation.rs:167 for dep in depends_on.as_sequence().cloned().unwrap_or_default() {
 
 ## Policy
 
@@ -289,15 +259,9 @@ No audited runtime boundary reclassifications declared.
 
 ## Agent Fix Queue
 
-1. `high` `HLT-002-GENERATED-MUTATION` `agent/generated-zones.toml` - regenerate `agent/repo-score.json` using the declared command, or remove the zone entry if the file was deleted intentionally
-   Route: `Contracts/data`/`contract`
-2. `high` `HLT-002-GENERATED-MUTATION` `agent/generated-zones.toml` - regenerate `agent/repo-score.md` using the declared command, or remove the zone entry if the file was deleted intentionally
-   Route: `Contracts/data`/`contract`
-3. `high` `HLT-024-AGENT-TOOL-SUPPLY-GAP` `agent/zyal/ambitious-superworkflow.zyal` - append `ZYAL_ARM RUN_FOREVER id=<id>` on the final line
+1. `high` `HLT-024-AGENT-TOOL-SUPPLY-GAP` `agent/zyal/ambitious-superworkflow.zyal` - append `ZYAL_ARM RUN_FOREVER id=<id>` on the final line
    Route: `Security, secrets, agency`/`security`
-4. `high` `HLT-013-RENDERED-UX-GAP` `apps/web` - add Storybook state coverage, Playwright screenshots, visual review or `@jankurai/ux-qa`, accessibility scans, CLS checks, generated mocks, and design tokens
+2. `high` `HLT-013-RENDERED-UX-GAP` `apps/web` - add Storybook state coverage, Playwright screenshots, visual review or `@jankurai/ux-qa`, accessibility scans, CLS checks, generated mocks, and design tokens
    Route: `Verification and rendered UX`/`web`
-5. `high` `HLT-001-DEAD-MARKER` `crates/zyalc/src/compile/validation.rs` - collapse fallback chains into explicit typed states with bounded retry policy, telemetry, and documented repair guidance
-   Route: `Entropy`/`fast`
-6. `medium` `HLT-001-DEAD-MARKER` `.` - split large or ambiguous authored code into smaller semantic modules with focused tests
+3. `medium` `HLT-001-DEAD-MARKER` `.` - split large or ambiguous authored code into smaller semantic modules with focused tests
    Route: `Entropy`/`fast`
