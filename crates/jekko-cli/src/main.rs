@@ -11,7 +11,7 @@ use jekko_cli::{cmd, runtime};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    runtime::bootstrap(&cli.global)?;
+    runtime::bootstrap(&cli.global, cli.directory.as_deref())?;
 
     // Short-circuit: `-j` / `--jankurai` runs one cycle via jankurai-runner.
     if cli.jankurai {

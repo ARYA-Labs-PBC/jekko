@@ -51,7 +51,11 @@ pub fn long_version() -> String {
     disable_help_subcommand = true,
 )]
 pub struct Cli {
-    /// Optional working directory; defaults to the current directory.
+    /// Optional workspace directory to operate in; defaults to the current
+    /// directory. The process is pinned to this folder so jekko stays scoped to
+    /// it, while keys, the database, and the jnoccio-fusion gateway are still
+    /// resolved from `$HOME`/the executable location. Takes precedence over the
+    /// global `--cwd` flag.
     #[arg(value_name = "PATH")]
     pub directory: Option<PathBuf>,
 

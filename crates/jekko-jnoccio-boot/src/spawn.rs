@@ -151,7 +151,14 @@ pub fn spawn_server(binary: &Path, fusion_root: &Path, config: &Path) -> Result<
 
 /// Combined helper: find binary + config, then spawn.
 /// Returns `Err` only if the binary is missing (not found = user needs to build it).
+///
+/// `fusion_root` is canonicalized first so the binary, config, state dir, and
+/// (transitively) the server's `models.json` / `.env.jnoccio` all resolve to
+/// absolute paths. This keeps the spawned server independent of the directory
+/// jekko happened to be launched from.
 pub fn ensure_and_spawn(fusion_root: &Path) -> Result<()> {
+    let fusion_root = fs::canonicalize(fusion_root).unwrap_or_else(|_| fusion_root.to_path_buf());
+    let fusion_root = fusion_root.as_path();
     let binary = match find_binary(fusion_root) {
         Some(path) => path,
         None => bail!(
