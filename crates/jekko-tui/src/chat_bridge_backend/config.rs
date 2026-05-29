@@ -1,5 +1,13 @@
 /// Default model used when no override is supplied via flag or env.
-pub const DEFAULT_MODEL: &str = "anthropic/claude-3-5-sonnet-latest";
+///
+/// This MUST be the model the local jnoccio-fusion gateway exposes on
+/// `/v1/chat/completions`. The gateway publishes a single visible model
+/// (`jnoccio/jnoccio-fusion`) and routes internally across the keyed provider
+/// pool; requesting any other id (e.g. a raw `anthropic/...` model) makes the
+/// gateway answer `404 model_not_found`, which the TUI surfaces as
+/// `jnoccio gateway returned non-200 status: 404`. Override with
+/// [`MODEL_ENV`] only with another id the gateway actually exposes.
+pub const DEFAULT_MODEL: &str = "jnoccio/jnoccio-fusion";
 
 /// Environment variable consulted for the default model when the caller does
 /// not pass one explicitly. Mirrors the rest of the jekko stack.
