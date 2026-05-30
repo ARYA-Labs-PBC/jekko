@@ -102,8 +102,8 @@ pub fn find_repo_root_from(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Checks whether the `jnoccio-fusion/` subtree inside `repo_root` has been
-/// git-crypt unlocked (i.e. the files are readable plaintext, not encrypted binary).
+/// Checks whether the `jnoccio-fusion/` subtree inside `repo_root` is readable
+/// as plaintext instead of an encrypted blob.
 ///
 /// Mirrors `hasPlaintextSignals` from `jnoccio-unlock.ts`.
 pub fn has_plaintext_signals(repo_root: &Path) -> bool {
@@ -247,7 +247,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let fusion = tmp.path().join("jnoccio-fusion");
         fs::create_dir_all(fusion.join("config")).unwrap();
-        // Encrypted binary content (git-crypt format — not valid UTF-8 / JSON)
+        // Simulated encrypted binary content (not valid UTF-8 / JSON)
         fs::write(fusion.join("Cargo.toml"), b"\x00GITCRYPT\x00\x02encrypted").unwrap();
         assert!(!has_plaintext_signals(tmp.path()));
     }

@@ -9,7 +9,6 @@ YAML. The entry point is the repo-root `.gitlab-ci.yml`, which uses
 
 | GitHub workflow | GitHub jobs | GitLab file | GitLab jobs | Note |
 |---|---|---|---|---|
-| `check-encrypted-paths.yml` | `verify-encryption` | `static.yml` | `check-encrypted-paths` | 1:1 |
 | `close-issues.yml` | `close` | `scheduled.yml` | `scheduled:close-issues` | Cron set in GitLab Schedules UI; `SCHEDULED_JOB=close-issues` |
 | `close-stale-prs.yml` | `close-stale-prs` | `scheduled.yml` | `scheduled:close-stale-prs` | Cron `0 6 * * *`; `SCHEDULED_JOB=close-stale-prs` |
 | `compliance-close.yml` | `close-non-compliant` | `scheduled.yml` | `scheduled:compliance-close` | Cron `*/30 * * * *`; `SCHEDULED_JOB=compliance-close` |

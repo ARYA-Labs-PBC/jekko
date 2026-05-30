@@ -944,9 +944,6 @@ ci-local-sandboxctl:
 	cargo test  --manifest-path crates/sandboxctl/Cargo.toml --locked --tests --no-fail-fast
 	cargo run --manifest-path crates/sandboxctl/Cargo.toml --locked --quiet -- validate
 
-ci-local-encrypted:
-	bash ops/ci/check-encrypted-paths.sh
-
 ci-local-typecheck:
 	bash ops/ci/typecheck.sh
 
@@ -1024,7 +1021,7 @@ ci-local-nix:
 # Excludes the GitHub-only steps (trufflehog action, anchore-sbom, grype,
 # codeql upload) which require GitHub Actions runner context.
 # jankurai:proof HLT-018-PERF-CONCURRENCY-DRIFT parallel=1 cache=cargo-build narrow-targets=true
-ci-local: ci-local-encrypted ci-local-typecheck ci-local-tests ci-local-tui ci-local-parity ci-local-audit ci-local-proof ci-local-proofmark ci-local-zyalc ci-local-sandboxctl ci-local-sandbox-backends ci-local-bad-behavior ci-local-security ci-local-security-tools ci-local-cargo-audit ci-local-pr-dry-run ci-local-nix memory-benchmark-fast
+ci-local: ci-local-typecheck ci-local-tests ci-local-tui ci-local-parity ci-local-audit ci-local-proof ci-local-proofmark ci-local-zyalc ci-local-sandboxctl ci-local-sandbox-backends ci-local-bad-behavior ci-local-security ci-local-security-tools ci-local-cargo-audit ci-local-pr-dry-run ci-local-nix memory-benchmark-fast
 	@echo "ci-local: local PR workflow parity passed"
 
 # Thin aliases that mirror scripts/ci-local.sh for convenience.

@@ -1,4 +1,4 @@
-# JNoccio Fusion Key Inventory
+# Jnoccio Fusion Key Inventory
 
 Use this file as the checklist for setting up upstream access.
 
@@ -23,17 +23,17 @@ Use this file as the checklist for setting up upstream access.
 
 ## Env File
 
-Put the values in `~/.env.jnoccio` only for the developer-only protected
-Jnoccio workflow. The startup preflight checks this home-level file first so
-it works the same way from every repo on the machine.
+Put the values in `~/.env.jnoccio` only for the developer-only Jnoccio
+workflow. The startup preflight checks this home-level file first so it works
+the same way from every repo on the machine.
 
 Jekko model setup does not use this file. Public model keys belong in
 `~/.jekko/jekko.env`.
 
-From the Jekko TUI, select the locked `Jnoccio Fusion` model and enter the
-path to your local git-crypt key file. A successful unlock creates
-`.env.jnoccio` from `.env.jnoccio.example` when the file does not already
-exist. Existing `.env.jnoccio` files are never overwritten.
+From the Jekko TUI, select the Jnoccio Fusion model and let `jekko jnoccio
+unlock` copy `.env.jnoccio` from `.env.jnoccio.example` when the file does not
+already exist. Existing `.env.jnoccio` files are never overwritten unless you
+explicitly request a force copy.
 
 That file should contain the following keys:
 
@@ -57,13 +57,12 @@ FIREWORKS_API_KEY=
 DASHSCOPE_API_KEY=
 ```
 
-## Local Unlock Test
+## Local Setup
 
-Authorized keyholders can run the local-only unlock proof with:
+Authorized developers can validate their local setup with:
 
 ```bash
-JNOCCIO_GIT_CRYPT_KEY_PATH=/path/to/jnoccio-fusion.key rtk bun test test/local/jnoccio-unlock.local.test.ts
+rtk bun test test/local/jnoccio-unlock.local.test.ts
 ```
 
-The test skips in CI, when `JNOCCIO_GIT_CRYPT_KEY_PATH` is unset, or when
-`git-crypt` is unavailable.
+The test skips in CI and when the local developer secret is absent.

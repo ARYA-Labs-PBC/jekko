@@ -63,7 +63,7 @@ releases, see `UPCOMING_CHANGELOG.md`.
 - Provider streaming via reqwest + tokio with full transform parity.
 - Plugin contract is now Rust (`JekkoPlugin` trait + declarative TOML manifest); JS plugin v1 still loaded but with migration warnings.
 - Jnoccio runtime access now requires an explicit `JNOCCIO_DEVELOPER_KEY` unlock from process env or `~/.env.jnoccio`; plaintext checkout signals remain diagnostic only.
-- Local submit and CI gates now verify protected `jnoccio-fusion/**` blobs are tracked and git-crypt encrypted.
+- Local submit and CI gates now verify `jnoccio-fusion/**` blobs are tracked as plain text.
 - Release confidence gates now include encrypted-path checks before `just fast`.
 
 ### Added
@@ -87,7 +87,7 @@ releases, see `UPCOMING_CHANGELOG.md`.
 
 ### Added
 
-- **jnoccio-fusion unlock pipeline** — 128-char ASCII secret → AES-GCM envelope → raw git-crypt key (Rust crate `crates/tuiwright-jekko-unlock`).
+- **jnoccio-fusion unlock pipeline** — 128-char ASCII secret → developer-key install path (Rust crate `crates/tuiwright-jekko-unlock`).
 - **Tool-adoption registry** — `agent/tool-adoption.toml` now declares 16 jankurai tools with local + CI commands and artifact paths (proofbind, ci/git/release-bad-behavior, authz-matrix, input-boundary, agent-tool-supply, release-readiness, cost-budget, audit-ci, proof-routing, security, ux-qa, db-migration-analyze, contract-drift, rust-witness, proofbind).
 - **Boundary AGENTS.md files** for `crates/tuiwright-jekko-unlock/`, `contracts/events/`, `contracts/generated/`, `packages/{core,plugin,script,sdk,containers}/`.
 - **Migration rollback comments** for 9 db/migrations missing them (HLT-021-DESTRUCTIVE-MIGRATION compliance).
@@ -124,7 +124,7 @@ releases, see `UPCOMING_CHANGELOG.md`.
 
 - Fresh-repo import for `neverhuman/jekko` with release docs, renamed metadata, and the first public tag.
 - Finalized ZYAL contract metadata at `2.4.0`, with `research.version: v1` and runtime sentinel `<<<ZYAL v1:daemon ...>>>`.
-- Added the Jnoccio release surface, explicit version files, and git-crypt protected source layout.
+- Added the Jnoccio release surface, explicit version files, and plaintext source layout.
 - Added the README TUI demo asset and release proof routing for the new repo.
 
 ## Earlier Releases

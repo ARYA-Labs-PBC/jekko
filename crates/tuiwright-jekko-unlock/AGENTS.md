@@ -3,7 +3,7 @@
 <!-- jankurai generated adapter -->
 Read `AGENTS.md` first. Use `agent/JANKURAI_STANDARD.md` as the canonical jankurai standard.
 Owns `crates/tuiwright-jekko-unlock/`.
-Boundary: Rust crate implementing the jnoccio-fusion unlock TUI flow — derives a git-crypt key from a 128-char ASCII secret via AES-GCM envelope.
+Boundary: Rust crate implementing the jnoccio-fusion unlock TUI flow — validates a 128-char ASCII secret and drives the developer-key setup path.
 Forbidden: persisting plaintext secrets, embedding hardcoded keys, IO outside the documented unlock command.
 Proof lane: `cargo audit` + Rust witness build via `jankurai rust witness build .`.
 Security: all key material handling must be reviewed; no `--no-verify` or unsigned commits in this crate.

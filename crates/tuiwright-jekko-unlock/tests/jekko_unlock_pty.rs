@@ -10,7 +10,7 @@
 //!   5. assert the success toast appears.
 //!
 //! Skipped unless `JNOCCIO_TUIWRIGHT_E2E=1` is set and the secret + binary
-//! exist locally, so CI without git-crypt access just no-ops.
+//! exist locally, so CI without the developer secret just no-ops.
 
 use std::path::PathBuf;
 use std::process::Command;

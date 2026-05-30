@@ -64,7 +64,8 @@ pub struct UnlockArgs {
     #[arg(long = "force-env-copy")]
     pub force_env_copy: bool,
 
-    /// Refresh tracked `jnoccio-fusion/` files from the index after installing the key.
+    /// Refresh tracked `jnoccio-fusion/` files from `HEAD` when the checkout
+    /// still contains stale blobs.
     ///
     /// This is useful when the checkout still contains ciphertext blobs, but it
     /// overwrites local changes under `jnoccio-fusion/`.

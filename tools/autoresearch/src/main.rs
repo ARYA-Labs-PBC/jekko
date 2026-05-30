@@ -323,12 +323,6 @@ fn prepare_worktree(
     }
     let status = Command::new("git")
         .current_dir(repo_root)
-        .arg("-c")
-        .arg("filter.git-crypt.clean=cat")
-        .arg("-c")
-        .arg("filter.git-crypt.smudge=cat")
-        .arg("-c")
-        .arg("filter.git-crypt.required=false")
         .arg("worktree")
         .arg("add")
         .arg("--detach")

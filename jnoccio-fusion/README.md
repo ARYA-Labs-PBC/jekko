@@ -55,4 +55,4 @@ Run `rtk ./scripts/smoke.sh` only when upstream keys are present.
 
 ## Safety
 
-Do not commit `.env.jnoccio`, `KEYS.md`, `state/`, `receipts/`, `target/`, or SQLite files. Failure receipts are local runtime artifacts and may include provider error bodies after secret redaction.
+Do not commit `.env.jnoccio`, `state/`, `receipts/`, `target/`, or SQLite files. Failure receipts are local runtime artifacts and may include provider error bodies after secret redaction.

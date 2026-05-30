@@ -18,7 +18,7 @@ pub(super) const ROOT_MANIFESTS: &[&str] = &[
     "turbo.json",
 ];
 
-pub(super) const HUSKY_FILES: &[&str] = &[".husky/check-encrypted-paths", ".husky/pre-push"];
+pub(super) const HUSKY_FILES: &[&str] = &[".husky/pre-push"];
 
 pub(super) const ROOT_SCRIPT_TS: &[&str] = &[
     // script/beta.ts deleted by Codex (xtask beta is now Rust-native).
