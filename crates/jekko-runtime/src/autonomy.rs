@@ -186,6 +186,44 @@ pub enum AutonomyError {
     Toml(#[from] toml::de::Error),
 }
 
+/// Returned by [`crate::Runtime::gate_action`] (and by per-surface gating
+/// callsites added under ARY-2305) when an action is on the
+/// `prohibited_autonomous_actions` list.
+///
+/// Mirrors the shape of QO `packages.safety.autonomy.AutonomousActionDenied`
+/// (PermissionError subclass carrying `action` + `reason`) so cross-process
+/// callers that already handle the QO error can map this 1:1 over the IPC /
+/// MCP boundary. We do NOT alias this into [`RuntimeError`] because the
+/// runtime error type intentionally lives one layer above the gate; a deny
+/// is a policy outcome, not an IO/store/permission failure, and should be
+/// surfaced as its own variant at each gated surface.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("autonomous action denied: {action} ({reason})")]
+pub struct AutonomyDeny {
+    /// Action label that was refused. Matches the string in
+    /// `[autonomy].prohibited_autonomous_actions`.
+    pub action: String,
+    /// Stable machine-readable reason code. Currently always
+    /// `"prohibited_autonomous_action"` to mirror the kernel-side string;
+    /// the field is kept so future reasons (e.g. `"requires_confirmation"`,
+    /// `"session_budget_exhausted"`) can flow through without a breaking
+    /// change.
+    pub reason: String,
+}
+
+impl AutonomyDeny {
+    /// Stable reason code emitted by the prohibited-action gate.
+    pub const REASON_PROHIBITED: &'static str = "prohibited_autonomous_action";
+
+    /// Construct an [`AutonomyDeny`] for a prohibited action.
+    pub fn prohibited(action: impl Into<String>) -> Self {
+        Self {
+            action: action.into(),
+            reason: Self::REASON_PROHIBITED.to_string(),
+        }
+    }
+}
+
 /// Clamp a `Some(0)`/`None` integer to a positive default. Anything
 /// `Some(n)` with `n > 0` passes through unchanged.
 fn clamp_positive(value: Option<u32>, default: u32) -> u32 {
@@ -316,5 +354,28 @@ prohibited_autonomous_actions = ["launch_training_run"]
         let bad = "[autonomy\nmax_actions_before_checkpoint = 5";
         let err = AutonomyConfig::from_toml_str(bad).unwrap_err();
         assert!(matches!(err, AutonomyError::Toml(_)));
+    }
+
+    #[test]
+    fn autonomy_deny_prohibited_carries_action_and_reason_code() {
+        let deny = AutonomyDeny::prohibited("launch_training_run");
+        assert_eq!(deny.action, "launch_training_run");
+        assert_eq!(deny.reason, AutonomyDeny::REASON_PROHIBITED);
+        // Display string is the cross-process audit form; keep stable.
+        assert_eq!(
+            deny.to_string(),
+            "autonomous action denied: launch_training_run \
+             (prohibited_autonomous_action)"
+        );
+    }
+
+    #[test]
+    fn autonomy_deny_reason_code_constant_is_stable() {
+        // Locked: this string is the wire-stable reason that mirrors the QO
+        // kernel-side label. Changing it is a cross-repo break.
+        assert_eq!(
+            AutonomyDeny::REASON_PROHIBITED,
+            "prohibited_autonomous_action"
+        );
     }
 }
