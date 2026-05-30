@@ -62,6 +62,35 @@ mod tests {
     }
 
     #[test]
+    fn screen_update_replaces_rather_than_appends() {
+        // PTY screen renders carry the whole current screen (the emulator
+        // already collapsed in-place redraws), so each `ScreenUpdate` must
+        // REPLACE the chip's captured output. If it appended, a progress bar
+        // would grow the buffer one frame per tick (the flood this fix kills).
+        let mut state = InFlight::new();
+        state.apply_tool_event(ToolEvent::Start {
+            id: "audit".into(),
+            name: "jankurai audit".into(),
+            input: None,
+        });
+
+        state.apply_tool_event(ToolEvent::ScreenUpdate {
+            id: "audit".into(),
+            text: "0/8 scoring repository".into(),
+        });
+        state.apply_tool_event(ToolEvent::ScreenUpdate {
+            id: "audit".into(),
+            text: "8/8 score=78".into(),
+        });
+
+        let tool = state.latest_tool().expect("tool still live");
+        assert_eq!(tool.output, "8/8 score=78", "screen must replace, not append");
+        assert!(!tool.output.contains("0/8"), "stale frame leaked into buffer");
+        assert_eq!(tool.last_chunk.as_deref(), Some("8/8 score=78"));
+        assert_eq!(tool.status, ToolChipStatus::Running);
+    }
+
+    #[test]
     fn multi_tool_turn_preserves_first_tool_output() {
         // T-SEMANTIC-TRANSCRIPT-A: two overlapping tools (A then B) must each
         // keep their own captured output so the first tool's stdout isn't

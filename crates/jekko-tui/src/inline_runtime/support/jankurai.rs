@@ -21,8 +21,14 @@ fn spawn_jankurai_turn(
     let label = "jankurai audit".to_string();
 
     let id = format!("jankurai-{}", std::process::id());
+    // Keep `/audit` (and `/jankurai`, which aliases here) a purely local, instant
+    // scan: skip jankurai's network update-check entirely. Without this the audit
+    // does a `git ls-remote` against GitHub on every run — latency at best, and a
+    // hang if git falls back to an interactive credential prompt on the tool PTY.
+    // (`GIT_TERMINAL_PROMPT=0` is also defaulted by pty_runner as a backstop.)
     let pty_cmd = crate::engine::pty_runner::PtyCommand::new(id.clone(), label, program)
         .with_args(args)
+        .with_env(vec![("JANKURAI_NO_UPDATE_CHECK".to_string(), "1".to_string())])
         .with_cancel(cancel);
     let (tool_tx, mut tool_rx) = tokio::sync::mpsc::channel::<crate::action::ToolEvent>(256);
     let (chat_tx, chat_rx) = tokio::sync::mpsc::channel::<ChatEvent>(256);

@@ -13,6 +13,49 @@ use ratatui::text::Span;
 const SCREEN_COLS: u16 = 200;
 const SCREEN_ROWS: u16 = 200;
 
+/// Persistent terminal emulator for a single PTY stream.
+///
+/// `parse_bytes` renders each chunk against a *fresh* `vt100` screen, so a
+/// progress bar that redraws one line in place (`\r` + `ESC[2K`, cursor moves)
+/// accumulates one transcript row per redraw — tens of thousands of rows for a
+/// long scan. `Terminal` keeps the screen state across `feed` calls, so those
+/// redraws overwrite in place and `render()` returns the *current* screen: the
+/// progress bar collapses to a single updating line, exactly as a real
+/// terminal shows it.
+///
+/// Output is plain text (styling is dropped); the live tool card renders plain
+/// rows. The emulator is sized to the PTY, so a tool whose retained output
+/// exceeds the screen height shows only the final screen here — full detail
+/// remains in whatever artifacts the tool writes (e.g. jankurai's score JSON).
+pub struct Terminal {
+    parser: vt100::Parser,
+}
+
+impl Terminal {
+    /// Create an emulator sized to the PTY (`rows` × `cols`) so cursor moves
+    /// and wrapping match what the child process intended to draw.
+    pub fn new(rows: u16, cols: u16) -> Self {
+        Self {
+            parser: vt100::Parser::new(rows.max(1), cols.max(1), 0),
+        }
+    }
+
+    /// Feed raw PTY bytes. OSC sanitization runs first (same guarantees as
+    /// `parse_bytes`): the child cannot drive the host clipboard/title or
+    /// toggle the alternate screen.
+    pub fn feed(&mut self, bytes: &[u8]) {
+        let sanitized = sanitize_osc(bytes);
+        self.parser.process(&sanitized);
+    }
+
+    /// Current screen as plain text, one `\n` per row, trailing blank rows
+    /// trimmed. This is the cumulative render — the live view *and* the final
+    /// captured output are both just `render()` at different points in time.
+    pub fn render(&self) -> String {
+        self.parser.screen().contents()
+    }
+}
+
 pub fn parse_bytes(bytes: &[u8]) -> Vec<Span<'static>> {
     let sanitized = sanitize_osc(bytes);
     let mut parser = vt100::Parser::new(SCREEN_ROWS, SCREEN_COLS, 0);
@@ -206,6 +249,34 @@ mod tests {
         let s = String::from_utf8_lossy(&sanitized);
         assert!(!s.contains("evil"));
         assert!(s.contains("ok"));
+    }
+
+    #[test]
+    fn terminal_collapses_carriage_return_progress_bar() {
+        // jankurai-style: one line redrawn in place via `\r` + ESC[2K. A fresh
+        // parse per chunk would yield three rows; the persistent emulator
+        // collapses them to the latest frame on a single line.
+        let mut term = Terminal::new(40, 120);
+        term.feed(b"[00:00:00] ---  0/8 scoring\r\x1b[2K");
+        term.feed(b"[00:00:01] ==-  4/8 scoring\r\x1b[2K");
+        term.feed(b"[00:00:02] ===  8/8 done");
+        let rendered = term.render();
+        assert!(rendered.contains("8/8 done"), "render: {rendered:?}");
+        assert!(!rendered.contains("0/8"), "stale frame leaked: {rendered:?}");
+        assert_eq!(rendered.lines().count(), 1, "expected one line: {rendered:?}");
+    }
+
+    #[test]
+    fn terminal_keeps_newline_committed_lines() {
+        // Real `\n`-terminated output still accumulates as separate rows, so
+        // normal command output is not lost.
+        let mut term = Terminal::new(40, 120);
+        term.feed(b"line one\r\n");
+        term.feed(b"line two\r\n");
+        term.feed(b"[00:00:00] working\r\x1b[2K[00:00:01] working");
+        let rendered = term.render();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines, vec!["line one", "line two", "[00:00:01] working"]);
     }
 
     #[test]

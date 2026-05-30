@@ -165,6 +165,16 @@ pub enum ToolEvent {
         id: String,
         chunk: String,
     },
+    /// Full current terminal render for a PTY-backed tool, emitted by
+    /// `engine::pty_runner`. Unlike `StdoutChunk`/`StderrChunk` (which the chip
+    /// *appends*), this carries the entire emulated screen and *replaces* the
+    /// chip's captured output. It is how in-place progress bars (`\r` + clear
+    /// line, cursor moves) collapse onto a single updating line instead of
+    /// flooding the transcript with one row per redraw frame.
+    ScreenUpdate {
+        id: String,
+        text: String,
+    },
     Complete {
         id: String,
     },

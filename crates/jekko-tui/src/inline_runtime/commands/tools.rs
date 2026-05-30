@@ -81,6 +81,20 @@ impl InFlight {
                 }
                 None
             }
+            // PTY screen render: the emulator already collapsed in-place
+            // redraws, so `text` is the whole current screen — replace the
+            // captured output rather than appending (a progress bar must not
+            // grow the buffer one row per frame). `stdout` mirrors it so the
+            // completed card + pager show the final screen.
+            ToolEvent::ScreenUpdate { id, text } => {
+                if let Some(tool) = self.active_tools.get_mut(&id) {
+                    tool.status = ToolChipStatus::Running;
+                    tool.last_chunk = Some(text.clone());
+                    tool.output = text.clone();
+                    tool.stdout = text;
+                }
+                None
+            }
             ToolEvent::Complete { id } => self.active_tools.shift_remove(&id).map(|mut tool| {
                 tool.status = ToolChipStatus::Success;
                 tool

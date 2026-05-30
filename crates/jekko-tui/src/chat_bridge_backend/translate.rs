@@ -79,6 +79,7 @@ fn translate_tool_event(
             vec![ChatEvent::Tool(event)]
         }
         ToolEvent::StderrChunk { .. } => vec![ChatEvent::Tool(event)],
+        ToolEvent::ScreenUpdate { .. } => vec![ChatEvent::Tool(event)],
         ToolEvent::Complete { id } => {
             #[allow(clippy::manual_unwrap_or_default)]
             let buf = match tool_stdout.remove(id) {
