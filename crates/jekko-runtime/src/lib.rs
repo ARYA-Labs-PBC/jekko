@@ -28,6 +28,7 @@
 pub mod account;
 pub mod agent;
 pub mod auth;
+pub mod autonomy;
 pub mod bus;
 pub mod compaction;
 pub mod daemon;
@@ -57,6 +58,7 @@ pub mod workspace;
 pub use agent::{
     AgentExecutor, AgentTurnRequest, AgentTurnResult, ProviderAgentExecutor, RunRequest, RunResult,
 };
+pub use autonomy::{AutonomyConfig, AutonomyError};
 pub use bus::{Bus, BusEvent, EventEnvelope};
 pub use error::{RuntimeError, RuntimeResult};
 pub use permission::{PermissionDecision, PermissionRequest, PermissionService};
@@ -86,6 +88,13 @@ pub struct Runtime {
     pub status: Arc<StatusService>,
     /// Agent executor used for one-shot runs.
     pub agent_executor: Arc<dyn AgentExecutor>,
+    /// Autonomy boundaries loaded from `agent/boundaries.toml` at
+    /// runtime init. Falls back to safe defaults if the file is missing
+    /// or malformed (see [`AutonomyConfig::load_default`]). Wired here
+    /// per ARY-2303 as the one representative load site; future change
+    /// efforts will plumb [`AutonomyConfig::is_prohibited`] into each
+    /// agent-initiated decision surface.
+    pub autonomy: Arc<AutonomyConfig>,
 }
 
 impl Runtime {
@@ -100,6 +109,7 @@ impl Runtime {
             permissions.clone(),
             sessions.clone(),
         ));
+        let autonomy = Arc::new(AutonomyConfig::load_default());
         Self {
             bus,
             permissions,
@@ -107,6 +117,7 @@ impl Runtime {
             daemons,
             status,
             agent_executor,
+            autonomy,
         }
     }
 
@@ -117,6 +128,7 @@ impl Runtime {
         let status = Arc::new(StatusService::new(bus.clone()));
         let sessions = Arc::new(SessionService::with_bus(bus.clone()));
         let daemons = daemon::DaemonRegistry::with_bus(bus.clone());
+        let autonomy = Arc::new(AutonomyConfig::load_default());
         Self {
             bus,
             permissions,
@@ -124,6 +136,7 @@ impl Runtime {
             daemons,
             status,
             agent_executor,
+            autonomy,
         }
     }
 }
@@ -143,6 +156,7 @@ impl std::fmt::Debug for Runtime {
             .field("daemons", &self.daemons)
             .field("status", &self.status)
             .field("agent_executor", &"<dyn AgentExecutor>")
+            .field("autonomy", &self.autonomy)
             .finish()
     }
 }
