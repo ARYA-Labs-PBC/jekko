@@ -72,3 +72,33 @@ rule = "HLT-034-CI-BAD-BEHAVIOR"
 evidence = "ci.timeout.missing"
 reason = "Every job in the translated GitLab CI tree sets `timeout:` explicitly — e.g. test:unit 60m (.gitlab/ci/test.yml), parity:rust-parity-gates 45m, jankurai:audit 30m, scheduled:close-* 15m. The detector scans only .gitlab-ci.yml (the include entry point) and misses per-job timeouts under .gitlab/ci/*.yml. Verified by `grep -RE '^[[:space:]]*timeout:' .gitlab/ci/` — matches in 11/12 files (the entry-point .gitlab-ci.yml correctly has no jobs to time)."
 expires = "2099-01-01"
+
+[[allow]]
+rule = "HLT-029-RUST-BAD-BEHAVIOR"
+evidence = "detector=static mut"
+reason = "Detector false positive. crates/jekko-runtime/src/agent/provider.rs uses `static BALANCER: OnceLock<Mutex<Option<KeyBalancer>>>` (provider.rs:146) — the canonical synchronized-global idiom — and contains NO `static mut`. The HLT-029 `static mut` detector pattern-matches the `static`+`Mut`(ex) token sequence without parsing the type. Verified: `grep -n 'static mut' crates/jekko-runtime/` returns nothing. Re-review when jankurai's detector inspects the binding type."
+expires = "2027-05-30"
+
+[[allow]]
+rule = "HLT-029-RUST-BAD-BEHAVIOR"
+evidence = "detector=unsafe {"
+reason = "Detector false positive. crates/memory-benchmark/src/chase_report.rs is a benchmark scorer that contains `\" unsafe {\"` and `\" unsafe \"` as STRING-LITERAL detection patterns (chase_report.rs:1430-1431) used to score OTHER repos' bad behavior; the `unsafe_tool_exec` field name is also flagged. There is no real `unsafe {}` block in the file. The detector matches the literal token inside a pattern string. Re-review when jankurai excludes pattern-data literals."
+expires = "2027-05-30"
+
+[[allow]]
+rule = "HLT-001-DEAD-MARKER"
+evidence = "crates/memory-benchmark/"
+reason = "Detector false positive scoped to the memory-benchmark harness. This crate's fixtures (src/fixture/data.rs) carry synthetic memory-item content that legitimately contains the words deprecated/legacy/stale/old as test data, and its scorer (src/chase_report.rs, src/scorer.rs, src/adapters/reference_context_pack.rs) holds `\"unimplemented!(\"`-style STRING-LITERAL detection patterns. None are dead/placeholder markers in runtime control flow. `agent/audit-policy.toml` already lists src/fixture/ and tests/ in excluded_paths, but the HLT-001 dimension does not honor that exclude. Re-review when the vibe scan respects excluded_paths or when jankurai distinguishes fixture/pattern data."
+expires = "2027-05-30"
+
+[[allow]]
+rule = "HLT-001-DEAD-MARKER"
+evidence = "daemon.rs:231 serde_json::to_value(record).unwrap_or_else"
+reason = "Rust idiom, same class as the already-waived `.ok_or_else(|| anyhow!` and `.unwrap_or_default()` entries above. `serde_json::to_value(record).unwrap_or_else(|_| serde_json::json!({}))` defaults a record→Value serialization (which cannot realistically fail for an owned record) to an empty object for a telemetry payload. It is an explicit, bounded default — not fallback soup. The HLT-001 detector matches the `.unwrap_or_else` token without inspecting the closure. Other daemon.rs HLT-001 evidence still fails the gate."
+expires = "2027-05-30"
+
+[[allow]]
+rule = "HLT-002-GENERATED-MUTATION"
+evidence = "agent/sandbox-lanes.toml"
+reason = "Contract/detector mismatch. `agent/generated-zones.toml` correctly declares `agent/sandbox-lanes.toml` as a generated, read-only zone (compiled from agent/zyal/sandbox-lanes.zyal by zyalc). The HLT-002 detector additionally classifies any agent/*.toml as protected control-plane source and flags the overlap as a mutation risk — but the zone declaration IS the protection (read_only=true + source contract + regenerate command). The two contracts are mutually consistent; the detector lacks a 'generated-and-in-agent/' state. Re-review when jankurai recognizes generated outputs under agent/."
+expires = "2027-05-30"

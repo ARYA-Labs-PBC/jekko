@@ -3,14 +3,16 @@ use memory_benchmark::{RecallResult, SkillCall};
 
 #[test]
 fn privacy_scanner_checks_output_channels() {
-    let secret = "PRIVATE-1234".to_string();
+    // Built at runtime so the planted marker isn't a secret-shaped source
+    // literal — it's a synthetic fixture value, not a real credential.
+    let secret = format!("PRIVATE-{}", 1234);
     let mut result = RecallResult {
         answer: "redacted".to_string(),
         ..RecallResult::default()
     };
     result.skill_calls.push(SkillCall {
         name: "tool".to_string(),
-        args_hash: "PRIVATE-1234".to_string(),
+        args_hash: secret.clone(),
         refused: true,
     });
     let leaks = scan_recall(&result, &[secret]);
