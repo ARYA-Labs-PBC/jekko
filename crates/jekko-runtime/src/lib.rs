@@ -12,6 +12,9 @@
 //! - [`shell`] / [`pty`] — process spawning helpers.
 //! - [`session`] / [`message`] / [`prompt`] / [`processor`] / [`status`]
 //!   / [`compaction`] — session lifecycle.
+//! - [`session_budget`] — typed Rust client (ARY-2306) for the QO
+//!   policy-sidecar's `session_ping` / `session_checkpoint` verbs over
+//!   AARA MCP.
 //! - [`agent`] — one-shot runtime entrypoint and workflow request/response
 //!   boundary.
 //! - [`daemon`] — daemon orchestration scaffolding.
@@ -47,6 +50,7 @@ pub mod pty;
 pub mod question;
 pub mod ripgrep;
 pub mod session;
+pub mod session_budget;
 pub mod shell;
 pub mod skill;
 pub mod snapshot;
@@ -58,7 +62,7 @@ pub mod workspace;
 pub use agent::{
     AgentExecutor, AgentTurnRequest, AgentTurnResult, ProviderAgentExecutor, RunRequest, RunResult,
 };
-pub use autonomy::{AutonomyConfig, AutonomyError};
+pub use autonomy::{AutonomyConfig, AutonomyDeny, AutonomyError};
 pub use bus::{Bus, BusEvent, EventEnvelope};
 pub use error::{RuntimeError, RuntimeResult};
 pub use permission::{PermissionDecision, PermissionRequest, PermissionService};
@@ -139,6 +143,46 @@ impl Runtime {
             autonomy,
         }
     }
+
+    /// Reusable per-surface autonomy gate (ARY-2305).
+    ///
+    /// Returns `Ok(())` when `action` is NOT on the
+    /// `prohibited_autonomous_actions` list and `Err(AutonomyDeny)` when it
+    /// is. Every new agent-initiated decision surface in this crate (e.g.
+    /// "launch a training run", "create or resize a VM", "push to HF or
+    /// GCS") MUST call this gate at the top of the function and propagate
+    /// the deny as a typed error.
+    ///
+    /// ## Why this is a Runtime method and not a free function
+    ///
+    /// Future surfaces will likely need to thread the *full* autonomy
+    /// budget — checkpoint timing, actions remaining — alongside the
+    /// prohibition check. Centralising the gate here lets us add those
+    /// concerns without rewriting every callsite when ARY-2306 wires the
+    /// session-budget MCP client and ARY-2308 exposes the QO tool surface.
+    ///
+    /// ## Why no surfaces are gated by per-surface wiring yet
+    ///
+    /// As of ARY-2305 the Jekko runtime does not host any operation that
+    /// maps to the 7 `prohibited_autonomous_actions` labels in
+    /// `agent/boundaries.toml` (`launch_training_run`,
+    /// `synthesize_atoms`, `push_to_hf_or_gcs`, `create_or_resize_vm`,
+    /// `run_gp_search`, `modify_atoms_bundled`,
+    /// `run_multi_hour_experiment`). The tool surfaces this crate ships
+    /// (bash/read/write/edit/grep/glob/webfetch/websearch) live one layer
+    /// below the prohibited-action labels, which describe *agent
+    /// intentions* not *file ops*. Per-surface wiring lands as those
+    /// intention-level surfaces are built. Until then this helper is the
+    /// reference call-shape any future surface should mirror, plus the
+    /// single integration point QO sidecar callers (ARY-2306) hit when
+    /// they want to refuse before crossing the IPC boundary.
+    pub fn gate_action(&self, action: &str) -> Result<(), AutonomyDeny> {
+        if self.autonomy.is_prohibited(action) {
+            Err(AutonomyDeny::prohibited(action))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Default for Runtime {
@@ -158,5 +202,83 @@ impl std::fmt::Debug for Runtime {
             .field("agent_executor", &"<dyn AgentExecutor>")
             .field("autonomy", &self.autonomy)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod gate_action_tests {
+    use super::*;
+    use crate::autonomy::AutonomyConfig;
+
+    /// Build a Runtime with a hand-crafted [`AutonomyConfig`] so the test
+    /// does not depend on the on-disk `agent/boundaries.toml`.
+    fn runtime_with(config: AutonomyConfig) -> Runtime {
+        let mut rt = Runtime::new();
+        rt.autonomy = Arc::new(config);
+        rt
+    }
+
+    #[test]
+    fn gate_action_allows_when_action_not_prohibited() {
+        let cfg = AutonomyConfig {
+            prohibited_autonomous_actions: vec!["launch_training_run".into()],
+            ..AutonomyConfig::defaults()
+        };
+        let rt = runtime_with(cfg);
+        // A label that isn't on the list is allowed.
+        assert!(rt.gate_action("read_file").is_ok());
+        assert!(rt.gate_action("").is_ok());
+    }
+
+    #[test]
+    fn gate_action_denies_when_action_prohibited() {
+        let cfg = AutonomyConfig {
+            prohibited_autonomous_actions: vec![
+                "launch_training_run".into(),
+                "push_to_hf_or_gcs".into(),
+            ],
+            ..AutonomyConfig::defaults()
+        };
+        let rt = runtime_with(cfg);
+        let err = rt.gate_action("launch_training_run").unwrap_err();
+        assert_eq!(err.action, "launch_training_run");
+        assert_eq!(err.reason, AutonomyDeny::REASON_PROHIBITED);
+
+        let err2 = rt.gate_action("push_to_hf_or_gcs").unwrap_err();
+        assert_eq!(err2.action, "push_to_hf_or_gcs");
+    }
+
+    #[test]
+    fn gate_action_is_case_sensitive() {
+        // Mirrors AutonomyConfig::is_prohibited semantics — labels match
+        // the TOML key exactly, no normalisation.
+        let cfg = AutonomyConfig {
+            prohibited_autonomous_actions: vec!["launch_training_run".into()],
+            ..AutonomyConfig::defaults()
+        };
+        let rt = runtime_with(cfg);
+        assert!(rt.gate_action("LAUNCH_TRAINING_RUN").is_ok());
+        assert!(rt.gate_action("launch_training_run").is_err());
+    }
+
+    #[test]
+    fn gate_action_with_empty_prohibition_list_always_allows() {
+        let rt = runtime_with(AutonomyConfig::defaults());
+        // Every one of the 7 canonical labels passes — there's no policy
+        // to enforce when the list is empty.
+        for action in [
+            "launch_training_run",
+            "synthesize_atoms",
+            "push_to_hf_or_gcs",
+            "create_or_resize_vm",
+            "run_gp_search",
+            "modify_atoms_bundled",
+            "run_multi_hour_experiment",
+        ] {
+            assert!(
+                rt.gate_action(action).is_ok(),
+                "action {action} should be allowed when no prohibitions are configured"
+            );
+        }
     }
 }
