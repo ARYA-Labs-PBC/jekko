@@ -209,6 +209,37 @@ impl StdioClient {
         Ok(parsed)
     }
 
+    /// Send `tools/call` with the given tool name + arguments and return the
+    /// parsed `result` object. ARY-2358: this is the declarative-phase-body
+    /// primitive — a ZYAL phase carrying an `mcp_call` spec is executed by
+    /// `jekko port-run --declarative` as a single `tools/call` against the
+    /// attached server, with NO reasoning provider in the loop. The caller
+    /// (`port_run::walk`) supplies the server config; AARA does the actual
+    /// compute behind its own credentials per ADR-020 §3.
+    pub async fn call_tool(
+        &mut self,
+        name: &str,
+        arguments: serde_json::Value,
+        timeout_secs: u64,
+    ) -> McpResult<serde_json::Value> {
+        let id = self.next_request_id();
+        let params = serde_json::json!({ "name": name, "arguments": arguments });
+        let req = request(id, "tools/call", params);
+        let resp = self.exchange(&req, timeout_secs).await?;
+        match resp.result {
+            Some(v) => Ok(v),
+            None => match resp.error {
+                Some(e) => Err(McpError::ServerError {
+                    code: e.code,
+                    message: e.message,
+                }),
+                None => Err(McpError::ProtocolViolation(
+                    "tools/call response has neither result nor error".into(),
+                )),
+            },
+        }
+    }
+
     /// Low-level: write a request line, read a response line, decode it.
     /// Surfaces early-exit with stderr_tail.
     async fn exchange(

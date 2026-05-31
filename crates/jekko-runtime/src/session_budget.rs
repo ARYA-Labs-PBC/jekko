@@ -291,7 +291,9 @@ mod tests {
 
     impl McpTransport for MockMcpTransport {
         fn invoke(&self, tool: &str, args: Value) -> Result<Value, McpError> {
-            self.calls.borrow_mut().push((tool.to_string(), args.clone()));
+            self.calls
+                .borrow_mut()
+                .push((tool.to_string(), args.clone()));
             (self.responder)(tool, &args)
         }
     }
@@ -397,9 +399,8 @@ mod tests {
         // Unlike ping, checkpoint MUST propagate transport errors — a
         // synthetic "ok" would silently let a budget-exhausted agent keep
         // going. The caller has to handle the error explicitly.
-        let transport = MockMcpTransport::new(|_tool, _args| {
-            Err(McpError::Unreachable("no socket".into()))
-        });
+        let transport =
+            MockMcpTransport::new(|_tool, _args| Err(McpError::Unreachable("no socket".into())));
         let client = SessionBudgetClient::new(transport);
         let err = client
             .session_checkpoint(SessionCheckpointRequest {

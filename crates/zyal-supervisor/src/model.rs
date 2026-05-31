@@ -61,6 +61,34 @@ pub struct Phase {
     /// Exit gates this phase must satisfy.
     #[serde(default)]
     pub gates: Vec<Gate>,
+    /// ARY-2358: optional declarative MCP call. When present AND
+    /// `jekko port-run --declarative` is set, this phase is executed as a
+    /// single `tools/call` against the named attached MCP server rather than
+    /// via the reasoning-agent (`--live`) or scaffold (default) paths. This
+    /// keeps Jekko provider-keyless (ADR-020 §3): the runner walks the DAG
+    /// deterministically and AARA does the compute behind the mcp_call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_call: Option<McpCallSpec>,
+}
+
+/// ARY-2358: a declared MCP `tools/call` carried by a [`Phase`].
+///
+/// The declarative ZYAL phase-body. `server` names an MCP server already
+/// attached via `jekko mcp attach` (looked up in `~/.jekko/mcp.toml`);
+/// `tool` is the tool name; `arguments` is passed verbatim as the
+/// `tools/call` arguments object. No reasoning model is involved — the
+/// runner spawns the server, runs `initialize`, then a single `tools/call`,
+/// and records the result as the phase summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct McpCallSpec {
+    /// Attached MCP server name (resolved from the active `mcp.toml`).
+    pub server: String,
+    /// Tool name to invoke via `tools/call`.
+    pub tool: String,
+    /// Arguments object passed verbatim to the tool.
+    #[serde(default)]
+    pub arguments: serde_json::Value,
 }
 
 /// Persisted phase status.

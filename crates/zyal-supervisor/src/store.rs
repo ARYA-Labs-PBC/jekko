@@ -139,6 +139,7 @@ mod tests {
                     kind: GateKind::TestsGreen,
                     required: true,
                 }],
+                mcp_call: None,
             })
             .collect();
         SuperWorkflow {

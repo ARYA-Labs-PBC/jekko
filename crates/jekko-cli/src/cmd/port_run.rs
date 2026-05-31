@@ -101,6 +101,25 @@ pub struct PortRunArgs {
     #[arg(long)]
     pub live: bool,
 
+    /// ARY-2358: declarative mode. Each phase carrying an `mcp_call` spec is
+    /// executed as a single `tools/call` against the named attached MCP
+    /// server (resolved from `~/.jekko/mcp.toml`) — NO reasoning provider is
+    /// involved, so this honors ADR-020 §3 (Jekko holds no provider keys).
+    /// Phases WITHOUT an `mcp_call` are treated as a hard error in this mode
+    /// (a declarative manifest must declare every phase's call). Mutually
+    /// exclusive with `--live`.
+    #[arg(long)]
+    pub declarative: bool,
+
+    /// Per-phase `tools/call` timeout in seconds for `--declarative` mode.
+    /// Defaults to 120 seconds.
+    #[arg(
+        long = "per-call-timeout-secs",
+        value_name = "N",
+        default_value_t = 120
+    )]
+    pub per_call_timeout_secs: u64,
+
     /// Per-phase subprocess timeout in seconds for `--live` mode. The
     /// subprocess is killed and the phase is marked `Failed` once the
     /// timeout fires. Defaults to 300 seconds.
@@ -202,6 +221,9 @@ fn validate_arg_combination(args: &PortRunArgs) -> Result<()> {
     if args.dry_run && (args.resume.is_some() || args.status.is_some() || args.summarize.is_some())
     {
         bail!("--dry-run is only valid with --super");
+    }
+    if args.live && args.declarative {
+        bail!("--live and --declarative are mutually exclusive: --live drives a reasoning agent, --declarative executes declared mcp_calls with no provider");
     }
     Ok(())
 }

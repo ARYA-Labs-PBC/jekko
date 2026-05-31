@@ -65,10 +65,8 @@ impl AutonomyConfig {
         Self {
             prohibited_autonomous_actions: Vec::new(),
             require_explicit_confirmation_for: Vec::new(),
-            session_checkpoint_interval_minutes:
-                DEFAULT_SESSION_CHECKPOINT_INTERVAL_MINUTES,
-            max_actions_before_checkpoint:
-                DEFAULT_MAX_ACTIONS_BEFORE_CHECKPOINT,
+            session_checkpoint_interval_minutes: DEFAULT_SESSION_CHECKPOINT_INTERVAL_MINUTES,
+            max_actions_before_checkpoint: DEFAULT_MAX_ACTIONS_BEFORE_CHECKPOINT,
         }
     }
 
@@ -130,8 +128,7 @@ impl AutonomyConfig {
         );
         Ok(Self {
             prohibited_autonomous_actions: raw.prohibited_autonomous_actions,
-            require_explicit_confirmation_for: raw
-                .require_explicit_confirmation_for,
+            require_explicit_confirmation_for: raw.require_explicit_confirmation_for,
             session_checkpoint_interval_minutes: interval,
             max_actions_before_checkpoint: max_actions,
         })

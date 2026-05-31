@@ -185,6 +185,19 @@ fn adapt_zyalc_emission(value: &JsonValue, source: &Path) -> Result<SuperWorkflo
                 .collect(),
             None => Vec::new(),
         };
+        // ARY-2358: optional declarative mcp_call block. Deserialized via
+        // serde so the JSON shape stays in lockstep with the model. A
+        // malformed block is a hard error (no silent drop) so a typo in a
+        // declarative manifest fails loud at compile/load time.
+        let phase_mcp_call: Option<zyal_supervisor::McpCallSpec> = match raw.get("mcp_call") {
+            Some(node) => Some(serde_json::from_value(node.clone()).map_err(|e| {
+                anyhow!(
+                    "phase `{phase_id}` at {} has a malformed mcp_call block: {e}",
+                    source.display()
+                )
+            })?),
+            None => None,
+        };
         phases.push(Phase {
             id: phase_id,
             name: phase_name,
@@ -193,6 +206,7 @@ fn adapt_zyalc_emission(value: &JsonValue, source: &Path) -> Result<SuperWorkflo
             write_scope: Default::default(),
             signoff: Default::default(),
             gates: Vec::new(),
+            mcp_call: phase_mcp_call,
         });
     }
     Ok(SuperWorkflow {

@@ -12,6 +12,8 @@ use zyal_supervisor::{execution_layers, Phase, PhaseStatus, SuperWorkflow, Super
 
 use super::PortRunArgs;
 
+use jekko_runtime::mcp::{default_mcp_config_path, load_or_empty, StdioClient};
+
 /// summary `"stopped at max_stages"`. `args.time_budget_hours` enforces a
 /// wall-clock ceiling: when the elapsed time exceeds the budget the
 /// remaining phases are recorded `Blocked` with the summary
@@ -89,7 +91,17 @@ pub(super) fn walk_waves(
                 .record_phase_status(run_id, phase_id, PhaseStatus::Running, "")
                 .with_context(|| format!("mark phase `{phase_id}` running"))?;
 
-            let outcome = if args.live {
+            let outcome = if args.declarative {
+                // ARY-2358: declarative path — execute the phase's declared
+                // `mcp_call` as a single `tools/call` against the attached
+                // AARA MCP server. No reasoning provider; AARA does the
+                // compute. A phase without an mcp_call is a hard error here.
+                let phase = match phase_lookup.get(phase_id.as_str()) {
+                    Some(p) => p,
+                    None => bail!("phase `{phase_id}` not present in manifest lookup"),
+                };
+                invoke_declarative_phase(phase, args)
+            } else if args.live {
                 let phase = match phase_lookup.get(phase_id.as_str()) {
                     Some(p) => p,
                     None => bail!("phase `{phase_id}` not present in manifest lookup"),
@@ -153,7 +165,13 @@ pub(super) fn walk_waves(
             println!("run `{run_id}` halted after phase `{id}` failed; --resume to retry")
         }
         None => {
-            let mode = if args.live { "live" } else { "scaffold" };
+            let mode = if args.declarative {
+                "declarative"
+            } else if args.live {
+                "live"
+            } else {
+                "scaffold"
+            };
             println!("run `{run_id}` complete ({mode})");
         }
     }
@@ -283,5 +301,64 @@ fn invoke_live_phase(phase: &Phase, args: &PortRunArgs) -> Result<String> {
         }
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(stdout)
+    })
+}
+
+/// ARY-2358: execute a phase's declared `mcp_call` as a single `tools/call`
+/// against the named attached MCP server. No reasoning provider — the runner
+/// resolves the server from `~/.jekko/mcp.toml`, spawns it, runs
+/// `initialize`, then one `tools/call`, and returns the JSON result as the
+/// phase summary. This is the ADR-020 §3-compliant path: Jekko walks the DAG
+/// deterministically; AARA performs the compute behind its own credentials.
+fn invoke_declarative_phase(phase: &Phase, args: &PortRunArgs) -> Result<String> {
+    let spec = phase.mcp_call.as_ref().ok_or_else(|| {
+        anyhow!(
+            "phase `{}` has no mcp_call but --declarative requires every phase \
+             to declare one",
+            phase.id
+        )
+    })?;
+
+    let cfg_path = default_mcp_config_path()
+        .ok_or_else(|| anyhow!("cannot resolve MCP config path ($HOME/.jekko/mcp.toml)"))?;
+    let config = load_or_empty(&cfg_path)
+        .with_context(|| format!("load MCP config {}", cfg_path.display()))?;
+    let server_cfg = config.servers.get(&spec.server).ok_or_else(|| {
+        anyhow!(
+            "phase `{}` mcp_call names server `{}` which is not attached \
+             (run `jekko mcp attach {} <target>` first)",
+            phase.id,
+            spec.server,
+            spec.server
+        )
+    })?;
+
+    let timeout = args.per_call_timeout_secs;
+    let server_name = spec.server.clone();
+    let tool = spec.tool.clone();
+    let arguments = spec.arguments.clone();
+    let server_cfg = server_cfg.clone();
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for declarative phase invocation")?;
+
+    rt.block_on(async move {
+        let mut client = StdioClient::spawn(&server_name, &server_cfg)
+            .await
+            .with_context(|| format!("spawn attached MCP server `{server_name}`"))?;
+        client
+            .initialize(timeout)
+            .await
+            .with_context(|| format!("initialize MCP server `{server_name}`"))?;
+        let result = client
+            .call_tool(&tool, arguments, timeout)
+            .await
+            .with_context(|| format!("tools/call `{tool}` on `{server_name}`"));
+        // Best-effort shutdown regardless of the call outcome.
+        let _ = client.shutdown().await;
+        let result = result?;
+        serde_json::to_string(&result).context("serialize tools/call result for phase summary")
     })
 }
