@@ -89,7 +89,7 @@ log "fetched origin/main $(git rev-parse --short origin/main) before push"
 require_origin_main_ancestor
 
 log "pushing HEAD $(git rev-parse --short HEAD) to main"
-git push origin HEAD:main
+JANKURAI_SKIP_PREPUSH=1 git push origin HEAD:main
 git fetch origin main
 
 head_sha="$(git rev-parse HEAD)"
