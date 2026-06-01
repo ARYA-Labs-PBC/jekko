@@ -104,8 +104,16 @@ pub struct ModelKeyStatus {
 
 /// The full catalog of model-key providers in priority order.
 ///
-/// Sourced 1:1 from `model-keys.catalog.ts`.
+/// Sourced from `model-keys.catalog.ts` plus local-only test providers.
 pub const CATALOG: &[CatalogEntry] = &[
+    CatalogEntry {
+        provider_id: "dummy_agent_llm",
+        env_names: &[],
+        signup_url: None,
+        recommended_model_id: Some("default"),
+        priority: 0,
+        companion_env_names: None,
+    },
     CatalogEntry {
         provider_id: "openai",
         env_names: &["OPENAI_API_KEY"],
@@ -436,6 +444,7 @@ mod tests {
         assert!(CATALOG.iter().any(|e| e.provider_id == "openai"));
         assert!(CATALOG.iter().any(|e| e.provider_id == "anthropic"));
         assert!(CATALOG.iter().any(|e| e.provider_id == "jnoccio"));
+        assert!(CATALOG.iter().any(|e| e.provider_id == "dummy_agent_llm"));
         let cf = catalog_entry("cloudflare").unwrap();
         assert_eq!(cf.companion_env_names.unwrap().len(), 2);
     }

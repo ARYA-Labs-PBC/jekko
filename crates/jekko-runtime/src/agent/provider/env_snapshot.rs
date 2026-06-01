@@ -122,6 +122,13 @@ pub(in crate::agent) fn supported_runtime_snapshot(
 fn is_supported_runtime_provider(provider_id: &str) -> bool {
     matches!(
         provider_id,
-        "anthropic" | "jekko" | "openai" | "openrouter" | "jnoccio" | "litellm" | "llmgateway"
+        "anthropic"
+            | "dummy_agent_llm"
+            | "jekko"
+            | "openai"
+            | "openrouter"
+            | "jnoccio"
+            | "litellm"
+            | "llmgateway"
     )
 }

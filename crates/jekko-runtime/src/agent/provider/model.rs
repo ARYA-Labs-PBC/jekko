@@ -9,8 +9,8 @@ use jekko_core::provider::{
     ProviderInterleaved, ProviderLimit, ProviderModalities,
 };
 use jekko_provider::providers::{
-    AnthropicAdapter, JNoccioAdapter, JekkoAdapter, LiteLlmAdapter, OpenAiAdapter,
-    OpenRouterAdapter,
+    AnthropicAdapter, DummyAgentLlmAdapter, JNoccioAdapter, JekkoAdapter, LiteLlmAdapter,
+    OpenAiAdapter, OpenRouterAdapter,
 };
 
 use crate::error::{RuntimeError, RuntimeResult};
@@ -32,6 +32,7 @@ pub(in crate::agent) fn select_base_url(provider_id: &str) -> Option<String> {
 pub(in crate::agent) fn build_model(provider_id: &str, model_id: &str) -> RuntimeResult<Model> {
     let (api_npm, api_url) = match provider_id {
         "anthropic" => ("@ai-sdk/anthropic", "https://api.anthropic.com"),
+        "dummy_agent_llm" => ("dummy_agent_llm", "local://dummy_agent_llm"),
         "openai" => ("@ai-sdk/openai", "https://api.openai.com"),
         "openrouter" => ("@openrouter/ai-sdk-provider", "https://openrouter.ai/api"),
         "jekko" => ("@ai-sdk/openai-compatible", "https://api.jekko.ai"),
@@ -92,6 +93,7 @@ pub(in crate::agent) fn provider_adapter(
 ) -> RuntimeResult<Arc<dyn jekko_provider::ProviderAdapter>> {
     match provider_id {
         "anthropic" => Ok(Arc::new(AnthropicAdapter::new())),
+        "dummy_agent_llm" => Ok(Arc::new(DummyAgentLlmAdapter::new())),
         "jekko" => Ok(Arc::new(JekkoAdapter::new())),
         "openai" => Ok(Arc::new(OpenAiAdapter::new())),
         "openrouter" => Ok(Arc::new(OpenRouterAdapter::new())),
@@ -100,5 +102,29 @@ pub(in crate::agent) fn provider_adapter(
         other => Err(RuntimeError::invalid(format!(
             "unsupported provider `{other}`"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dummy_agent_llm_model_is_local_zero_cost() {
+        let model = build_model("dummy_agent_llm", "default").unwrap();
+        assert_eq!(model.provider_id.as_str(), "dummy_agent_llm");
+        assert_eq!(model.api.id, "default");
+        assert_eq!(model.api.url, "local://dummy_agent_llm");
+        assert_eq!(model.cost.input, 0.0);
+        assert_eq!(model.cost.output, 0.0);
+        assert!(model.capabilities.toolcall);
+    }
+
+    #[test]
+    fn dummy_agent_llm_adapter_resolves_without_credentials() {
+        let adapter = provider_adapter("dummy_agent_llm").unwrap();
+        let capabilities = adapter.capabilities();
+        assert!(capabilities.streaming);
+        assert!(capabilities.tool_streaming);
     }
 }
