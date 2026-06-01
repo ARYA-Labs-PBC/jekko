@@ -1,35 +1,37 @@
 # `dummy_agent_llm`
 
-`dummy_agent_llm` is Jekko's deterministic local LLM provider for agent and TUI workflow tests. It uses the normal Rust provider adapter interface, but it never opens a network connection, sleeps, reads an API key, or spends tokens.
+`dummy_agent_llm` is a local deterministic provider for agent workflow tests. It implements the normal provider streaming interface, but it never performs network I/O, never reads API keys, and reports zero token usage in its built-in scenarios.
 
 ## Selecting it
 
-Pass the provider explicitly and use the model id as the scenario id:
+Use provider `dummy_agent_llm`. If no model is supplied, the runtime recommendation is `basic`.
 
-```bash
-jekko run --provider dummy_agent_llm --model default "say hello"
-jekko run --provider dummy_agent_llm --model tool-call "inspect README"
-jekko run --provider dummy_agent_llm --model error "exercise failure handling"
+Useful model/scenario ids:
+
+- `basic` — deterministic text-only assistant response.
+- `tool-read` — emits a streamed `read` tool call first, then a final response after the tool result is present in the next turn.
+- `failure` — emits a deterministic provider error for error-path tests.
+
+The adapter also accepts an explicit scenario override through provider options when tests construct `ProviderRequest` directly:
+
+```json
+{
+  "dummy_agent_llm": { "scenario_id": "tool-read" }
+}
 ```
 
-If no model is provided for this provider, Jekko's catalog recommends `default`.
+For runtime/CLI tests where provider options are not exposed, choose the scenario by setting the model id to one of the scenario ids above.
 
-## Built-in scenarios
+## Adding scenarios
 
-Scenarios are strict JSON fixtures embedded at `crates/jekko-provider/src/providers/dummy_agent_llm_scenarios.json`.
+Scenarios live as strict JSON fixtures beside the adapter in `crates/jekko-provider/src/providers/dummy_agent_llm/`. Each fixture declares:
 
-- `default` emits `StreamStart -> TextDelta -> Usage(0) -> StreamEnd` with stable assistant text.
-- `tool-call` emits a deterministic `Read` tool call, including start/input/end frames, then emits a stable final answer when a tool-result message is present on the next runtime round.
-- `error` emits `StreamStart` and then a scripted provider error.
+- stable `id`, `title`, `tags`, `provider`, and `model` metadata;
+- ordered stages (`initial`, optionally `after-tool-result`);
+- ordered frames such as `stream-start`, `text-delta`, `tool-call`, `usage`, `metadata`, `stream-end`, or `error`.
 
-A scenario can also be selected by adapter options named `scenario` or `dummy_agent_llm_scenario`, or by the `dummy_agent_llm.scenario` option object. Runtime CLI flows normally select it through `--model`.
-
-## Adding a scenario
-
-Add a new object to `dummy_agent_llm_scenarios.json` with a stable `id`, title, tags, `provider: "dummy_agent_llm"`, a non-empty `model`, and ordered `frames`. Fixture parsing denies unknown fields and rejects duplicate or blank ids, provider mismatches, blank models, and empty frame lists.
-
-Keep outputs deterministic: no wall-clock text, random ids, absolute local paths, sleeps, network calls, API keys, or hidden chain-of-thought.
+Fixtures are parsed with unknown fields rejected, duplicate ids rejected, and blank/empty scenarios rejected. Text and JSON string fields may use `{{last_user_text}}` and `{{first_path}}` for deterministic input-aware output.
 
 ## Test coverage
 
-Provider tests cover deterministic text output, completed tool-call frames, scripted errors, and option-based scenario selection. Runtime provider-selection tests cover `dummy_agent_llm` model construction and adapter resolution without credentials.
+Provider tests validate fixture parsing, deterministic text output, tool-call path templating, and failure frames. Runtime tests cover provider/model selection and a no-credential `run_oneshot` call through the real provider executor.

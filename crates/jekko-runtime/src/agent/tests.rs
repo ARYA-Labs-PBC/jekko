@@ -215,6 +215,57 @@ async fn provider_executor_runs_a_tool_loop() {
     assert_eq!(requests.len(), 2);
 }
 
+#[tokio::test]
+async fn provider_executor_runs_dummy_agent_llm_without_credentials() {
+    let rt = Runtime::new();
+    let result = rt
+        .run_oneshot(RunRequest {
+            prompt: "summarize deterministic behavior".into(),
+            cwd: PathBuf::from("/work"),
+            agent: None,
+            provider: Some("dummy_agent_llm".into()),
+            model: None,
+            ephemeral: true,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(result.provider_id.as_deref(), Some("dummy_agent_llm"));
+    assert_eq!(result.model_id.as_deref(), Some("basic"));
+    let assistant_text = result.assistant_text.unwrap();
+    assert!(assistant_text.contains("dummy_agent_llm/basic"));
+    assert!(assistant_text.contains("summarize deterministic behavior"));
+    assert!(result.accepted);
+}
+
+#[tokio::test]
+async fn provider_executor_runs_dummy_agent_llm_tool_read_loop() {
+    let dir = tempdir().unwrap();
+    let tool_path = dir.path().join("dummy-tool-loop.txt");
+    std::fs::write(&tool_path, "alpha\nbeta\n").unwrap();
+
+    let rt = Runtime::new();
+    let result = rt
+        .run_oneshot(RunRequest {
+            prompt: format!("please read {}", tool_path.display()),
+            cwd: dir.path().to_path_buf(),
+            agent: Some("review".into()),
+            provider: Some("dummy_agent_llm".into()),
+            model: Some("tool-read".into()),
+            ephemeral: true,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.assistant_text.as_deref(),
+        Some("dummy_agent_llm/tool-read: tool result received.")
+    );
+    assert_eq!(result.provider_id.as_deref(), Some("dummy_agent_llm"));
+    assert_eq!(result.model_id.as_deref(), Some("tool-read"));
+    assert!(result.tool_calls.is_empty());
+}
+
 #[test]
 fn build_model_supports_jekko_provider() {
     let model = build_model("jekko", "big-pickle").unwrap();
@@ -224,7 +275,26 @@ fn build_model_supports_jekko_provider() {
 }
 
 #[test]
+fn build_model_supports_dummy_agent_llm_provider() {
+    let model = build_model("dummy_agent_llm", "tool-read").unwrap();
+    assert_eq!(model.provider_id.as_str(), "dummy_agent_llm");
+    assert_eq!(model.api.id, "tool-read");
+    assert_eq!(model.api.npm, "dummy_agent_llm");
+    assert_eq!(model.api.url, "dummy://local");
+    assert_eq!(model.cost.input, 0.0);
+    assert_eq!(model.cost.output, 0.0);
+}
+
+#[test]
 fn provider_adapter_supports_jekko() {
     let adapter = provider_adapter("jekko").unwrap();
     assert!(adapter.capabilities().streaming);
+}
+
+#[test]
+fn provider_adapter_supports_dummy_agent_llm() {
+    let adapter = provider_adapter("dummy_agent_llm").unwrap();
+    let caps = adapter.capabilities();
+    assert!(caps.streaming);
+    assert!(caps.tool_streaming);
 }
