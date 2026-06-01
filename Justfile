@@ -2,6 +2,8 @@
 
 default: fast
 
+home := env_var_or_default("HOME", "")
+export PATH := home + "/.local/bin:" + home + "/.cargo/bin:" + env_var_or_default("PATH", "")
 export TURBO_CACHE_DIR := ".turbo"
 memory_benchmark_seed := env_var_or_default("MEMORY_BENCHMARK_SEED", "public-dev-0001")
 jankurai_artifact_root := env_var_or_default("JANKURAI_ARTIFACT_ROOT", ".jankurai")
