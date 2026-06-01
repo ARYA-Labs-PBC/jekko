@@ -553,10 +553,7 @@ mod tests {
             transport: "stdio".into(),
             command: "echo".into(),
             args: vec![],
-            env: BTreeMap::from([(
-                "TOK".into(),
-                "${MCP_TEST_KEYSFILE_RESOLVED}".into(),
-            )]),
+            env: BTreeMap::from([("TOK".into(), "${MCP_TEST_KEYSFILE_RESOLVED}".into())]),
             timeouts: BTreeMap::new(),
         };
         let resolved = cfg.resolved_env();
