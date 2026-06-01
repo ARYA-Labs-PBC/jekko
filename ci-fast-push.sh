@@ -5,6 +5,31 @@ log() {
   printf 'ci-fast-push: %s\n' "$*"
 }
 
+if [ -d "${HOME:-}/.cargo/bin" ]; then
+  PATH="${HOME}/.cargo/bin:${PATH}"
+  export PATH
+fi
+
+rtk_shim_dir=""
+cleanup_rtk_shim() {
+  if [ -n "$rtk_shim_dir" ]; then
+    rm -rf "$rtk_shim_dir"
+  fi
+}
+
+if ! command -v rtk >/dev/null 2>&1; then
+  rtk_shim_dir="$(mktemp -d)"
+  cat >"${rtk_shim_dir}/rtk" <<'SH'
+#!/usr/bin/env sh
+exec "$@"
+SH
+  chmod +x "${rtk_shim_dir}/rtk"
+  PATH="${rtk_shim_dir}:${PATH}"
+  export PATH
+  trap cleanup_rtk_shim EXIT
+  log "rtk not found; using passthrough shim"
+fi
+
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
 cd "$repo_root"
 
@@ -13,11 +38,7 @@ utc_now() {
 }
 
 run_ci() {
-  if command -v rtk >/dev/null 2>&1; then
-    rtk just jekko-fast
-  else
-    just jekko-fast
-  fi
+  rtk just jekko-fast
 }
 
 require_origin_main_ancestor() {
